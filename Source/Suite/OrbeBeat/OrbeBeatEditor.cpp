@@ -76,14 +76,7 @@ void OrbeBeatGrid::paint(juce::Graphics& g) {
 }
 
 // ---------------- éditeur ----------------
-Palette OrbeBeatEditor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2B2B31); p.plateBot = Colour(0xFF16161A);
-    p.ink = Colour(0xFFE9E7F0); p.mute = Colour(0xFF8F8D9B); p.line = Colour(0xFF3B3B44);
-    p.accent = Colour(0xFFB9A9FF); p.accent2 = kIce;
-    p.screen = Colour(0xFF0B0C11); p.screenInk = Colour(0xFFEDEBF6);
-    return p;
-}
+Palette OrbeBeatEditor::palette() { return kit::w::instrument(Colour(0xFFB9A9FF)); }
 
 OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p), proc(p), pal(palette()), look(pal), grid(p) {
     setLookAndFeel(&look);
@@ -142,7 +135,8 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
         vol[i].setTooltip(u8("Volume de la piste"));
         muteB[i].setButtonText("M"); soloB[i].setButtonText("S");
         muteB[i].setTooltip("Muet"); soloB[i].setTooltip("Solo");
-        for (auto* b : {&muteB[i], &soloB[i]}) { b->setClickingTogglesState(true); addAndMakeVisible(b); }
+        for (auto* b : {&muteB[i], &soloB[i]}) { b->setClickingTogglesState(true); b->setPalette(pal); addAndMakeVisible(b); }
+        muteB[i].setLed(pal.ledRed); soloB[i].setLed(pal.ledGreen);
         muteAtt[i] = std::make_unique<ButtonAtt>(ap, "mute" + String(i), muteB[i]);
         soloAtt[i] = std::make_unique<ButtonAtt>(ap, "solo" + String(i), soloB[i]);
     }
@@ -151,6 +145,15 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
     addAndMakeVisible(*handle);
     handle->setTooltip(u8("Glisse les patterns (selon l'enchaînement) vers une piste du DAW : batterie sur le canal 10, 808 sur le canal 1"));
 
+    for (auto* b : {&genB, &varyB, &clearB, &auditionB}) b->setPalette(pal);
+    auditionB.setLed(pal.ledGreen);
+    for (auto& b : toolB) { b.setPalette(pal); b.setLed(Colour(0xFFB9A9FF)); }
+    help.install(*this, "Orbe Beat", {u8("Boîte à rythmes : 8 pistes, 7 kits, 4 patterns (A à D) de 16 ou 32 pas."),
+        u8("- Grille : outil Dessin pour poser ou effacer (glisser pour peindre ; Alt : roll) ; Roll : 1 à 4 frappes ; Vélo : fort, moyen, doux ; Note : degré de la piste 808."),
+        u8("- Générer remplit le pattern selon le kit ; Varier le copie dans le suivant avec des variations ; Écouter joue ici quand le DAW est à l'arrêt."),
+        u8("- M / S : muet et solo par piste ; le curseur règle le volume."),
+        u8("- Entrée MIDI GM : 36 kick, 38 snare, 39 clap, 42 hi-hat, 46 hi-hat ouvert, 37 rim, 47 percu ; les autres notes jouent l'808. « Canal 10 = batterie » : seul le canal 10 joue la batterie."),
+        u8("- Export MIDI : glisse les patterns (selon l'enchaînement) vers une piste du DAW (batterie canal 10, 808 canal 1).")});
     setResizable(true, true);
     setResizeLimits(880, 512, 1760, 1024);
     getConstrainer()->setFixedAspectRatio((double)kW / (double)kH);
@@ -162,7 +165,7 @@ OrbeBeatEditor::~OrbeBeatEditor() { stopTimer(); setLookAndFeel(nullptr); }
 
 void OrbeBeatEditor::resized() {
     u_ = (float)getWidth() / kW;
-    plate = brushedPlate(getWidth(), getHeight(), pal);
+    help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
     kitBox.setBounds(Si(24, 98, 180, 30));
     patSeg->setBounds(Si(220, 98, 186, 30));
     genB.setBounds(Si(424, 98, 96, 30)); varyB.setBounds(Si(528, 98, 96, 30)); clearB.setBounds(Si(632, 98, 70, 30)); auditionB.setBounds(Si(710, 98, 96, 30));
@@ -192,27 +195,23 @@ void OrbeBeatEditor::timerCallback() {
 }
 
 void OrbeBeatEditor::paintHeader(juce::Graphics& g, float u) {
-    suiteui::logo(g, 48 * u, 36 * u, 17 * u, u, kLilac, Colour(0xFF5A46C8));
-    engraved(g, pal, "Orbe Beat", S(84, 18, 250, 34), Justification::centredLeft, 28.f * u, 6.f * u, true);
-    g.setColour(pal.mute); g.setFont(fnt(10.f * u));
-    g.drawText(u8("Boîte à rythmes · 8 pistes · 7 kits"), S(360, 26, 280, 20).toNearestInt(), Justification::centredLeft);
     const int kitI = (int)proc.apvts.getRawParameterValue("kit")->load(), pat = proc.currentPattern();
     const float ps = proc.playStep.load();
-    screenWell(g, pal, S(700, 18, 376, 36));
+    screenWell(g, pal, S(640, 8, 380, 34), Display::LCD);
     const bool run = ps >= 0.f;
-    led(g, 718 * u, 36 * u, 3.6f * u, run, kLilac);
-    g.setColour(kIce); g.setFont(mono(13.f * u));
+    led(g, 658 * u, 25 * u, 3.6f * u, run ? 1.f : 0.f, pal.ledRed, LedBezel::None);
+    const auto lcdInk = displayColours(Display::LCD, pal).ink;
+    g.setColour(lcdInk); g.setFont(lcdFont(13.f * u));
     const String where = run ? String::charToString("ABCD"[proc.playPat.load() & 3]) + "  " + String((int)ps + 1).paddedLeft('0', 2) + "/" + String(proc.steps()) : String::charToString("ABCD"[pat & 3]) + "  " + String(proc.steps()) + " " + u8("pas");
-    g.drawText(upper(String(obeat::kits()[kitI].label)) + "   " + String(juce::roundToInt(proc.tempo())) + " BPM", S(732, 18, 190, 36).toNearestInt(), Justification::centredLeft);
-    g.setColour(pal.screenInk.withAlpha(0.85f));
-    g.drawText("PATTERN " + where, S(900, 18, 168, 36).toNearestInt(), Justification::centredRight);
+    g.drawText(upper(String(obeat::kits()[kitI].label)) + "   " + String(juce::roundToInt(proc.tempo())) + " BPM", S(672, 8, 190, 34).toNearestInt(), Justification::centredLeft);
+    g.setColour(lcdInk.withAlpha(0.85f));
+    g.drawText("PATTERN " + where, S(846, 8, 166, 34).toNearestInt(), Justification::centredRight);
 }
 
 void OrbeBeatEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    g.drawImageAt(plate, 0, 0);
-    suiteui::rule(g, u, 70, kW); suiteui::rule(g, u, 136, kW); suiteui::rule(g, u, 442, kW);
-    for (auto p : {juce::Point<float>(12, 12), {kW - 12, 12}, {12, kH - 12}, {kW - 12, kH - 12}}) screw(g, p.x * u, p.y * u, 5.f * u, (p.x + p.y) * 0.9f);
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe Beat", kit::w::serial::beat});
+    suiteui::rule(g, u, 136, kW - 36, 18); suiteui::rule(g, u, 442, kW - 36, 18);
     paintHeader(g, u);
 
     engraved(g, pal, "Kit", S(24, 82, 180, 12), Justification::centredLeft, 9.5f * u, 2.f * u);
@@ -252,8 +251,6 @@ void OrbeBeatEditor::paint(juce::Graphics& g) {
     engraved(g, pal, "Tonique 808", S(660, 452, 100, 14), Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Gamme 808", S(770, 452, 100, 14), Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Export MIDI", S(900, 452, 176, 14), Justification::centredLeft, 10.f * u, 2.f * u);
-    g.setColour(pal.mute); g.setFont(fnt(10.f * u));
-    g.drawFittedText(u8("Notes GM : 36 kick · 38 snare · 39 clap · 42 charley · 46 ouvert · 37 rim · 47 perc. Les autres notes jouent l'808."), S(300, 576, 570, 30).toNearestInt(), Justification::topLeft, 2);
     g.setColour(pal.line);
     g.fillRect(S(270, 456, 1.f, 150)); g.fillRect(S(640, 456, 1.f, 100)); g.fillRect(S(884, 456, 1.f, 150));
 }

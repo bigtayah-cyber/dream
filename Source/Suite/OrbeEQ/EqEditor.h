@@ -14,7 +14,7 @@ public:
     void mouseUp(const juce::MouseEvent&) override;
     void select(int band);
     int selected() const { return sel; }
-    static constexpr float kW = 900.f, kH = 548.f;
+    static constexpr float kW = 900.f, kH = 500.f;
     static juce::Colour bandColour(int i);
 private:
     void timerCallback() override;
@@ -26,7 +26,6 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
     float u_ = 1.f;
     int sel = 2;
     bool modified = false;
@@ -38,8 +37,9 @@ private:
     of::Power power;
     std::unique_ptr<of::Pot> outPot;
     std::unique_ptr<of::Seg> rangeSeg;
-    juce::ArrowButton prev{"prev", 0.5f, of::kLilac}, next{"next", 0.f, of::kLilac};
+    juce::ArrowButton prev{"prev", 0.5f, kit::w::kSilk.withAlpha(0.7f)}, next{"next", 0.f, kit::w::kSilk.withAlpha(0.7f)};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAtt;
+    kit::w::HelpKey help;
     bool updating = false;
     int boundBand = -1;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EqEditor)

@@ -12,6 +12,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout OneKnobProcessor::makeLayout
                                                        juce::StringArray{"Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}, 0));
     l.add(std::make_unique<juce::AudioParameterChoice>(ParameterID{"scale", 1}, "Gamme",
                                                        juce::StringArray{"Auto", "Majeur", "Mineur"}, 0));
+    // volet avancé
+    auto fr = [](float v, int dec, const char* unit, bool sign) {
+        const bool zero = std::abs(v) < 0.5f * std::pow(10.f, (float)-dec);
+        juce::String t = dec == 0 ? juce::String(juce::roundToInt(v)) : juce::String(zero ? 0.f : v, dec).replaceCharacter('.', ',');
+        if (sign && !zero && v > 0.f) t = "+" + t;
+        return t + unit;
+    };
+    auto db = juce::AudioParameterFloatAttributes().withLabel("dB").withStringFromValueFunction([fr](float v, int) { return fr(v, 1, " dB", true); });
+    auto pct = juce::AudioParameterFloatAttributes().withLabel("%").withStringFromValueFunction([fr](float v, int) { return fr(v, 0, " %", false); });
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID{"trim", 1}, juce::String::fromUTF8("Entrée"), NormalisableRange<float>(-12.f, 12.f, 0.1f), 0.f, db));
+    l.add(std::make_unique<AudioParameterBool>(ParameterID{"autoin", 1}, juce::String::fromUTF8("Auto-entrée"), true));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID{"tone", 1}, "Ton", NormalisableRange<float>(-6.f, 6.f, 0.1f), 0.f, db));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID{"mix", 1}, "Mix", NormalisableRange<float>(0.f, 100.f, 1.f), 100.f, pct));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID{"out", 1}, "Sortie", NormalisableRange<float>(-12.f, 12.f, 0.1f), 0.f, db));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID{"spec", 1}, juce::String::fromUTF8(voicing().specName), NormalisableRange<float>(0.f, 100.f, 1.f),
+                                                voicing().specDefault * 100.f, pct));
+    l.add(std::make_unique<AudioParameterBool>(ParameterID{"autogain", 1}, "Auto-gain", true));
     return l;
 }
 
@@ -21,6 +38,10 @@ OneKnobProcessor::OneKnobProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "ONEKNOB", makeLayout()) {
     bypass = dynamic_cast<juce::AudioParameterBool*>(apvts.getParameter("bypass"));
+    pChar = apvts.getRawParameterValue("char"); pKey = apvts.getRawParameterValue("key"); pScale = apvts.getRawParameterValue("scale");
+    pTrim = apvts.getRawParameterValue("trim"); pAutoIn = apvts.getRawParameterValue("autoin"); pTone = apvts.getRawParameterValue("tone");
+    pMix = apvts.getRawParameterValue("mix"); pOut = apvts.getRawParameterValue("out"); pSpec = apvts.getRawParameterValue("spec");
+    pAutoGain = apvts.getRawParameterValue("autogain");
 }
 
 bool OneKnobProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
@@ -30,6 +51,8 @@ bool OneKnobProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
 
 void OneKnobProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     maxBlock = juce::jmax(512, samplesPerBlock);
+    sr = sampleRate;
+    vu.reset();
     chain.prepare(sampleRate, maxBlock);
     bypassL.init(chain.latency() + 8);
     bypassR.init(chain.latency() + 8);
@@ -58,8 +81,12 @@ void OneKnobProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Midi
         if (auto pos = ph->getPosition())
             if (auto bpm = pos->getBpm()) chain.setBpm(*bpm);
 
-    const float k = apvts.getRawParameterValue("char")->load() / 10.f;
-    chain.setKeySel((int)std::lround(apvts.getRawParameterValue("key")->load()), (int)std::lround(apvts.getRawParameterValue("scale")->load()));
+    const float k = pChar->load() / 10.f;
+    chain.setKeySel((int)std::lround(pKey->load()), (int)std::lround(pScale->load()));
+    onek::Extras ex;
+    ex.trimDb = pTrim->load(); ex.autoIn = pAutoIn->load() > 0.5f; ex.toneDb = pTone->load(); ex.mix = pMix->load() / 100.f;
+    ex.outDb = pOut->load(); ex.special = pSpec->load() / 100.f; ex.autoGain = pAutoGain->load() > 0.5f;
+    chain.setExtras(ex);
     float* l = buffer.getWritePointer(0);
     float* r = buffer.getWritePointer(1);
     const int n = buffer.getNumSamples();
@@ -70,6 +97,14 @@ void OneKnobProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Midi
         chain.process(cl, stereoIn ? cr : nullptr, cl, cr, c);
         peak = juce::jmax(peak, chain.outLevel());
     });
+    {   // VU de sortie : RMS du bloc (après bypass), balistique 300 ms
+        double s2 = 0;
+        for (int i = 0; i < n; ++i) s2 += 0.5 * ((double)l[i] * l[i] + (double)r[i] * r[i]);
+        vu.step(std::sqrt(s2 / juce::jmax(1, n)), n / sr);
+        vuDb.store((float)vu.vu());
+    }
+    inDb.store(chain.inputDb());
+    autoInDb.store(chain.autoInGainDb());
     level.store(peak);
     reduction.store(chain.gainReduction());
     keyPc.store(chain.keyKnown() ? chain.key() : -1);

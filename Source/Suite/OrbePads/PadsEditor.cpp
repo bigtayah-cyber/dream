@@ -16,6 +16,10 @@ public:
         const float fl = ed.flash[idx];
         g.setColour(juce::Colours::black.withAlpha(0.6f));
         g.fillRoundedRectangle(r.translated(0, 2.5f * u), 8.f * u);
+        if (fl > 0.02f) {   // lueur du pad selon la vélocité
+            juce::ColourGradient glow(c.withAlpha(0.45f * fl), r.getCentreX(), r.getCentreY(), c.withAlpha(0.f), r.getRight() + 6.f * u, r.getCentreY(), true);
+            g.setGradientFill(glow); g.fillRoundedRectangle(r.expanded(5.f * u), 12.f * u);
+        }
         auto top = Colour(0xFF3B3C44).interpolatedWith(c, 0.30f * fl + (has ? 0.f : -0.f)), bot = Colour(0xFF1B1C21).interpolatedWith(c, 0.16f * fl);
         if (down) std::swap(top, bot);
         g.setGradientFill(juce::ColourGradient(top, r.getX(), r.getY(), bot, r.getX(), r.getBottom(), false));
@@ -71,15 +75,7 @@ Colour PadsEditor::bankColour(int b) {
     return c[juce::jlimit(0, 3, b)];
 }
 
-Palette PadsEditor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2C2E35); p.plateBot = Colour(0xFF17181C);
-    p.ink = Colour(0xFFE9E8EF); p.mute = Colour(0xFF8D8F9B); p.line = Colour(0xFF3A3C45);
-    p.accent = Colour(0xFFA9ECFF); p.accent2 = Colour(0xFFCFC6FF);
-    p.screen = Colour(0xFF0A0D12); p.screenInk = Colour(0xFFE9F6FA);
-    p.brush = 1.f;
-    return p;
-}
+Palette PadsEditor::palette() { return kit::w::instrument(Colour(0xFFA9ECFF)); }
 
 // ---------------- éditeur ----------------
 PadsEditor::PadsEditor(PadsProcessor& p)
@@ -135,6 +131,11 @@ PadsEditor::PadsEditor(PadsProcessor& p)
     for (int i = 0; i < 16; ++i) { pads[i] = std::make_unique<PadButton>(*this, i); addAndMakeVisible(*pads[i]); }
     selectPad(proc.sel.load());
 
+    help.install(*this, "Orbe Pads", {u8("Sampler à 16 pads : un sample découpé en tranches, jouées par les pads ou en MIDI (à partir de C1)."),
+        u8("- Importer charge un sample (WAV, AIFF, FLAC, OGG) enregistré dans le projet ; Démo recharge le sample d'exemple."),
+        u8("- Découpe : Attaques (réglage de sensibilité), Grille (divisions égales) ou Manuel."),
+        u8("- En manuel : clic sur la forme d'onde pour ajouter un repère, glisser pour le déplacer, double-clic ou clic droit pour le supprimer."),
+        u8("- Clic sur un pad : le sélectionne et le joue (Maj : plus doux). Les réglages de droite s'appliquent au pad sélectionné.")});
     setResizable(true, true);
     setResizeLimits(760, 502, 1600, 1056);
     getConstrainer()->setFixedAspectRatio(1000.0 / 660.0);
@@ -184,8 +185,8 @@ void PadsEditor::refreshBank() {
 
 void PadsEditor::resized() {
     u_ = (float)getWidth() / 1000.f;
-    plate = brushedPlate(getWidth(), getHeight(), pal);
-    importB.setBounds(Si(740, 20, 118, 36)); demoB.setBounds(Si(868, 20, 90, 36));
+    help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
+    importB.setBounds(Si(722, 8, 110, 34)); demoB.setBounds(Si(838, 8, 90, 34));
     wave.setBounds(Si(24, 80, 952, 152));
     modeSeg.setBounds(Si(24, 242, 300, 30));
     sens.setBounds(Si(440, 244, 220, 26)); divSeg.setBounds(Si(440, 242, 150, 30));
@@ -232,16 +233,12 @@ void PadsEditor::panel(juce::Graphics& g, Rectangle<float> r, const String& titl
 }
 
 void PadsEditor::paint(juce::Graphics& g) {
-    g.drawImageAt(plate, 0, 0);
     const float u = u_;
-    const float ang[4] = {0.5f, 2.1f, 1.2f, 2.8f};
-    screw(g, 12 * u, 12 * u, 4.6f * u, ang[0]); screw(g, getWidth() - 12 * u, 12 * u, 4.6f * u, ang[1]);
-    screw(g, 12 * u, getHeight() - 12 * u, 4.6f * u, ang[2]); screw(g, getWidth() - 12 * u, getHeight() - 12 * u, 4.6f * u, ang[3]);
-    paintBrand(g, pal, S(36, 14, 250, 48), "Orbe Pads", u8("sampler 16 pads \xC2\xB7 dreamaws"));
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe Pads", kit::w::serial::pads});
 
     // afficheur
-    auto lcd = S(310, 14, 400, 50);
-    screenWell(g, pal, lcd);
+    auto lcd = S(300, 4, 410, 44);
+    screenWell(g, pal, lcd, Display::VFD);
     const auto s = proc.holder.get();
     const int st = proc.holder.state.load();
     g.setColour(pal.screenInk);
@@ -250,13 +247,13 @@ void PadsEditor::paint(juce::Graphics& g) {
     g.setColour(status.isNotEmpty() ? pal.accent2 : pal.mute);
     g.setFont(mono(10.f * u));
     const String l2 = status.isNotEmpty() ? status : (s ? durText(s->dur()) + "  " + fr(s->sr / 1000.0, 1) + " kHz  " + String(snap ? snap->nsl : 0) + " / 16" : String());
-    g.drawText(l2, Rectangle<float>(lcd.getX() + 12 * u, lcd.getY() + 28 * u, 200 * u, 14 * u), juce::Justification::centredLeft);
+    g.drawText(l2, Rectangle<float>(lcd.getX() + 12 * u, lcd.getY() + 26 * u, 200 * u, 14 * u), juce::Justification::centredLeft);
     if (s && st == 2) {
         auto cell = [&](float x, const String& cap, const String& val, Colour c, float w) {
             g.setColour(pal.mute); g.setFont(fnt(8.f * u, true));
             tracked(g, cap, Rectangle<float>(lcd.getX() + x * u, lcd.getY() + 6 * u, w * u, 11 * u), juce::Justification::centredLeft, 1.4f, fnt(8.f * u, true));
             g.setColour(c); g.setFont(mono(17.f * u));
-            g.drawText(val, Rectangle<float>(lcd.getX() + x * u, lcd.getY() + 19 * u, w * u, 24 * u), juce::Justification::centredLeft);
+            g.drawText(val, Rectangle<float>(lcd.getX() + x * u, lcd.getY() + 17 * u, w * u, 24 * u), juce::Justification::centredLeft);
         };
         const float bpm = proc.holder.bpm.load();
         cell(212, "Tempo", bpm > 0 ? fr(bpm, bpm == std::round(bpm) ? 0 : 1) + " bpm" : String(u8("\xE2\x80\x94")), pal.accent, 78);
@@ -273,11 +270,6 @@ void PadsEditor::paint(juce::Graphics& g) {
     const int mode = (int)proc.p("mode");
     if (mode == 0) engraved(g, pal, u8("Sensibilité"), S(340, 248, 96, 18), juce::Justification::centredRight, 9.f * u, 1.4f, true);
     if (mode == 1) engraved(g, pal, "Divisions", S(340, 248, 96, 18), juce::Justification::centredRight, 9.f * u, 1.4f, true);
-    if (mode == 2) {
-        g.setColour(pal.mute);
-        g.setFont(fnt(10.5f * u));
-        g.drawText(u8("Clic : ajouter un repère  \xC2\xB7  glisser : déplacer  \xC2\xB7  double-clic : supprimer"), S(340, 246, 450, 22).toNearestInt(), juce::Justification::centredLeft);
-    }
 
     // panneau du pad sélectionné
     const int sel = proc.sel.load();
@@ -295,6 +287,7 @@ void PadsEditor::paintWaveOver(juce::Graphics& g, WaveView& w) {
     if (!snap || !snap->pcm) return;
     const auto r = w.inner();
     const int sel = proc.sel.load();
+    float labelRight[2] = {-1e9f, -1e9f};
     for (int i = 0; i < snap->nsl; ++i) {
         const Colour c = bankColour(i / 4);
         const float x0 = w.xOf(snap->a[i]), x1 = w.xOf(snap->b[i]);
@@ -303,10 +296,17 @@ void PadsEditor::paintWaveOver(juce::Graphics& g, WaveView& w) {
         g.setColour(c.withAlpha(0.9f));
         g.fillRect(x0, r.getY(), i == 0 ? 1.5f : 1.2f, r.getHeight());
         const String n = String(i + 1);
-        auto tab = Rectangle<float>(x0, r.getY(), juce::jmin(juce::jmax(14.f * u_, 11.f * u_ * (float)n.length() + 6 * u_), x1 - x0 - 1.f), 13.f * u_);
-        g.setColour(c.withAlpha(i == sel ? 1.f : 0.8f));
-        g.fillRect(tab);
-        if (tab.getWidth() > 9.f * u_) { g.setColour(juce::Colours::black.withAlpha(0.85f)); g.setFont(mono(9.5f * u_)); g.drawText(n, tab, juce::Justification::centred); }
+        const float tw = juce::jmax(14.f * u_, 7.f * u_ * (float)n.length() + 6 * u_);
+        int row = -1;   // repères en quinconce sur deux rangées ; sans place, pas d'étiquette (le trait reste)
+        for (int k = 0; k < 2 && row < 0; ++k) if (x0 >= labelRight[k] + 1.f) row = k;
+        if (i == sel && row < 0) row = 1;
+        if (row >= 0) {
+            auto tab = Rectangle<float>(x0, r.getY() + (float)row * 14.f * u_, tw, 13.f * u_);
+            labelRight[row] = tab.getRight();
+            g.setColour(c.withAlpha(i == sel ? 1.f : 0.8f));
+            g.fillRect(tab);
+            g.setColour(juce::Colours::black.withAlpha(0.85f)); g.setFont(mono(9.5f * u_)); g.drawText(n, tab, juce::Justification::centred);
+        }
         const float pos = proc.padPos[i].load();
         if (pos >= 0.f) {
             const float xp = w.xOf(snap->a[i] + pos * (snap->b[i] - snap->a[i]));

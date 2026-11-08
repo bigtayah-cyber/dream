@@ -28,14 +28,14 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
+    kit::w::HelpKey help;
     osamp::WaveView srcWave, resWave;
     osamp::Seg modeSeg, chopSeg;
     std::unique_ptr<osamp::Knob> k[9];
     std::unique_ptr<Chip> chip[9];
     juce::ToggleButton revB, tapeB, loopB, syncB, followB;
     std::unique_ptr<ButtonAtt> aRev, aTape, aLoop, aSync, aFollow;
-    juce::TextButton importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, playB{kit::u8("Lecture")};
+    kit::w::PushKey importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, playB{kit::u8("Lecture")};
     std::unique_ptr<juce::FileChooser> chooser;
     std::shared_ptr<const osamp::Rendered> res;
     const osamp::Rendered* resRaw = nullptr;

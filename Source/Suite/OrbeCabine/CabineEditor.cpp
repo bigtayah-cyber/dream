@@ -4,8 +4,8 @@ using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
 
 namespace {
-constexpr float kW = 400.f, kH = 760.f, kPotW = 117.f, kPotH = 78.f, kKnobR = 19.f;
-const Colour kLilac(0xFFCFC6FF), kIce(0xFFA9ECFF), kPeach(0xFFFFC4AB);
+constexpr float kW = 400.f, kH = 760.f;
+using kit::w::kLilac, kit::w::kIce, kit::w::kPeach;
 struct PotDef { const char* id; const char* label; const char* tip; int section, col, row; };
 // Disposition de la face : trois sections, trois colonnes.
 const PotDef kPots[] = {
@@ -25,75 +25,38 @@ const PotDef kPots[] = {
     {"rev",   "Reverb",        "Envoi vers la reverb \xC3\xA0 r\xC3\xA9seau de retards.", 2, 1, 0},
     {"dly",   "Delay",         "Envoi vers le delay en croche point\xC3\xA9" "e, synchronis\xC3\xA9 au tempo de l'h\xC3\xB4te.", 2, 2, 0},
 };
-const float kSecY[3] = {268.f, 452.f, 636.f};
-const char* kSecName[3] = {"Ton \xC2\xB7 filtres et saturation", "Dynamique \xC2\xB7 niveau", "Espace \xC2\xB7 doubleur et envois"};
-float potX(int col) { return 24.f + 352.f / 3.f * ((float)col + 0.5f) - kPotW / 2; }
-float potY(int sec, int row) { return kSecY[sec] + 20.f + kPotH * (float)row; }
+const float kModY[3] = {246.f, 414.f, 582.f}, kModH = 162.f;
+const char* kSecName[3] = {"Module EQ \xC2\xB7 ton et saturation", "Module FET \xC2\xB7 dynamique", "Module espace \xC2\xB7 doubleur et envois"};
+const kit::KnobStyle kSecKnob[3] = {kit::KnobStyle::Cap, kit::KnobStyle::Fluted, kit::KnobStyle::Chicken};
+const Colour kSecTint[3] = {Colour(0xFF3A4350), Colour(0xFF1C1C1F), Colour(0xFF2E2B2A)};
+constexpr float kPotR = 16.5f, kPotW = 110.f;
+float potX(int col) { return 22.f + 356.f / 3.f * ((float)col + 0.5f) - kPotW / 2; }
+float potY(int sec, int row) { return kModY[sec] + (sec == 2 ? 50.f : 18.f) + 68.f * (float)row; }
 }  // namespace
 
-CabPot::CabPot(juce::AudioProcessorValueTreeState& a, const String& id, const String& lab, const String& tip, std::function<double()> reset) : label(lab) {
-    par = a.getParameter(id);
-    s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-    s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    s.setMouseDragSensitivity(240);
-    s.setTooltip(tip + u8(" Double-clic : valeur du preset."));
-    s.resetTo = std::move(reset);
-    s.onValueChange = [this] { repaint(); };
-    addAndMakeVisible(s);
-    att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(a, id, s);
-}
-void CabPot::resized() {
-    const float u = (float)getWidth() / kPotW;
-    s.setBounds(juce::Rectangle<float>(kPotW * u / 2 - 1.5f * kKnobR * u, (30.f - 1.5f * kKnobR) * u, 3 * kKnobR * u, 3 * kKnobR * u).toNearestInt());
-}
-void CabPot::paint(juce::Graphics& g) {
-    const float u = (float)getWidth() / kPotW;
-    auto pal = Palette{};
-    pal.ink = Colour(0xFFE9E6F5);
-    engraved(g, pal, label, Rectangle<float>(0, 57 * u, kPotW * u, 11 * u), juce::Justification::centred, 8.6f * u, 1.3f * u, true);
-    auto r = Rectangle<float>(kPotW * u / 2 - 31 * u, 68 * u, 62 * u, 11.5f * u);
-    g.setColour(juce::Colours::black.withAlpha(0.42f)); g.fillRoundedRectangle(r, 2.5f * u);
-    g.setColour(juce::Colours::white.withAlpha(0.05f)); g.drawRoundedRectangle(r, 2.5f * u, 1.f);
-    g.setColour(kIce.withAlpha(0.92f)); g.setFont(mono(9.2f * u));
-    g.drawText(par ? par->getText(par->getValue(), 0) : String(), r, juce::Justification::centred);
-}
-
-void CabPower::paintButton(juce::Graphics& g, bool hover, bool down) {
-    auto r = getLocalBounds().toFloat();
-    const float cx = r.getCentreX(), cy = r.getCentreY() - 5, rad = juce::jmin(r.getWidth(), r.getHeight() - 12) * 0.42f;
-    const bool on = !getToggleState();  // le paramètre est « bypass »
-    g.setColour(juce::Colours::black.withAlpha(0.55f)); g.fillEllipse(cx - rad - 2, cy - rad, (rad + 2) * 2, (rad + 2) * 2);
-    g.setGradientFill(juce::ColourGradient(Colour(0xFF6A6A72), cx - rad * 0.6f, cy - rad, Colour(0xFF17171B), cx + rad * 0.6f, cy + rad, false));
-    g.fillEllipse(cx - rad, cy - rad + (down ? 1.f : 0.f), rad * 2, rad * 2);
-    g.setColour(juce::Colours::white.withAlpha(hover ? 0.3f : 0.14f)); g.drawEllipse(cx - rad, cy - rad, rad * 2, rad * 2, 1.f);
-    led(g, cx, cy, rad * 0.28f, on, P.accent);
-    g.setColour(P.ink.withAlpha(0.8f));
-    tracked(g, "In", Rectangle<float>(0, r.getBottom() - 11, r.getWidth(), 11), juce::Justification::centred, 1.6f, fnt(juce::jmax(7.f, rad * 0.55f), true));
-}
-
-Palette CabineEditor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2E2E36); p.plateBot = Colour(0xFF16161B);
-    p.ink = Colour(0xFFE9E6F5); p.accent = kLilac; p.accent2 = kIce;
-    p.mute = p.ink.withAlpha(0.55f); p.line = p.ink.withAlpha(0.14f);
-    p.screen = Colour(0xFF0B0B10); p.screenInk = kIce; p.brush = 0.9f;
-    return p;
-}
+Palette CabineEditor::palette() { return kit::w::rack(Colour(0xFFFFB04A)); }
 
 CabineEditor::CabineEditor(CabineProcessor& p)
     : AudioProcessorEditor(&p), proc(p), pal(palette()), look(pal), power(pal) {
     setLookAndFeel(&look);
+    const Colour capCol[3] = {Colour(0xFF6FA8DC), Colour(0xFFE9E6F5), Colour(0xFFFFB04A)};
     for (auto& d : kPots) {
         const juce::String id(d.id);
-        auto* pot = pots.add(new CabPot(proc.apvts, id, u8(d.label), u8(d.tip), [this, id] { return (double)CabineProcessor::presetValue(id, proc.currentPreset()); }));
+        auto* pot = pots.add(new kit::w::Pot(proc.apvts, id, u8(d.label), u8(d.tip), [this, id] { return (double)CabineProcessor::presetValue(id, proc.currentPreset()); }, kPotR, capCol[d.section]));
+        pot->setStyle(kSecKnob[d.section]);
         addAndMakeVisible(pot);
     }
     prev.onClick = [this] { step(-1); }; next.onClick = [this] { step(1); };
     prev.setTooltip(u8("Preset pr\xC3\xA9" "c\xC3\xA9" "dent")); next.setTooltip("Preset suivant");
     addAndMakeVisible(prev); addAndMakeVisible(next);
     addAndMakeVisible(power);
-    power.setTooltip(u8("Effet en service. Appuie pour le couper (la latence reste compens\xC3\xA9" "e)."));
+    power.setTooltip(u8("Effet en service. Bascule pour le couper (la latence reste compens\xC3\xA9" "e)."));
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
+    help.install(*this, "Orbe Cabine", {u8("Cha\xC3\xAEne vocale par piste, en trois modules : EQ et saturation, compresseur, espace."),
+        u8("- Afficheur : clic pour la liste des presets, fl\xC3\xA8" "ches pour d\xC3\xA9" "filer. \xE2\x97\x8F MODIFI\xC3\x89 : un r\xC3\xA9glage diff\xC3\xA8re du preset."),
+        u8("- Double-clic sur un potard : retour \xC3\xA0 la valeur du preset."),
+        u8("- VU : niveau de sortie (0 VU = -18 dBFS efficace). \xC3\x80 droite : r\xC3\xA9" "duction du compresseur (dB) et cr\xC3\xAAte de sortie (dBFS)."),
+        u8("- Passe-bas tout \xC3\xA0 droite : coup\xC3\xA9. Seuil 0 dB et ratio 1 : compresseur inactif. Delay synchronis\xC3\xA9 au tempo de l'h\xC3\xB4te.")});
     setResizable(true, true);
     setResizeLimits(300, 570, 800, 1520);
     getConstrainer()->setFixedAspectRatio((double)kW / kH);
@@ -104,122 +67,83 @@ CabineEditor::~CabineEditor() { stopTimer(); setLookAndFeel(nullptr); }
 
 void CabineEditor::resized() {
     u_ = (float)getWidth() / kW;
-    plate = brushedPlate(getWidth(), getHeight(), pal);
+    const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
+    power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
+    help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
     for (int i = 0; i < pots.size(); ++i) {
         const auto& d = kPots[i];
-        pots[i]->setBounds(Si(potX(d.col), potY(d.section, d.row), kPotW, kPotH));
+        pots[i]->setBounds(Si(potX(d.col), potY(d.section, d.row), kPotW, kit::w::Pot::heightFor(kPotR)));
+        pots[i]->setScale(u_);
     }
-    prev.setBounds(Si(32, 112, 20, 24)); next.setBounds(Si(348, 112, 20, 24));
-    power.setBounds(Si(318, 20, 58, 52));
+    prev.setBounds(Si(24, 70, 18, 24)); next.setBounds(Si(358, 70, 18, 24));
 }
 
 void CabineEditor::timerCallback() {
     const float rms = proc.level.load(), pk = proc.peak.load(), gr = proc.reduction.load();
-    const float vu = 20.f * std::log10(juce::jmax(1e-5f, rms)) + 18.f;  // 0 VU = -18 dBFS efficace
-    needle += (juce::jlimit(-20.f, 3.f, vu) - needle) * (vu > needle ? 0.30f : 0.12f);
+    vu.step(rms, 1.0 / 30.0);
     pkDisp = juce::jmax(20.f * std::log10(juce::jmax(1e-5f, pk)), pkDisp - 1.2f);
     grDisp = juce::jmax(gr, grDisp - 0.5f);
     modified = !proc.matchesPreset();
-    repaint(S(24, 90, 352, 180).toNearestInt());
+    repaint(S(18, 54, 364, 190).toNearestInt());
 }
 
 void CabineEditor::mouseUp(const juce::MouseEvent& e) {
-    if (S(66, 100, 268, 48).contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showMenu();
+    if (S(46, 58, 308, 44).contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showMenu();
 }
 void CabineEditor::showMenu() {
     juce::PopupMenu m;
     for (int i = 0; i < cab::kPresets; ++i) m.addItem(i + 1, CabineProcessor::presetName(i), true, i == proc.currentPreset());
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(66, 100, 268, 48))).withMinimumWidth(juce::roundToInt(268 * u_)),
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(46, 58, 308, 44))).withMinimumWidth(juce::roundToInt(308 * u_)),
                     [this](int r) { if (r > 0) proc.applyPreset(r - 1); });
 }
 
-void CabineEditor::section(juce::Graphics& g, const char* title, float y) {
+// Module « série 500 » vissé dans le châssis : plaque teintée, chanfrein, deux vis, nom sérigraphié.
+void CabineEditor::module(juce::Graphics& g, int i, float y) {
     const float u = u_;
-    engraved(g, pal, u8(title), S(28, y, 330, 12), juce::Justification::centredLeft, 8.8f * u, 2.2f * u, true);
-    g.setColour(juce::Colours::black.withAlpha(0.5f)); g.fillRect(S(24, y + 15, 352, 1.2f));
-    g.setColour(juce::Colours::white.withAlpha(0.07f)); g.fillRect(S(24, y + 16.2f, 352, 1.f));
-}
-
-void CabineEditor::paintVu(juce::Graphics& g, Rectangle<float> r) {
-    const float u = u_;
-    screenWell(g, pal, r);
-    auto f = r.reduced(5 * u);
-    g.setGradientFill(juce::ColourGradient(Colour(0xFFFFE3D6), f.getX(), f.getY(), Colour(0xFFE9AE96), f.getX(), f.getBottom(), false));
-    g.fillRoundedRectangle(f, 3 * u);
-    g.setGradientFill(juce::ColourGradient(juce::Colours::transparentBlack, f.getCentreX(), f.getCentreY(), juce::Colours::black.withAlpha(0.30f), f.getX(), f.getY(), true));
-    g.fillRoundedRectangle(f, 3 * u);
-    const float px = f.getCentreX(), py = f.getBottom() + 26 * u, R = 98 * u;
-    auto ang = [&](float vu) { return juce::jmap(vu, -20.f, 3.f, -0.78f, 0.78f); };
-    auto pt = [&](float vu, float rad) { const float a = ang(vu); return juce::Point<float>(px + std::sin(a) * rad, py - std::cos(a) * rad); };
-    const Colour ink(0xFF211B1E), red(0xFFB0302E);
-    juce::Path rp; rp.addCentredArc(px, py, R, R, 0, ang(0.f), ang(3.f), true);
-    g.setColour(red); g.strokePath(rp, juce::PathStrokeType(3.f * u));
-    juce::Path bp; bp.addCentredArc(px, py, R, R, 0, ang(-20.f), ang(0.f), true);
-    g.setColour(ink); g.strokePath(bp, juce::PathStrokeType(1.1f * u));
-    for (int v : {-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3}) {
-        const bool major = v == -20 || v == -10 || v == -5 || v == 0 || v == 3;
-        g.setColour(v >= 0 ? red : ink);
-        g.drawLine({pt((float)v, R - (major ? 8.f : 4.f) * u), pt((float)v, R + 1 * u)}, major ? 1.3f : 0.9f);
-        if (major) { g.setFont(fnt(8.6f * u, true)); auto q = pt((float)v, R - 17 * u); g.drawText(String(std::abs(v)), Rectangle<float>(q.x - 9 * u, q.y - 6 * u, 18 * u, 12 * u), juce::Justification::centred); }
-    }
-    g.setColour(ink); g.setFont(fnt(9.f * u, true));
-    g.drawText("VU", Rectangle<float>(f.getCentreX() - 20 * u, f.getBottom() - 24 * u, 40 * u, 12 * u), juce::Justification::centred);
-    tracked(g, "Sortie", Rectangle<float>(f.getX() + 6 * u, f.getBottom() - 15 * u, 60 * u, 10 * u), juce::Justification::centredLeft, 1.2f, fnt(6.8f * u, true));
-    const auto tip = pt(needle, R + 2 * u), base = pt(needle, 14 * u);
-    g.saveState(); g.reduceClipRegion(f.toNearestInt());
-    g.setColour(juce::Colours::black.withAlpha(0.22f)); g.drawLine({base.translated(2 * u, 2 * u), tip.translated(2 * u, 2 * u)}, 1.5f);
-    g.setColour(Colour(0xFF121110)); g.drawLine({base, tip}, 1.4f);
-    g.restoreState();
-    g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(0.16f), f.getX(), f.getY(), juce::Colours::white.withAlpha(0.f), f.getCentreX(), f.getCentreY(), false));
-    g.fillRoundedRectangle(f, 3 * u);
+    auto r = S(22, y, 356, kModH);
+    g.setColour(juce::Colours::black.withAlpha(0.55f)); g.fillRoundedRectangle(r.translated(0, 2.f * u).expanded(1.f), 3.f * u);
+    g.setGradientFill(juce::ColourGradient(kSecTint[i].brighter(0.12f), r.getX(), r.getY(), kSecTint[i].darker(0.35f), r.getX(), r.getBottom(), false));
+    g.fillRoundedRectangle(r, 3.f * u);
+    g.setColour(juce::Colours::white.withAlpha(0.13f)); g.drawLine(r.getX() + 3 * u, r.getY() + 0.8f, r.getRight() - 3 * u, r.getY() + 0.8f, 1.f);
+    g.setColour(juce::Colours::black.withAlpha(0.6f)); g.drawRoundedRectangle(r, 3.f * u, 1.f);
+    for (float x : {r.getX() + 9.f * u, r.getRight() - 9.f * u}) screw(g, x, r.getY() + 9.f * u, 3.4f * u, x * 0.05f, ScrewHead::Slot);
+    engraved(g, pal, u8(kSecName[i]), Rectangle<float>(r.getX() + 20 * u, r.getY() + 3 * u, r.getWidth() - 40 * u, 12 * u), juce::Justification::centred, 8.4f * u, 1.8f * u, true);
 }
 
 void CabineEditor::paintLadder(juce::Graphics& g, Rectangle<float> r, const char* title, const float* thr, const char* const* lab, float value, Colour hot) {
     const float u = u_;
-    g.setColour(pal.mute); tracked(g, u8(title), Rectangle<float>(r.getX(), r.getY(), r.getWidth(), 10 * u), juce::Justification::centredLeft, 1.4f * u, fnt(7.2f * u, true));
+    g.setColour(pal.mute); tracked(g, u8(title), Rectangle<float>(r.getX(), r.getY(), r.getWidth(), 10 * u), juce::Justification::centredLeft, 1.2f * u, fnt(8.f * u, true));
     for (int i = 0; i < 8; ++i) {
-        const float cx = r.getX() + (6.5f + 13.f * (float)i) * u, cy = r.getY() + 20 * u;
-        led(g, cx, cy, 3.3f * u, value >= thr[i], i >= 6 ? hot : pal.accent);
-        g.setColour(pal.mute.withAlpha(0.8f)); g.setFont(mono(6.3f * u));
-        g.drawText(lab[i], Rectangle<float>(cx - 8 * u, cy + 6 * u, 16 * u, 8 * u), juce::Justification::centred);
+        const float cx = r.getX() + (6.5f + 13.8f * (float)i) * u, cy = r.getY() + 20 * u;
+        led(g, cx, cy, 3.3f * u, value >= thr[i] ? 1.f : 0.f, i >= 6 ? hot : pal.ledAmber, LedBezel::None);
+        g.setColour(pal.mute); g.setFont(mono(7.f * u));
+        g.drawText(lab[i], Rectangle<float>(cx - 8 * u, cy + 6 * u, 16 * u, 9 * u), juce::Justification::centred);
     }
 }
 
 void CabineEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    g.drawImageAt(plate, 0, 0);
-    for (float y : {14.f, 746.f}) for (float x : {14.f, 386.f}) screw(g, x * u, y * u, 5.f * u, (x + y) * 0.7f);
-    g.setColour(juce::Colours::black.withAlpha(0.45f)); g.fillRect(S(0, 0, 3, kH)); g.fillRect(S(397, 0, 3, kH));
-    g.setColour(juce::Colours::white.withAlpha(0.07f)); g.fillRect(S(3, 0, 1, kH)); g.fillRect(S(396, 0, 1, kH));
-
-    // en-tête
-    engraved(g, pal, "dreamaws", S(28, 24, 120, 12), juce::Justification::centredLeft, 8.8f * u, 2.6f * u);
-    engraved(g, pal, "Orbe Cabine", S(28, 38, 280, 30), juce::Justification::centredLeft, 24.f * u, 3.6f * u, true);
-    g.setColour(pal.mute); g.setFont(fnt(9.6f * u));
-    g.drawText(u8("Cha\xC3\xAEne vocale par piste \xC2\xB7 mod\xC3\xA8le 500"), S(28, 70, 260, 13), juce::Justification::centredLeft);
-    g.setFont(mono(8.4f * u)); g.drawText("DW-601", S(236, 24, 70, 12), juce::Justification::centredRight);
-    g.setColour(kPeach.withAlpha(0.9f)); g.fillRect(S(28, 88, 28, 1.6f)); g.setColour(kLilac.withAlpha(0.9f)); g.fillRect(S(56, 88, 28, 1.6f)); g.setColour(kIce.withAlpha(0.9f)); g.fillRect(S(84, 88, 28, 1.6f));
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Cabine", kit::w::serial::cabine});
 
     // afficheur de preset
-    auto well = S(30, 100, 340, 48);
-    screenWell(g, pal, well);
+    auto well = S(46, 58, 308, 44);
+    screenWell(g, pal, well, Display::VFD);
     const int pi = proc.currentPreset();
     g.setColour(pal.mute); g.setFont(mono(8.f * u));
-    g.drawText(u8("PRESET ") + String(pi + 1).paddedLeft('0', 2) + "/" + String(cab::kPresets), S(62, 104, 120, 11), juce::Justification::centredLeft);
-    g.setColour(modified ? kPeach : kLilac.withAlpha(0.8f)); g.setFont(mono(8.f * u));
-    g.drawText(modified ? u8("\xE2\x97\x8F MODIFI\xC3\x89") : u8("\xE2\x97\x8F D'ORIGINE"), S(212, 104, 124, 11), juce::Justification::centredRight);
-    g.setColour(pal.screenInk); g.setFont(mono(19.f * u));
-    g.drawText(upper(CabineProcessor::presetName(pi)), S(62, 114, 276, 30), juce::Justification::centred);
+    g.drawText(u8("PRESET ") + String(pi + 1).paddedLeft('0', 2) + "/" + String(cab::kPresets), S(56, 61, 120, 11), juce::Justification::centredLeft);
+    g.setColour(modified ? kPeach : pal.mute); g.setFont(mono(8.f * u));
+    g.drawText(modified ? u8("\xE2\x97\x8F MODIFI\xC3\x89") : u8("\xE2\x97\x8F D'ORIGINE"), S(224, 61, 124, 11), juce::Justification::centredRight);
+    screenText(g, pal, Display::VFD, CabineProcessor::presetName(pi), S(52, 72, 296, 28), juce::Justification::centred, 13.f * u);
 
-    // VU + échelles à voyants
-    paintVu(g, S(30, 166, 214, 90));
-    auto lw = S(256, 166, 114, 90);
-    screenWell(g, pal, lw);
+    // VU de sortie + échelles à voyants
+    vuMeter(g, pal, S(22, 110, 228, 128), (float)vu.vu(), pkDisp > -0.5f);
+    auto lw = S(258, 110, 120, 128);
+    screenWell(g, pal, lw, Display::Classic);
     static const float grT[8] = {0.5f, 1.5f, 2.5f, 3.5f, 5.f, 7.f, 10.f, 14.f}, pkT[8] = {-40.f, -30.f, -20.f, -12.f, -8.f, -4.f, -1.5f, -0.2f};
     static const char* grL[8] = {"1", "2", "3", "4", "6", "8", "10", "14"};
     static const char* pkL[8] = {"-40", "-30", "-20", "-12", "-8", "-4", "-1", "0"};
-    paintLadder(g, lw.reduced(5 * u, 0).withTrimmedTop(6 * u), "R\xC3\xA9" "duction dB", grT, grL, grDisp, kPeach);
-    paintLadder(g, lw.reduced(5 * u, 0).withTrimmedTop(50 * u), "Cr\xC3\xAAte dBFS", pkT, pkL, pkDisp, kPeach);
+    paintLadder(g, lw.reduced(4 * u, 0).withTrimmedTop(10 * u), "R\xC3\xA9" "duction dB", grT, grL, grDisp, pal.ledRed);
+    paintLadder(g, lw.reduced(4 * u, 0).withTrimmedTop(68 * u), "Cr\xC3\xAAte dBFS", pkT, pkL, pkDisp, pal.ledRed);
 
-    for (int s = 0; s < 3; ++s) section(g, kSecName[s], kSecY[s]);
+    for (int i = 0; i < 3; ++i) module(g, i, kModY[i]);
 }

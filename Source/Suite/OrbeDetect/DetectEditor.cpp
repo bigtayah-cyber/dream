@@ -11,7 +11,7 @@ void txt(juce::Graphics& g, const String& s, juce::Rectangle<float> r, float h, 
 }  // namespace
 
 DetectEditor::DetectEditor(DetectProcessor& p)
-    : Base(p, 1000.f, 640.f, u8("DÉTECT"), u8("Tempo · tonalité · roue de Camelot · accordage du 808")), proc(p), cur(p.result()), halfB(u8("×½")) {
+    : Base(p, 1000.f, 640.f, u8("Orbe Détect"), kit::w::serial::detect, kit::Display::VFD, kOk), proc(p), cur(p.result()), halfB(u8("×½")) {
     captureB.setButtonText("Capturer"); addAndMakeVisible(captureB);
     capAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "capture", captureB);
     for (auto* b : {&clearB, &analyzeB, &halfB, &dblB, &tapB, &applyB}) addAndMakeVisible(*b);
@@ -26,11 +26,18 @@ DetectEditor::DetectEditor(DetectProcessor& p)
     dblB.onClick = [this] { proc.scaleBpm(2.0); };
     tapB.onClick = [this] { tap(); };
     applyB.onClick = [this] { if (tapBpm > 0) proc.setBpm(tapBpm); applyB.setVisible(false); };
+    captureB.setClickingTogglesState(true); captureB.setLed(juce::Colour(0xFFFF3B30));
+    setHelp({u8("Mesure le tempo et la tonalité d'un extrait, puis donne l'accordage du 808."),
+             u8("- Capture : lance la lecture dans l'hôte, appuie sur CAPTURER (jusqu'à 2 minutes, le silence est ignoré)."),
+             u8("- Analyser : au moins 5 secondes de capture. ×½ et ×2 corrigent un tempo détecté en moitié ou en double."),
+             u8("- Tap : tape au moins 3 fois en rythme ; « Appliquer le tap » remplace le tempo détecté."),
+             u8("- Roue de Camelot : clique une case pour la choisir et voir ses voisines compatibles ; reclique pour revenir à la détection."),
+             u8("- 808 : accorde la fondamentale du 808 sur la tonique (note MIDI 24 + hauteur de la tonique) ; les autres notes de la gamme servent aux glissés et aux changements d'accord.")});
     start(24);
 }
 
 void DetectEditor::layout() {
-    captureB.setBounds(Ri(200, 114, 114, 22)); clearB.setBounds(Ri(200, 140, 114, 24));
+    captureB.setBounds(Ri(200, 110, 114, 30)); clearB.setBounds(Ri(200, 144, 114, 26));
     analyzeB.setBounds(Ri(36, 224, 278, 28));
     halfB.setBounds(Ri(36, 424, 134, 28)); dblB.setBounds(Ri(180, 424, 134, 28));
     tapB.setBounds(Ri(36, 462, 134, 44)); applyB.setBounds(Ri(36, 514, 278, 24));
@@ -73,16 +80,16 @@ void DetectEditor::mouseDown(const juce::MouseEvent& e) { const auto h = wheelHi
 void DetectEditor::body(juce::Graphics& g) {
     const float u = u_; const auto& r = *cur; const bool ok = r.valid;
     // ---- en-tête : afficheur d'état
-    kit::screenWell(g, pal, R(640, 16, 336, 38));
+    well(g, R(560, 10, 360, 30));
     String st = busy ? u8("ANALYSE EN COURS…") : ok ? fr(r.bpm) + u8(" BPM") + kDot + T(oa::keyShort(r.pc, r.minor)) + kDot + T(oa::camelot(r.pc, r.minor)) : u8("EN ATTENTE") + kDot + mmss(capSec) + " / 2:00";
-    txt(g, st, R(654, 16, 310, 38), 13.f * u, kIce, juce::Justification::centredLeft, false, true);
+    txt(g, st, R(572, 10, 340, 30), 14.f * u, scr, juce::Justification::centredLeft, false, true);
 
     // ---- capture
     panel(g, pal, R(20, 82, 310, 180), "Capture", u);
-    kit::screenWell(g, pal, R(36, 112, 150, 50));
-    lcd(g, R(40, 114, 142, 46), mmss(capSec), 34.f * u, full ? kWarn : kIce);
+    well(g, R(36, 112, 150, 50));
+    lcd(g, R(40, 114, 142, 46), mmss(capSec), 34.f * u, full ? kWarn : scr);
     txt(g, "/ 2:00", R(138, 146, 44, 12), 8.5f * u, pal.mute, juce::Justification::centredRight, false, true);
-    kit::screenWell(g, pal, R(36, 172, 278, 44));
+    well(g, R(36, 172, 278, 44));
     {
         const int n = proc.peakCount(); const auto w = R(36, 172, 278, 44).reduced(4.f * u, 3.f * u); const int span = juce::jmax(n, 200);
         for (int x = 0; x < (int)w.getWidth(); ++x) {
@@ -90,30 +97,29 @@ void DetectEditor::body(juce::Graphics& g) {
             const float a = juce::jlimit(0.f, 1.f, std::sqrt(proc.peakAt(i)) * 1.1f) * w.getHeight() * .5f;
             g.setColour(kLilac.withAlpha(.85f)); g.fillRect(w.getX() + (float)x, w.getCentreY() - a, 1.f, juce::jmax(1.f, a * 2));
         }
-        if (n == 0) txt(g, u8("Lance la lecture dans l'hôte"), w, 10.f * u, pal.mute.withAlpha(.8f), juce::Justification::centred);
     }
 
     // ---- tempo
     panel(g, pal, R(20, 276, 310, 344), "Tempo", u);
-    kit::screenWell(g, pal, R(36, 306, 278, 84));
-    lcd(g, R(44, 310, 196, 76), ok ? fr(r.bpm) : "---,-", 56.f * u, ok ? kIce : kIce.withAlpha(.5f));
+    well(g, R(36, 306, 278, 84));
+    lcd(g, R(44, 310, 196, 76), ok ? fr(r.bpm) : "---,-", 56.f * u, ok ? scr : scr.withAlpha(.5f));
     txt(g, "BPM", R(244, 358, 60, 20), 12.f * u, pal.mute, juce::Justification::centredLeft, true);
     if (ok) {
         pill(g, pal, 36 * u, 398 * u, u, confColour(r.bconf), confLabel(r.bconf), 80.f);
         if (r.nAlt) { String a = u8("Aussi : "); for (int i = 0; i < r.nAlt; ++i) a += (i ? u8(" · ") : String()) + fr(r.alt[i]); txt(g, a, R(130, 396, 184, 18), 10.f * u, pal.mute, juce::Justification::centredRight, false, true); }
-    } else txt(g, u8("Capture au moins 5 secondes, puis Analyser"), R(36, 396, 278, 18), 10.f * u, pal.mute);
-    kit::screenWell(g, pal, R(180, 462, 134, 44));
+    }
+    well(g, R(180, 462, 134, 44));
     lcd(g, R(184, 464, 126, 40), tapBpm > 0 ? fr(tapBpm) : (taps.empty() ? "---,-" : "..."), 24.f * u, kPeach);
     if (tapBpm > 0 || !taps.empty()) txt(g, "TAP", R(186, 464, 40, 12), 8.f * u, pal.mute, juce::Justification::centredLeft, true);
     // comparaison avec le tempo de l'hôte
     auto hc = R(36, 548, 278, 58);
-    g.setColour(juce::Colours::black.withAlpha(.3f)); g.fillRoundedRectangle(hc, 5.f * u);
+    hairline(g, hc.withHeight(2.f));
     kit::engraved(g, pal, u8("Tempo de l'hôte"), R(46, 553, 140, 12), juce::Justification::centredLeft, 8.5f * u, 1.6f * u);
-    txt(g, hostBpm > 0 ? fr(hostBpm) + " BPM" : "--", R(190, 551, 114, 16), 12.5f * u, kIce, juce::Justification::centredRight, false, true);
+    txt(g, hostBpm > 0 ? fr(hostBpm) + " BPM" : "--", R(190, 551, 114, 16), 12.5f * u, scr, juce::Justification::centredRight, false, true);
     {
         String v; juce::Colour c = pal.mute;
-        if (hostBpm <= 0) v = u8("Inconnu : lance la lecture dans l'hôte.");
-        else if (!ok) v = u8("Analyse d'abord un extrait.");
+        if (hostBpm <= 0) v = u8("Inconnu");
+        else if (!ok) v = "--";
         else {
             const double d = (r.bpm - hostBpm) / hostBpm;
             double best = 1e9; int mult = 0; const double m[3] = {1.0, 0.5, 2.0};
@@ -129,7 +135,7 @@ void DetectEditor::body(juce::Graphics& g) {
 
     // ---- tonalité
     panel(g, pal, R(346, 82, 306, 278), u8("Tonalité"), u);
-    kit::screenWell(g, pal, R(362, 112, 274, 64));
+    well(g, R(362, 112, 274, 64));
     lcd(g, R(368, 116, 262, 56), ok ? T(oa::keyLong(r.pc, r.minor)) : "---", 30.f * u, ok ? kLilac : kLilac.withAlpha(.5f), juce::Justification::centred);
     const std::string cam = ok ? oa::camelot(r.pc, r.minor) : std::string();
     {
@@ -141,7 +147,6 @@ void DetectEditor::body(juce::Graphics& g) {
                   txt(g, u8("Camelot"), R(440, 206, 80, 12), 8.5f * u, pal.mute); }
         if (ok) { const int p1 = r.rankPc[1]; const bool m1 = r.rankMinor[1];
                   txt(g, u8("Sinon : ") + T(oa::keyLong(p1, m1)) + kDot + T(oa::camelot(p1, m1)), R(362, 226, 274, 16), 11.f * u, pal.ink.withAlpha(.8f)); }
-        else txt(g, u8("Aucune analyse"), R(362, 226, 274, 16), 11.f * u, pal.mute);
     }
     {   // chromagramme
         const auto a = R(362, 252, 274, 96); const float bw = a.getWidth() / 12.f;
@@ -151,8 +156,8 @@ void DetectEditor::body(juce::Graphics& g) {
             const float v = ok ? (float)r.chroma[i] : 0.f; const float hh = (a.getHeight() - 18 * u) * juce::jmax(.02f, v);
             auto b = juce::Rectangle<float>(a.getX() + bw * (float)i + 3 * u, a.getBottom() - 16 * u - hh, bw - 6 * u, hh);
             g.setColour(juce::Colours::black.withAlpha(.35f)); g.fillRoundedRectangle(b.withTop(a.getY()).withHeight(a.getHeight() - 16 * u), 2.f * u);
-            g.setColour(!ok ? pal.line : rel == 0 ? kIce : inScale ? kLilac.withAlpha(.8f) : pal.mute.withAlpha(.5f)); g.fillRoundedRectangle(b, 2.f * u);
-            txt(g, note(i), R(a.getX() / u + bw / u * (float)i - 2, 334, bw / u + 4, 14), 8.5f * u, rel == 0 ? kIce : pal.mute, juce::Justification::centred, rel == 0);
+            g.setColour(!ok ? pal.line : rel == 0 ? scr : inScale ? kLilac.withAlpha(.8f) : pal.mute.withAlpha(.5f)); g.fillRoundedRectangle(b, 2.f * u);
+            txt(g, note(i), R(a.getX() / u + bw / u * (float)i - 2, 334, bw / u + 4, 14), 8.5f * u, rel == 0 ? scr : pal.mute, juce::Justification::centred, rel == 0);
         }
     }
 
@@ -160,10 +165,10 @@ void DetectEditor::body(juce::Graphics& g) {
     const std::string code = activeCode(); int kpc = 0; bool kmin = false; const bool haveKey = !code.empty() && oa::fromCamelot(code, kpc, kmin);
     panel(g, pal, R(346, 372, 306, 248), u8("808 · Accordage"), u);
     if (haveKey) {
-        g.setColour(pal.ink.withAlpha(.92f)); g.setFont(kit::fnt(12.f * u, true));
-        g.drawText(u8("Accorde la fondamentale de ton 808 sur ") + note(kpc) + ".", R(362, 402, 274, 18).toNearestInt(), juce::Justification::centredLeft, true);
-        g.setColour(pal.mute); g.setFont(kit::fnt(10.f * u));
-        g.drawFittedText(u8("Les autres notes de la gamme servent pour les glissés et les changements d'accord."), R(362, 422, 274, 28).toNearestInt(), juce::Justification::topLeft, 2);
+        kit::engraved(g, pal, u8("Fondamentale du 808"), R(362, 404, 170, 14), juce::Justification::centredLeft, 9.f * u, 1.6f * u, true);
+        well(g, R(540, 400, 96, 26));
+        kit::screenText(g, pal, disp, note(kpc) + (kmin ? " MIN" : " MAJ"), R(546, 400, 84, 26), juce::Justification::centred, 12.f * u);
+        kit::engraved(g, pal, u8("Gamme · notes MIDI"), R(362, 438, 274, 14), juce::Justification::centredLeft, 8.f * u, 1.4f * u);
         const int* iv = kmin ? oa::kMinor : oa::kMajor; const int r0 = 24 + kpc;
         for (int i = 0; i < 7; ++i) {
             const int midi = r0 + iv[i]; auto t = R(362.f + (float)(i % 4) * 70.f, 462.f + (float)(i / 4) * 74.f, 64, 62);
@@ -175,8 +180,7 @@ void DetectEditor::body(juce::Graphics& g) {
             txt(g, fr(oa::mtof(midi)) + " Hz", t.withTrimmedTop(34 * u).withHeight(12 * u), 8.5f * u, pal.mute, juce::Justification::centred, false, true);
             txt(g, root ? u8("FONDAMENTALE") : "MIDI " + String(midi), t.withTrimmedTop(48 * u).withHeight(11 * u), 7.f * u, root ? kPeach.withAlpha(.9f) : pal.mute.withAlpha(.7f), juce::Justification::centred, true);
         }
-        g.setColour(pal.mute.withAlpha(.9f)); g.setFont(kit::fnt(9.f * u)); g.drawFittedText(u8("Fondamentale : note MIDI 24 + hauteur de la tonique."), R(362 + 3 * 70 + 2, 540, 62, 54).toNearestInt(), juce::Justification::topLeft, 5);
-    } else txt(g, u8("Analyse un extrait, ou choisis une case sur la roue."), R(362, 410, 274, 40), 11.f * u, pal.mute);
+    }
 
     // ---- roue de Camelot
     panel(g, pal, R(668, 82, 312, 338), "Roue de Camelot", u);
@@ -195,12 +199,12 @@ void DetectEditor::body(juce::Graphics& g) {
             const float rm = (ri + ro) / 2, x = cx + std::cos(a) * rm, y = cy + std::sin(a) * rm; int kp = 0; bool km = false; oa::fromCamelot(c, kp, km);
             txt(g, T(c), juce::Rectangle<float>(x - 20 * u, y - 11 * u, 40 * u, 12 * u), juce::jmax(9.f, w.getWidth() / 28.f), isSel ? Colour(0xFF08090B) : pal.ink.withAlpha(isComp ? .95f : .6f), juce::Justification::centred, false, true);
             txt(g, T(oa::keyShort(kp, km)), juce::Rectangle<float>(x - 20 * u, y + 1 * u, 40 * u, 11 * u), 8.5f * u, isSel ? Colour(0xFF08090B).withAlpha(.75f) : pal.mute, juce::Justification::centred);
-            if (ok && c == oa::camelot(r.pc, r.minor)) { g.setColour(isSel ? Colour(0xFF08090B) : kIce); g.fillEllipse(x - 2.5f * u, y + 12 * u, 5 * u, 5 * u); }
+            if (ok && c == oa::camelot(r.pc, r.minor)) { g.setColour(isSel ? Colour(0xFF08090B) : scr); g.fillEllipse(x - 2.5f * u, y + 12 * u, 5 * u, 5 * u); }
         }
         txt(g, code.empty() ? "--" : T(code), juce::Rectangle<float>(cx - R0, cy - 18 * u, R0 * 2, 32 * u), 28.f * u, pal.ink.withAlpha(.9f), juce::Justification::centred, true, true);
         txt(g, code.empty() ? "CAMELOT" : focus.empty() ? u8("DÉTECTÉ") : u8("CHOISIE"), juce::Rectangle<float>(cx - R0, cy + 14 * u, R0 * 2, 12 * u), 8.f * u, pal.mute, juce::Justification::centred, true);
         int hp = 0; bool hm = false;
-        txt(g, !hover.empty() && oa::fromCamelot(hover, hp, hm) ? T(hover) + kDot + T(oa::keyLong(hp, hm)) : u8("Touche une case pour voir ses voisines"), R(680, 402, 288, 14), 10.f * u, pal.mute, juce::Justification::centred);
+        if (!hover.empty() && oa::fromCamelot(hover, hp, hm)) txt(g, T(hover) + kDot + T(oa::keyLong(hp, hm)), R(680, 402, 288, 14), 10.f * u, pal.mute, juce::Justification::centred);
     }
 
     // ---- compatibles
@@ -214,5 +218,5 @@ void DetectEditor::body(juce::Graphics& g) {
             txt(g, T(oa::keyLong(p, m)), R(738, y, 230, 14), 12.f * u, pal.ink.withAlpha(.92f), juce::Justification::centredLeft, true);
             txt(g, u8(why[i]), R(738, y + 15, 230, 12), 9.f * u, pal.mute);
         }
-    } else txt(g, u8("Aucune tonalité choisie."), R(684, 470, 280, 20), 11.f * u, pal.mute);
+    }
 }

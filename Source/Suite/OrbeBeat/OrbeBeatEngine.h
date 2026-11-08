@@ -17,8 +17,8 @@ enum Lane { K = 0, S, C, H, O, R, P, B };
 struct LaneInfo { const char* label; int midi; uint32_t rgb; };
 inline const LaneInfo* lanes() {
     static const LaneInfo l[kLanes] = {
-        {"Kick", 36, 0xFFFFC4AB}, {"Snare", 38, 0xFFECEBF2}, {"Clap", 39, 0xFFCFC6FF}, {"Charley", 42, 0xFFA9ECFF},
-        {"Charley ouvert", 46, 0xFF7FD3E6}, {"Rim", 37, 0xFFFFD27A}, {"Percu", 47, 0xFF9BE6B4}, {"808", 33, 0xFFFF6B6B}};
+        {"Kick", 36, 0xFFFFC4AB}, {"Snare", 38, 0xFFECEBF2}, {"Clap", 39, 0xFFCFC6FF}, {"Hi-hat", 42, 0xFFA9ECFF},
+        {"Hi-hat ouvert", 46, 0xFF7FD3E6}, {"Rim", 37, 0xFFFFD27A}, {"Percu", 47, 0xFF9BE6B4}, {"808", 33, 0xFFFF6B6B}};
     return l;
 }
 

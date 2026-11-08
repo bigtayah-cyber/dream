@@ -46,7 +46,7 @@ public:
 
     void paint(juce::Graphics& g) override {
         const float u = scale(); const auto pal = of::palette();
-        kit::screenWell(g, pal, getLocalBounds().toFloat());
+        kit::screenWell(g, pal, getLocalBounds().toFloat(), kit::Display::OLED);
         const auto r = plot(); const auto P = proc.readParams(); const float R = proc.rangeDb();
         g.saveState(); g.reduceClipRegion(r.expanded(2).toNearestInt());
         // grille en dB
@@ -105,7 +105,7 @@ public:
             String t = String(hb + 1) + "  " + fmtHz(b.freq);
             if (eq::hasGain(b.type)) t += "   " + fmtDb(b.gain);
             t += "   Q " + String(b.q, 2);
-            g.setFont(kit::mono(9.f * u)); const float w = g.getCurrentFont().getStringWidthFloat(t) + 14 * u;
+            g.setFont(kit::mono(9.f * u)); const float w = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), t) + 14 * u;
             auto box = Rectangle<float>(c.x - w / 2, c.y - 34 * u, w, 17 * u).constrainedWithin(r);
             g.setColour(Colour(0xE60B0B10)); g.fillRoundedRectangle(box, 3 * u); g.setColour(bandColourFor(hb).withAlpha(0.7f)); g.drawRoundedRectangle(box, 3 * u, 1.f);
             g.setColour(pal.screenInk); g.drawText(t, box, juce::Justification::centred);
@@ -188,16 +188,16 @@ public:
     BandChips(EqProcessor& p, EqEditor& e) : proc(p), ed(e) { setTooltip(u8("Choisir une bande. Le voyant active ou coupe la bande.")); }
     void paint(juce::Graphics& g) override {
         const float u = (float)getWidth() / 836.f, w = (float)getWidth() / 8.f; const auto P = proc.readParams(); const auto pal = of::palette();
-        for (int i = 0; i < eq::kBands; ++i) {
-            auto c = Rectangle<float>(w * (float)i, 0, w, (float)getHeight()).reduced(2 * u, 1);
+        for (int i = 0; i < eq::kBands; ++i) {   // touches de bande : LED de la couleur de la bande (allumée = bande active)
+            auto c = Rectangle<float>(w * (float)i, 0, w, (float)getHeight()).reduced(3 * u, 2);
             const bool s = i == ed.selected(), on = P.b[i].on;
-            g.setColour(juce::Colours::black.withAlpha(s ? 0.65f : 0.4f)); g.fillRoundedRectangle(c, 4 * u);
-            g.setColour(s ? EqEditor::bandColour(i).withAlpha(0.7f) : juce::Colours::white.withAlpha(0.08f)); g.drawRoundedRectangle(c, 4 * u, s ? 1.4f : 1.f);
-            kit::led(g, c.getX() + 11 * u, c.getCentreY(), 3.4f * u, on, EqEditor::bandColour(i));
-            g.setColour(on ? pal.ink : pal.mute); g.setFont(kit::fnt(9.4f * u, true));
+            kit::pushButton(g, pal, c, false, s, EqEditor::bandColour(i), {});
+            if (s) { g.setColour(EqEditor::bandColour(i).withAlpha(0.75f)); g.drawRoundedRectangle(c.expanded(1.5f), 4.f * u, 1.2f); }
+            kit::led(g, c.getX() + 11 * u, c.getCentreY(), 3.4f * u, on ? 1.f : 0.f, EqEditor::bandColour(i), kit::LedBezel::None);
+            g.setColour(on ? pal.ink : pal.ink.withAlpha(0.55f)); g.setFont(kit::fnt(9.6f * u, true));
             g.drawText(String(i + 1), Rectangle<float>(c.getX() + 20 * u, c.getY(), 12 * u, c.getHeight()), juce::Justification::centred);
-            g.setFont(kit::mono(9.f * u)); g.setColour(on ? pal.screenInk : pal.mute);
-            g.drawText(fmtHz(P.b[i].freq), Rectangle<float>(c.getX() + 34 * u, c.getY(), c.getWidth() - 36 * u, c.getHeight()), juce::Justification::centredLeft);
+            g.setFont(kit::lcdFont(9.6f * u)); g.setColour(on ? pal.screenInk : pal.ink.withAlpha(0.5f));
+            g.drawText(on ? fmtHz(P.b[i].freq) : String("OFF"), Rectangle<float>(c.getX() + 34 * u, c.getY(), c.getWidth() - 36 * u, c.getHeight()), juce::Justification::centredLeft);
         }
     }
     void mouseDown(const juce::MouseEvent& e) override {
@@ -260,7 +260,7 @@ EqEditor::EqEditor(EqProcessor& p)
     addAndMakeVisible(onKey);
     onKey.onClick = [this] { if (!updating) proc.setReal(proc.par(sel, "on"), onKey.getToggleState() ? 1.f : 0.f); };
     onKey.setTooltip(u8("Active ou coupe la bande s\xC3\xA9lectionn\xC3\xA9" "e."));
-    outPot = std::make_unique<Pot>(proc.apvts, "out", "Sortie", u8("Gain de sortie apr\xC3\xA8s l'\xC3\xA9galiseur.")); addAndMakeVisible(*outPot);
+    outPot = std::make_unique<Pot>(proc.apvts, "out", "Sortie", u8("Gain de sortie apr\xC3\xA8s l'\xC3\xA9galiseur."), pal); outPot->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(*outPot);
     rangeSeg = std::make_unique<Seg>(proc.apvts, "range", juce::StringArray{u8("\xC2\xB1" "12"), u8("\xC2\xB1" "24")}, u8("\xC3\x89" "chelle verticale du graphe en dB."), pal); addAndMakeVisible(*rangeSeg);
     for (auto* k : {&aKey, &bKey}) { k->setClickingTogglesState(false); addAndMakeVisible(*k); }
     aKey.onClick = [this] { proc.switchAB(0); }; bKey.onClick = [this] { proc.switchAB(1); };
@@ -270,10 +270,16 @@ EqEditor::EqEditor(EqProcessor& p)
     prev.setTooltip(u8("Preset pr\xC3\xA9" "c\xC3\xA9" "dent")); next.setTooltip("Preset suivant");
     addAndMakeVisible(prev); addAndMakeVisible(next);
     addAndMakeVisible(power);
-    power.setTooltip(u8("\xC3\x89galiseur en service. Appuie pour le couper (bypass)."));
+    power.setTooltip(u8("\xC3\x89galiseur en service. Bascule pour le couper (bypass)."));
+    help.install(*this, "Orbe EQ", {u8("\xC3\x89galiseur param\xC3\xA9trique 8 bandes \xC3\xA0 phase minimale."),
+        u8("- Graphe : glisser un point r\xC3\xA8gle fr\xC3\xA9quence et gain ; molette : Q ; double-clic : r\xC3\xA9initialiser la bande (ou en ajouter une) ; clic droit : type de bande ; Maj : r\xC3\xA9glage fin."),
+        u8("- Touches 1 \xC3\xA0 8 : choisir une bande ; cliquer sur sa LED l'active ou la coupe."),
+        u8("- Champs Fr\xC3\xA9quence, Gain, Q : glisser, molette, ou double-clic pour saisir (ex. 2,5k)."),
+        u8("- Afficheur du haut : preset (clic pour la liste, fl\xC3\xA8" "ches pour d\xC3\xA9" "filer). A / B : deux m\xC3\xA9moires compl\xC3\xA8tes \xC3\xA0 comparer."),
+        u8("- \xC3\x89" "chelle : \xC2\xB1" "12 ou \xC2\xB1" "24 dB pour le graphe.")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     setResizable(true, true);
-    setResizeLimits(450, 274, 1800, 1096);
+    setResizeLimits(450, (int)(450 * kH / kW), 1800, (int)(1800 * kH / kW));
     getConstrainer()->setFixedAspectRatio((double)kW / kH);
     setSize((int)kW, (int)kH);
     refreshFields();
@@ -297,47 +303,44 @@ void EqEditor::timerCallback() {
     refreshFields();
     aKey.setToggleState(proc.abIndex() == 0, juce::dontSendNotification); bKey.setToggleState(proc.abIndex() == 1, juce::dontSendNotification);
     modified = !proc.matchesPreset();
-    repaint(Si(430, 20, 300, 48)); chips->repaint();
+    repaint(Si(370, 0, 260, 50)); chips->repaint();
 }
 
 void EqEditor::resized() {
     u_ = (float)getWidth() / kW;
-    plate = kit::brushedPlate(getWidth(), getHeight(), pal);
-    graph->setBounds(Si(32, 104, 836, 290)); chips->setBounds(Si(32, 402, 836, 28));
-    fFreq->setBounds(Si(32, 466, 128, 44)); fGain->setBounds(Si(168, 466, 116, 44)); fQ->setBounds(Si(292, 466, 100, 44));
-    typeBox.setBounds(Si(404, 481, 130, 29)); onKey.setBounds(Si(544, 478, 112, 32));
-    outPot->setBounds(Si(674, 458, 100, 70)); rangeSeg->setBounds(Si(786, 484, 82, 26));
-    prev.setBounds(Si(406, 33, 20, 24)); next.setBounds(Si(698, 33, 20, 24));
-    aKey.setBounds(Si(734, 30, 40, 28)); bKey.setBounds(Si(778, 30, 40, 28));
-    power.setBounds(Si(826, 20, 58, 52));
+    const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
+    power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
+    help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
+    graph->setBounds(Si(32, 64, 836, 290)); chips->setBounds(Si(32, 360, 836, 30));
+    fFreq->setBounds(Si(32, 424, 128, 44)); fGain->setBounds(Si(168, 424, 116, 44)); fQ->setBounds(Si(292, 424, 100, 44));
+    typeBox.setBounds(Si(404, 439, 130, 29)); onKey.setBounds(Si(544, 436, 112, 32));
+    outPot->setBounds(Si(674, 416, 104, 70)); rangeSeg->setBounds(Si(786, 440, 82, 28));
+    prev.setBounds(Si(352, 13, 20, 24)); next.setBounds(Si(628, 13, 20, 24));
+    aKey.setBounds(Si(660, 9, 44, 32)); bKey.setBounds(Si(708, 9, 44, 32));
 }
 
 void EqEditor::mouseUp(const juce::MouseEvent& e) {
-    if (Rectangle<float>(436 * u_, 26 * u_, 256 * u_, 40 * u_).contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showPresetMenu();
+    if (Rectangle<float>(378 * u_, 6 * u_, 244 * u_, 38 * u_).contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showPresetMenu();
 }
 void EqEditor::showPresetMenu() {
     juce::PopupMenu m;
     for (int i = 0; i < eq::kPresets; ++i) m.addItem(i + 1, EqProcessor::presetName(i), true, i == proc.currentPreset());
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(436, 26, 256, 40))).withMinimumWidth(juce::roundToInt(256 * u_)), [this](int r) { if (r > 0) proc.applyPreset(r - 1); });
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(378, 6, 244, 38))).withMinimumWidth(juce::roundToInt(244 * u_)), [this](int r) { if (r > 0) proc.applyPreset(r - 1); });
 }
 
 void EqEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    drawFace(g, pal, plate, u, kW, kH, "Orbe EQ", u8("\xC3\x89galiseur param\xC3\xA9trique 8 bandes \xC2\xB7 phase minimale"), "DW-702");
-    auto well = Rectangle<float>(436 * u, 26 * u, 256 * u, 40 * u);
-    kit::screenWell(g, pal, well);
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe EQ", kit::w::serial::eq});
+    auto well = Rectangle<float>(378 * u, 6 * u, 244 * u, 38 * u);
+    kit::screenWell(g, pal, well, kit::Display::VFD);
     const int pi = proc.currentPreset();
     g.setColour(pal.mute); g.setFont(kit::mono(7.6f * u));
     g.drawText(u8("PRESET ") + String(pi + 1).paddedLeft('0', 2) + "/" + String(eq::kPresets), Rectangle<float>(well.getX() + 10 * u, well.getY() + 4 * u, 100 * u, 10 * u), juce::Justification::centredLeft);
     g.setColour(modified ? kPeach : kLilac.withAlpha(0.8f));
     g.drawText(modified ? u8("\xE2\x97\x8F MODIFI\xC3\x89") : u8("\xE2\x97\x8F D'ORIGINE"), Rectangle<float>(well.getRight() - 110 * u, well.getY() + 4 * u, 100 * u, 10 * u), juce::Justification::centredRight);
-    g.setColour(pal.screenInk); g.setFont(kit::mono(14.f * u));
-    g.drawText(kit::upper(EqProcessor::presetName(pi)), well.withTrimmedTop(13 * u).reduced(8 * u, 0), juce::Justification::centred);
-    section(g, pal, u, u8("Bande ") + String(sel + 1) + u8(" \xC2\xB7 s\xC3\xA9lection"), 32, 440, 624);
-    section(g, pal, u, u8("Sortie \xC2\xB7 \xC3\xA9" "chelle"), 674, 440, 194);
-    g.setColour(pal.mute); kit::tracked(g, "Type", Rectangle<float>(408 * u, 470 * u, 100 * u, 9 * u), juce::Justification::centredLeft, 1.3f * u, kit::fnt(7.4f * u, true));
-    kit::tracked(g, u8("\xC3\x89" "chelle"), Rectangle<float>(790 * u, 470 * u, 70 * u, 9 * u), juce::Justification::centredLeft, 1.3f * u, kit::fnt(7.4f * u, true));
-    g.setFont(kit::mono(8.f * u));
-    g.drawText(u8("Glisser : fr\xC3\xA9quence / gain  \xC2\xB7  Molette : Q  \xC2\xB7  Double-clic : r\xC3\xA9initialiser  \xC2\xB7  Clic droit : type de bande  \xC2\xB7  Maj : fin"),
-               Rectangle<float>(32 * u, 522 * u, 836 * u, 12 * u), juce::Justification::centredLeft);
+    kit::screenText(g, pal, kit::Display::VFD, EqProcessor::presetName(pi), well.withTrimmedTop(13 * u).reduced(8 * u, 0), juce::Justification::centred, 12.f * u);
+    section(g, pal, u, u8("Bande ") + String(sel + 1) + u8(" \xC2\xB7 s\xC3\xA9lection"), 32, 398, 624);
+    section(g, pal, u, u8("Sortie \xC2\xB7 \xC3\xA9" "chelle"), 674, 398, 194);
+    g.setColour(pal.mute); kit::tracked(g, "Type", Rectangle<float>(408 * u, 427 * u, 100 * u, 9 * u), juce::Justification::centredLeft, 1.3f * u, kit::fnt(8.f * u, true));
+    kit::tracked(g, u8("\xC3\x89" "chelle"), Rectangle<float>(790 * u, 427 * u, 70 * u, 9 * u), juce::Justification::centredLeft, 1.3f * u, kit::fnt(8.f * u, true));
 }

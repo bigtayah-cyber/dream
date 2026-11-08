@@ -1,5 +1,5 @@
 #pragma once
-#include "../../Kit/Kit.h"
+#include "../../Kit/Widgets.h"
 #include "OrbeSynthProcessor.h"
 
 namespace osui {
@@ -118,7 +118,7 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
+    kit::w::HelpKey help;
     float u_ = 1.f;
 
     osui::PresetBar presetBar;

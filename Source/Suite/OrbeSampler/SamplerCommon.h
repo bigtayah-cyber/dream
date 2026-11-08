@@ -4,7 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <functional>
 #include <mutex>
-#include "../../Kit/Kit.h"
+#include "../../Kit/Widgets.h"
 #include "PadEngine.h"
 #include "TransformEngine.h"
 
@@ -70,19 +70,8 @@ juce::String durText(double s);
 
 // ---------------- composants d'interface ----------------
 
-// Sélecteur segmenté relié à un paramètre « choix ».
-class Seg : public juce::Component, public juce::SettableTooltipClient {
-public:
-    Seg(juce::RangedAudioParameter& p, juce::StringArray labels, const kit::Palette& pal)
-        : labels_(std::move(labels)), P(pal), att(p, [this](float v) { idx = juce::roundToInt(v); repaint(); }) { att.sendInitialUpdate(); }
-    void paint(juce::Graphics&) override;
-    void mouseDown(const juce::MouseEvent&) override;
-private:
-    juce::StringArray labels_;
-    kit::Palette P;
-    int idx = 0;
-    juce::ParameterAttachment att;
-};
+// Sélecteur à touches relié à un paramètre « choix » : kit commun.
+using Seg = kit::w::Seg;
 
 // Potard avec valeur lue dans un petit afficheur et légende gravée.
 class Knob : public juce::Component, public juce::SettableTooltipClient {

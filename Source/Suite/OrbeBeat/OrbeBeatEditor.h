@@ -42,17 +42,17 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
+    kit::w::HelpKey help;
     float u_ = 1.f;
 
     OrbeBeatGrid grid;
     juce::ComboBox kitBox, keyBox;
     std::unique_ptr<suiteui::Segmented> patSeg, stepsSeg, chainSeg, midiSeg, modeSeg;
-    juce::TextButton genB{kit::u8("Générer")}, varyB{"Varier"}, clearB{"Vider"}, auditionB{kit::u8("Écouter")};
-    juce::TextButton toolB[4];
+    kit::w::PushKey genB{kit::u8("Générer")}, varyB{"Varier"}, clearB{"Vider"}, auditionB{kit::u8("Écouter")};
+    kit::w::PushKey toolB[4];
     juce::ToggleButton seqB;
     juce::Slider swingK, masterK, vol[obeat::kLanes];
-    juce::TextButton muteB[obeat::kLanes], soloB[obeat::kLanes];
+    kit::w::PushKey muteB[obeat::kLanes], soloB[obeat::kLanes];
     std::unique_ptr<suiteui::DragHandle> handle;
     std::unique_ptr<ComboAtt> kitAtt, keyAtt;
     std::unique_ptr<SliderAtt> swingAtt, masterAtt, volAtt[obeat::kLanes];

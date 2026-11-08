@@ -36,7 +36,7 @@ void MidiHandle::mouseDrag(const juce::MouseEvent& e) {
 
 // ---------------- éditeur ----------------
 FredonneEditor::FredonneEditor(FredonneProcessor& p)
-    : Base(p, 1000.f, 640.f, "FREDONNE", u8("Voix en entrée · notes MIDI en sortie")), proc(p), take(p.take()) {
+    : Base(p, 1000.f, 640.f, "Orbe Fredonne", kit::w::serial::fredonne, kit::Display::OLED, kLilac), proc(p), take(p.take()) {
     auto& ap = proc.apvts;
     auto knobOf = [&](juce::Slider& s) { s.setSliderStyle(juce::Slider::RotaryVerticalDrag); s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0); s.setMouseDragSensitivity(180); addAndMakeVisible(s); };
     knobOf(sensK); knobOf(minK); knobOf(bpmK);
@@ -56,11 +56,17 @@ FredonneEditor::FredonneEditor(FredonneProcessor& p)
                     Tg{monT, "Écoute directe", "monitor", monA, "Laisse passer ta voix en sortie (casque conseillé)"}}) {
         t.b.setButtonText(u8(t.text)); t.b.setTooltip(u8(t.tip)); addAndMakeVisible(t.b); t.a = std::make_unique<ButtonAtt>(ap, t.id, t.b);
     }
-    recB.setClickingTogglesState(false); recB.onClick = [this] { proc.pressRecord(); };
+    recB.setClickingTogglesState(false); recB.setLed(juce::Colour(0xFFFF3B30)); recB.setTooltip(u8("Arme l'enregistrement ; il démarre quand tu chantes. Reclique pour arrêter.")); recB.onClick = [this] { proc.pressRecord(); };
     clearB.setButtonText("Effacer"); clearB.onClick = [this] { proc.clearTake(); };
     clearB.setTooltip(u8("Efface la prise et les notes"));
     addAndMakeVisible(recB); addAndMakeVisible(clearB);
     handle = std::make_unique<MidiHandle>(proc, pal); addAndMakeVisible(*handle);
+    setHelp({u8("Transforme une mélodie fredonnée en notes MIDI."),
+             u8("- REC arme l'enregistreur : il démarre dès que tu chantes ; STOP l'arrête (2 minutes au plus). L'analyse découpe la voix en notes."),
+             u8("- Glisse ensuite le fichier .mid vers une piste de ton DAW. Effacer supprime la prise."),
+             u8("- Note en direct : note chantée, fréquence et écart en cents (vert : moins de 10 ct)."),
+             u8("- Sensibilité garde plus ou moins de notes faibles ; Plus courte ignore les notes brèves ; Grille, Octave, Tonalité et Mode règlent le calage."),
+             u8("- Écoute directe laisse passer ta voix (casque conseillé) ; Jouer dans l'hôte envoie aussi les notes en MIDI pendant la lecture.")});
     start(24);
 }
 
@@ -82,8 +88,8 @@ void FredonneEditor::timerCallback() {
         const float c = (float)((m - std::round(m)) * 100.0); cents += (c - cents) * .45f;
     }
     if (now - lastLive > 350) liveNote = -1;
-    const char* lbl[] = {"Armer", "En attente du son…", "Arrêter  ", "Analyse…", "Analyse…"};
-    recB.setButtonText(u8(lbl[juce::jlimit(0, 4, state)])); recB.setToggleState(state == FredonneProcessor::Armed || state == FredonneProcessor::Recording, juce::dontSendNotification);
+    const char* lbl[] = {"REC", "ARMÉ", "STOP", "ANALYSE", "ANALYSE"};
+    recB.setButtonText(u8(lbl[juce::jlimit(0, 4, state)])); recB.lit = state == FredonneProcessor::Recording || (state == FredonneProcessor::Armed && (juce::Time::getMillisecondCounter() / 450) % 2 == 0); recB.repaint();
     recB.setEnabled(state <= FredonneProcessor::Recording);
     clearB.setEnabled(!take->seg.notes.empty() && state == FredonneProcessor::Idle);
     handle->enabledLook = !take->seg.notes.empty(); handle->repaint();
@@ -94,45 +100,41 @@ void FredonneEditor::timerCallback() {
 void FredonneEditor::body(juce::Graphics& g) {
     const float u = u_; const auto& tk = *take; const bool has = !tk.seg.notes.empty();
     // ---- état dans l'en-tête
-    kit::screenWell(g, pal, R(640, 16, 336, 38));
+    well(g, R(560, 10, 360, 30));
     String hs = has ? String((int)tk.seg.notes.size()) + u8(" NOTES") + kDot + note(tk.seg.key) + (tk.seg.mode == 0 ? "m" : tk.seg.mode == 1 ? " maj" : " chr") + kDot + fr(tk.bpm, 0) + " BPM"
                       : state == FredonneProcessor::Recording ? u8("ENREGISTREMENT  ") + mmss(recSec) : state == FredonneProcessor::Armed ? u8("ARMÉ  ·  EN ATTENTE DU SON") : u8("PRÊT");
-    txt(g, hs, R(654, 16, 310, 38), 13.f * u, kIce, juce::Justification::centredLeft, false, true);
+    txt(g, hs, R(572, 10, 340, 30), 13.f * u, scr, juce::Justification::centredLeft, false, true);
 
     // ---- enregistrement
     panel(g, pal, R(20, 82, 280, 168), "Enregistrement", u);
     {
         const bool rec = state == FredonneProcessor::Recording, arm = state == FredonneProcessor::Armed;
-        const bool blink = (juce::Time::getMillisecondCounter() / 450) % 2 == 0;
-        kit::led(g, 54 * u, 136 * u, 5.f * u, rec || (arm && blink), rec ? kBad : kWarn);
-        kit::screenWell(g, pal, R(36, 172, 120, 40));
-        lcd(g, R(40, 174, 112, 36), mmss(recSec), 28.f * u, rec ? kBad : kIce);
-        const auto lv = R(170, 176, 114, 10); kit::screenWell(g, pal, lv);
+        well(g, R(36, 172, 120, 40));
+        lcd(g, R(40, 174, 112, 36), mmss(recSec), 28.f * u, rec ? kBad : scr);
+        const auto lv = R(170, 176, 114, 10); well(g, lv);
         const float fillw = juce::jlimit(0.f, 1.f, std::sqrt(level)) * (lv.getWidth() - 4 * u);
         g.setGradientFill(juce::ColourGradient(kOk, lv.getX(), 0, level > .9f ? kBad : kWarn, lv.getRight(), 0, false)); g.fillRect(lv.getX() + 2 * u, lv.getY() + 2 * u, fillw, lv.getHeight() - 4 * u);
         txt(g, "NIVEAU", R(170, 164, 60, 10), 7.5f * u, pal.mute, juce::Justification::centredLeft, true);
         const auto pb = R(170, 200, 114, 8); g.setColour(juce::Colours::black.withAlpha(.6f)); g.fillRoundedRectangle(pb, 4.f * u);
         g.setColour(kLilac.withAlpha(.9f)); g.fillRoundedRectangle(pb.withWidth(pb.getWidth() * (float)juce::jlimit(0.0, 1.0, recSec / 120.0)), 4.f * u);
         txt(g, "/ 2:00", R(228, 163, 56, 10), 7.5f * u, pal.mute, juce::Justification::centredRight, true);
-        const char* hint[] = {"Arme, puis fredonne.", "Chante : l'enregistrement démarre.", "Clique pour arrêter.", "Analyse de la voix…", "Analyse de la voix…"};
-        txt(g, u8(hint[juce::jlimit(0, 4, state)]), R(36, 220, 136, 14), 9.5f * u, pal.mute);
     }
 
     // ---- note en direct
     panel(g, pal, R(316, 82, 324, 168), "Note en direct", u);
     {
-        kit::screenWell(g, pal, R(332, 112, 292, 74));
+        well(g, R(332, 112, 292, 74));
         const bool on = liveNote >= 0;
-        lcd(g, R(340, 114, 150, 70), on ? noteOct(liveNote) : "--", 46.f * u, on ? (std::abs(cents) <= 10 ? kOk : kIce) : kIce.withAlpha(.4f), juce::Justification::centredLeft);
+        lcd(g, R(340, 114, 150, 70), on ? noteOct(liveNote) : "--", 46.f * u, on ? (std::abs(cents) <= 10 ? kOk : scr) : scr.withAlpha(.4f), juce::Justification::centredLeft);
         txt(g, on ? fr(liveHz) + " Hz" : "-- Hz", R(488, 124, 128, 18), 13.f * u, pal.ink.withAlpha(.9f), juce::Justification::centredRight, false, true);
         txt(g, on ? (cents >= 0 ? "+" : "") + String(juce::roundToInt(cents)) + " ct" : "-- ct", R(488, 148, 128, 24), 19.f * u, on ? (std::abs(cents) <= 10 ? kOk : std::abs(cents) <= 25 ? kWarn : kBad) : pal.mute, juce::Justification::centredRight, false, true);
         const auto gr = R(332, 198, 292, 40); const float cx = gr.getCentreX(), sc = gr.getWidth() / 100.f;
-        kit::screenWell(g, pal, gr);
+        well(g, gr);
         g.setColour(kOk.withAlpha(.13f)); g.fillRect(cx - 10 * sc, gr.getY() + 3 * u, 20 * sc, gr.getHeight() - 6 * u);
         for (int c = -50; c <= 50; c += 10) { const bool maj = c % 50 == 0 || c == 0; g.setColour(pal.ink.withAlpha(maj ? .55f : .25f)); g.fillRect(cx + (float)c * sc - .5f, gr.getBottom() - (maj ? 16.f : 11.f) * u, 1.f, (maj ? 12.f : 7.f) * u); }
         txt(g, "-50", R(332, 198, 30, 10), 7.5f * u, pal.mute, juce::Justification::centredLeft, false, true); txt(g, "+50", R(594, 198, 30, 10), 7.5f * u, pal.mute, juce::Justification::centredRight, false, true);
         if (on) { const float x = cx + juce::jlimit(-50.f, 50.f, cents) * sc; g.setColour(juce::Colours::black.withAlpha(.5f)); g.fillRect(x - 1.5f * u, gr.getY() + 5 * u, 4.f * u, gr.getHeight() - 14 * u);
-                  g.setColour(std::abs(cents) <= 10 ? kOk : kIce); g.fillRect(x - 1.f * u, gr.getY() + 4 * u, 2.5f * u, gr.getHeight() - 14 * u); }
+                  g.setColour(std::abs(cents) <= 10 ? kOk : scr); g.fillRect(x - 1.f * u, gr.getY() + 4 * u, 2.5f * u, gr.getHeight() - 14 * u); }
     }
 
     // ---- sortie MIDI
@@ -140,8 +142,8 @@ void FredonneEditor::body(juce::Graphics& g) {
     {
         const String k = has ? note(tk.seg.key) + " " + (tk.seg.mode == 0 ? u8("mineur") : tk.seg.mode == 1 ? u8("majeur") : u8("chromatique")) : String("--");
         const bool autoK = proc.apvts.getRawParameterValue("key")->load() < .5f;
-        txt(g, has ? String((int)tk.seg.notes.size()) + u8(" notes  ·  ") + k + (autoK ? " (auto)" : "") : u8("Aucune note pour l'instant"), R(672, 184, 292, 16), 11.f * u, pal.ink.withAlpha(.9f));
-        txt(g, has ? u8("Justesse : ") + (tk.seg.cents >= 0 ? "+" : "") + String(juce::roundToInt(tk.seg.cents * 100)) + u8(" ct  ·  grille sur ") + fr(tk.bpm, 0) + " BPM" : u8("Fredonne, puis glisse le fichier vers ta piste."), R(672, 202, 292, 14), 9.5f * u, pal.mute);
+        txt(g, has ? String((int)tk.seg.notes.size()) + u8(" notes  ·  ") + k + (autoK ? " (auto)" : "") : u8("Aucune note"), R(672, 184, 292, 16), 11.f * u, pal.ink.withAlpha(.9f));
+        txt(g, has ? u8("Justesse : ") + (tk.seg.cents >= 0 ? "+" : "") + String(juce::roundToInt(tk.seg.cents * 100)) + u8(" ct  ·  grille sur ") + fr(tk.bpm, 0) + " BPM" : String(), R(672, 202, 292, 14), 9.5f * u, pal.mute);
     }
 
     // ---- mélodie
@@ -165,11 +167,11 @@ void FredonneEditor::body(juce::Graphics& g) {
 }
 
 void FredonneEditor::paintRoll(juce::Graphics& g, juce::Rectangle<float> r, float u) {
-    kit::screenWell(g, pal, r);
+    well(g, r);
     const auto& tk = *take; const auto& ns = tk.seg.notes;
     if (ns.empty()) {
-        const char* m = state == FredonneProcessor::Recording ? "Enregistrement en cours…" : state >= FredonneProcessor::Captured ? "Analyse de la voix…" : "Arme, puis fredonne : la mélodie apparaît ici, découpée en notes.";
-        txt(g, u8(m), r, 12.f * u, pal.mute, juce::Justification::centred); return;
+        const char* m = state == FredonneProcessor::Recording ? "ENREGISTREMENT" : state >= FredonneProcessor::Captured ? "ANALYSE" : "AUCUNE NOTE";
+        txt(g, u8(m), r, 12.f * u, scr.withAlpha(.6f), juce::Justification::centred, false, true); return;
     }
     int lo = 127, hi = 0; double D = tk.track ? tk.track->dur : 1.0;
     for (auto& n : ns) { lo = juce::jmin(lo, n.n); hi = juce::jmax(hi, n.n); D = juce::jmax(D, n.e); }
@@ -184,8 +186,9 @@ void FredonneEditor::paintRoll(juce::Graphics& g, juce::Rectangle<float> r, floa
     }
     const double beat = 60.0 / tk.bpm;   // repères de temps
     for (double t = 0; t < D; t += beat) { const bool bar = std::fmod(std::round(t / beat), 4.0) == 0; g.setColour(juce::Colours::white.withAlpha(bar ? .12f : .05f)); g.fillRect(x0 + (float)(t / D) * w, y0, 1.f, rh * (float)(hi - lo + 1)); }
+    juce::Graphics::ScopedSaveState clip(g); g.reduceClipRegion(r.toNearestInt());
     if (tk.track) {   // contour de la voix
-        g.setColour(kIce.withAlpha(.32f));
+        g.setColour(scr.withAlpha(.32f));
         for (auto& f : tk.track->frames) if (f.f > 0 && f.rms > tk.track->maxR * .05f) g.fillRect(x0 + (float)(f.t / D) * w, yOf(oa::ftom(f.f) + .5), 1.6f * u, 1.6f * u);
     }
     for (auto& n : ns) {

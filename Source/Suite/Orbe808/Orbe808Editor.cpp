@@ -78,14 +78,7 @@ void Orbe808Keys::paint(juce::Graphics& g) {
 }
 
 // ---------------- éditeur ----------------
-Palette Orbe808Editor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2B2B31); p.plateBot = Colour(0xFF16161A);
-    p.ink = Colour(0xFFE9E7F0); p.mute = Colour(0xFF8F8D9B); p.line = Colour(0xFF3B3B44);
-    p.accent = kPeach; p.accent2 = kLilac;
-    p.screen = Colour(0xFF0B0C11); p.screenInk = Colour(0xFFEDEBF6);
-    return p;
-}
+Palette Orbe808Editor::palette() { return kit::w::instrument(kPeach); }
 
 Orbe808Editor::Orbe808Editor(Orbe808Processor& p)
     : AudioProcessorEditor(&p), proc(p), pal(palette()), look(pal), keysUi(p, pal) {
@@ -95,6 +88,7 @@ Orbe808Editor::Orbe808Editor(Orbe808Processor& p)
         auto& s = knobs[i];
         s.setSliderStyle(juce::Slider::RotaryVerticalDrag); s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
         s.setMouseDragSensitivity(180); s.setTooltip(u8(kDefs[i].tip));
+        if (i == 0 || i == 3) s.getProperties().set("kitKnob", (int)KnobStyle::Chicken);   // gros Longueur et Saturation à bec
         addAndMakeVisible(s);
         att[i] = std::make_unique<SliderAtt>(ap, kDefs[i].id, s);
         if (auto* prm = ap.getParameter(kDefs[i].id)) s.setDoubleClickReturnValue(true, prm->convertFrom0to1(prm->getDefaultValue()));
@@ -108,6 +102,11 @@ Orbe808Editor::Orbe808Editor(Orbe808Processor& p)
     presetSeg->setTooltip(u8("Six sons de départ ; toucher un réglage passe en « Perso »"));
     satSeg->setTooltip(u8("Courbe de saturation : douce (tanh), écrêtée ou repliée")); bendSeg->setTooltip(u8("Amplitude de la molette de pitch bend, en demi-tons"));
 
+    help.install(*this, "Orbe 808", {u8("Basse 808 monophonique avec glissé legato : joue-la en MIDI depuis l'hôte ou avec le clavier."),
+        u8("- Écran : forme d'onde de la dernière note jouée et niveau de sortie."),
+        u8("- Presets : six sons de départ ; toucher un réglage passe en « Perso »."),
+        u8("- Longueur : résonance ; Punch et Vitesse : chute de hauteur à l'attaque ; Saturation et Courbe : grain ; Glissé : durée du legato entre notes liées."),
+        u8("- Pitch bend : amplitude de la molette, en demi-tons. Double-clic sur un potard : valeur d'origine.")});
     pkMin.assign(kCols, 0.f); pkMax.assign(kCols, 0.f);
     setResizable(true, true);
     setResizeLimits(800, 506, 1700, 1074);
@@ -121,7 +120,7 @@ Orbe808Editor::~Orbe808Editor() { stopTimer(); setLookAndFeel(nullptr); }
 
 void Orbe808Editor::resized() {
     u_ = (float)getWidth() / 1000.f;
-    plate = brushedPlate(getWidth(), getHeight(), pal);
+    help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
     const float pitch = 952.f / (float)kKnobs;
     for (int i = 0; i < kKnobs; ++i) knobs[i].setBounds(Si(24.f + pitch * ((float)i + 0.5f) - 48.f, 364, 96, 96));
     presetSeg->setBounds(Si(700, 108, 276, 120));
@@ -171,25 +170,21 @@ void Orbe808Editor::timerCallback() {
 }
 
 void Orbe808Editor::paintHeader(juce::Graphics& g, float u) {
-    suiteui::logo(g, 48 * u, 36 * u, 17 * u, u, kPeach, Colour(0xFFB8502E));
-    engraved(g, pal, "Orbe 808", S(84, 18, 240, 34), juce::Justification::centredLeft, 28.f * u, 6.f * u, true);
-    g.setColour(pal.mute); g.setFont(fnt(10.f * u));
-    g.drawText(u8("Basse monophonique · glissé legato"), S(338, 26, 280, 20).toNearestInt(), juce::Justification::centredLeft);
     const int n = proc.sounding.load() >= 0 ? proc.sounding.load() : proc.lastNote.load();
     const float hz = 440.f * std::pow(2.f, ((float)n - 69.f) / 12.f);
-    screenWell(g, pal, S(640, 18, 336, 36));
+    screenWell(g, pal, S(560, 8, 360, 34), Display::Amber);
     const bool on = proc.sounding.load() >= 0;
-    led(g, 660 * u, 36 * u, 3.6f * u, on, kPeach);
+    led(g, 578 * u, 25 * u, 3.6f * u, on ? 1.f : 0.f, pal.ledRed, LedBezel::None);
     g.setColour(kPeach); g.setFont(mono(13.f * u));
     const int idx = (int)proc.apvts.getRawParameterValue("preset")->load();
-    g.drawText(suiteui::noteName(n) + "  " + suiteui::fr1(hz) + " Hz", S(674, 18, 160, 36).toNearestInt(), juce::Justification::centredLeft);
-    g.setColour(pal.screenInk.withAlpha(0.8f));
-    g.drawText(upper(Orbe808Processor::presetLabel(idx)), S(820, 18, 148, 36).toNearestInt(), juce::Justification::centredRight);
+    g.drawText(suiteui::noteName(n) + "  " + suiteui::fr1(hz) + " Hz", S(592, 8, 170, 34).toNearestInt(), juce::Justification::centredLeft);
+    g.setColour(displayColours(Display::Amber, pal).ink.withAlpha(0.85f));
+    g.drawText(upper(Orbe808Processor::presetLabel(idx)), S(760, 8, 152, 34).toNearestInt(), juce::Justification::centredRight);
 }
 
 void Orbe808Editor::paintScope(juce::Graphics& g, float u) {
     auto box = S(24, 92, 652, 246);
-    screenWell(g, pal, box);
+    screenWell(g, pal, box, Display::Amber);
     auto a = box.reduced(14 * u, 30 * u).withTrimmedBottom(10 * u);
     const float cy = a.getCentreY(), amp = a.getHeight() * 0.5f * 0.94f;
     // repères de temps
@@ -226,9 +221,8 @@ void Orbe808Editor::paintScope(juce::Graphics& g, float u) {
 
 void Orbe808Editor::paint(juce::Graphics& g) {
     const float u = u_;
-    g.drawImageAt(plate, 0, 0);
-    suiteui::rule(g, u, 70, 1000); suiteui::rule(g, u, 352, 1000); suiteui::rule(g, u, 506, 1000);
-    for (auto p : {juce::Point<float>(12, 12), {988, 12}, {12, 620}, {988, 620}}) screw(g, p.x * u, p.y * u, 5.f * u, (p.x + p.y) * 0.9f);
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe 808", kit::w::serial::b808});
+    suiteui::rule(g, u, 352, 964, 18); suiteui::rule(g, u, 506, 964, 18);
     paintHeader(g, u);
     paintScope(g, u);
     engraved(g, pal, "Presets", S(700, 90, 200, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);

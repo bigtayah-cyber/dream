@@ -20,14 +20,14 @@ private:
     kit::Palette pal;
     oc::ui::ScaledLook look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
     float u_ = 1.f, outDb = -60.f, grDisp = 0.f;
     bool modified = false;
     std::vector<Mod> mods;
     juce::OwnedArray<oc::ui::Pot> pots;
     juce::OwnedArray<juce::ToggleButton> toggles; juce::OwnedArray<juce::ComboBox> combos;
-    juce::ArrowButton prev{"prev", 0.5f, oc::ui::kLilac}, next{"next", 0.f, oc::ui::kLilac};
+    juce::ArrowButton prev{"prev", 0.5f, kit::w::kSilk.withAlpha(0.7f)}, next{"next", 0.f, kit::w::kSilk.withAlpha(0.7f)};
     oc::ui::Power power;
+    kit::w::HelpKey help;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAtt;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> togAtt;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> cmbAtt;

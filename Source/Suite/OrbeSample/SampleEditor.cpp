@@ -13,37 +13,20 @@ static Colour bankColour(int b) {
 class SampleEditor::Chip : public juce::Button {
 public:
     Chip(const String& t, const Palette& p) : juce::Button(t), P(p) { setClickingTogglesState(false); }
-    void paintButton(juce::Graphics& g, bool hover, bool down) override {
-        auto r = getLocalBounds().toFloat().reduced(1.f);
+    void paintButton(juce::Graphics& g, bool hover, bool down) override {   // touche de preset à LED intégrée
+        auto r = getLocalBounds().toFloat().reduced(1.5f);
         const bool on = getToggleState();
-        g.setColour(juce::Colours::black.withAlpha(0.55f));
-        g.fillRoundedRectangle(r.translated(0, 1.5f), 4.f);
-        auto top = Colour(0xFF54545A), bot = Colour(0xFF1D1D21);
-        if (down) std::swap(top, bot);
-        if (hover) top = top.brighter(0.12f);
-        g.setGradientFill(juce::ColourGradient(top, r.getX(), r.getY(), bot, r.getX(), r.getBottom(), false));
-        g.fillRoundedRectangle(r, 4.f);
-        g.setColour(juce::Colours::white.withAlpha(0.14f));
-        g.drawRoundedRectangle(r, 4.f, 1.f);
-        if (on) { g.setColour(P.accent.withAlpha(0.22f)); g.fillRoundedRectangle(r, 4.f); g.setColour(P.accent.withAlpha(0.8f)); g.drawRoundedRectangle(r, 4.f, 1.2f); }
-        led(g, r.getX() + r.getHeight() * 0.36f, r.getCentreY(), r.getHeight() * 0.10f, on, P.accent);
-        g.setColour(on ? juce::Colours::white : P.ink.withAlpha(0.85f));
-        g.setFont(fnt(juce::jmax(8.f, r.getHeight() * 0.27f), true));
-        g.drawFittedText(upper(getButtonText()), r.withTrimmedLeft(r.getHeight() * 0.62f).reduced(2.f, 1.f).toNearestInt(), juce::Justification::centred, 2, 0.85f);
+        pushButton(g, P, r, on, down, P.accent, {});
+        auto cap = r.reduced(1.f).translated(0, down ? 1.f : 0.f).withTrimmedTop(r.getHeight() * 0.2f);
+        g.setColour(on ? juce::Colours::white : P.ink.withAlpha(hover ? 0.95f : 0.82f));
+        g.setFont(fnt(juce::jmax(8.f, r.getHeight() * 0.26f), true));
+        g.drawFittedText(upper(getButtonText()), cap.reduced(4.f, 0.f).toNearestInt(), juce::Justification::centred, 2, 0.85f);
     }
 private:
     Palette P;
 };
 
-Palette SampleEditor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2D2B34); p.plateBot = Colour(0xFF18171C);
-    p.ink = Colour(0xFFEAE8F0); p.mute = Colour(0xFF908E9C); p.line = Colour(0xFF3B3A45);
-    p.accent = Colour(0xFFCFC6FF); p.accent2 = Colour(0xFFFFC4AB);
-    p.screen = Colour(0xFF0C0B12); p.screenInk = Colour(0xFFF0EDFA);
-    p.brush = 1.f;
-    return p;
-}
+Palette SampleEditor::palette() { return [] { auto p = kit::w::instrument(Colour(0xFFCFC6FF)); p.accent2 = Colour(0xFFFFC4AB); return p; }(); }
 
 SampleEditor::SampleEditor(SampleProcessor& p)
     : AudioProcessorEditor(&p), proc(p), pal(palette()), look(pal),
@@ -112,6 +95,10 @@ SampleEditor::SampleEditor(SampleProcessor& p)
     demoB.onClick = [this] { proc.loadDemo(); };
 
     setResizable(true, true);
+    help.install(*this, "Orbe Sample", {u8("Transformateur de sample : choisis une zone de la source, applique un préréglage et un traitement, joue le résultat."),
+        u8("- Source : glisse les poignées pour régler la zone, ou glisse ailleurs pour en tracer une nouvelle."),
+        u8("- Préréglages : neuf transformations de départ ; Hauteur et vitesse ; Découpes : le résultat est découpé et jouable en MIDI à partir de C1."),
+        u8("- Importer charge un son (WAV, AIFF, FLAC, OGG) enregistré dans le projet ; Démo recharge l'exemple ; Lecture écoute le résultat.")});
     setResizeLimits(760, 494, 1600, 1040);
     getConstrainer()->setFixedAspectRatio(1000.0 / 650.0);
     setSize(1000, 650);
@@ -133,8 +120,8 @@ void SampleEditor::loadFile(const juce::File& f) {
 
 void SampleEditor::resized() {
     u_ = (float)getWidth() / 1000.f;
-    plate = brushedPlate(getWidth(), getHeight(), pal);
-    importB.setBounds(Si(740, 20, 118, 36)); demoB.setBounds(Si(868, 20, 90, 36));
+    help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
+    importB.setBounds(Si(722, 8, 110, 34)); demoB.setBounds(Si(838, 8, 90, 34));
     srcWave.setBounds(Si(24, 78, 952, 112));
     resWave.setBounds(Si(24, 196, 952, 142));
     for (int i = 0; i < 9; ++i) chip[i]->setBounds(Si(36.f + (float)(i % 3) * 112.f, 382.f + (float)(i / 3) * 42.f, 106, 36));
@@ -184,14 +171,11 @@ void SampleEditor::panel(juce::Graphics& g, Rectangle<float> r, const String& ti
 }
 
 void SampleEditor::paint(juce::Graphics& g) {
-    g.drawImageAt(plate, 0, 0);
     const float u = u_;
-    screw(g, 12 * u, 12 * u, 4.6f * u, 0.9f); screw(g, getWidth() - 12 * u, 12 * u, 4.6f * u, 2.4f);
-    screw(g, 12 * u, getHeight() - 12 * u, 4.6f * u, 1.6f); screw(g, getWidth() - 12 * u, getHeight() - 12 * u, 4.6f * u, 0.3f);
-    osamp::paintBrand(g, pal, S(36, 14, 250, 48), "Orbe Sample", u8("transformateur \xC2\xB7 dreamaws"));
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe Sample", kit::w::serial::sample});
 
-    auto lcd = S(310, 14, 400, 50);
-    screenWell(g, pal, lcd);
+    auto lcd = S(300, 4, 410, 44);
+    screenWell(g, pal, lcd, Display::VFD);
     const auto s = proc.holder.get();
     const int st = proc.holder.state.load();
     g.setColour(pal.screenInk);
@@ -200,13 +184,13 @@ void SampleEditor::paint(juce::Graphics& g) {
     g.setColour(status.isNotEmpty() ? pal.accent2 : pal.mute);
     g.setFont(mono(10.f * u));
     g.drawText(status.isNotEmpty() ? status : (s ? u8("Source ") + durText(s->dur()) + "  " + fr(s->sr / 1000.0, 1) + " kHz" : String()),
-               Rectangle<float>(lcd.getX() + 12 * u, lcd.getY() + 28 * u, 200 * u, 14 * u), juce::Justification::centredLeft);
+               Rectangle<float>(lcd.getX() + 12 * u, lcd.getY() + 26 * u, 200 * u, 14 * u), juce::Justification::centredLeft);
     if (s && st == 2) {
         auto cell = [&](float x, const String& cap, const String& val, Colour c, float w) {
             g.setColour(pal.mute);
             tracked(g, cap, Rectangle<float>(lcd.getX() + x * u, lcd.getY() + 6 * u, w * u, 11 * u), juce::Justification::centredLeft, 1.4f, fnt(8.f * u, true));
             g.setColour(c); g.setFont(mono(17.f * u));
-            g.drawText(val, Rectangle<float>(lcd.getX() + x * u, lcd.getY() + 19 * u, w * u, 24 * u), juce::Justification::centredLeft);
+            g.drawText(val, Rectangle<float>(lcd.getX() + x * u, lcd.getY() + 17 * u, w * u, 24 * u), juce::Justification::centredLeft);
         };
         const float bpm = proc.holder.bpm.load();
         cell(212, "Tempo", bpm > 0 ? fr(bpm, bpm == std::round(bpm) ? 0 : 1) + " bpm" : String(u8("\xE2\x80\x94")), pal.accent, 78);
@@ -220,13 +204,9 @@ void SampleEditor::paint(juce::Graphics& g) {
 
     panel(g, S(24, 350, 352, 292), u8("Préréglages"));
     engraved(g, pal, u8("Hauteur et vitesse"), S(36, 514, 300, 14), juce::Justification::centredLeft, 8.5f * u, 1.4f, true);
-    engraved(g, pal, u8("Découpes jouables à partir de C1"), S(36, 568, 330, 14), juce::Justification::centredLeft, 8.5f * u, 1.4f, true);
+    engraved(g, pal, u8("Découpes"), S(36, 568, 330, 14), juce::Justification::centredLeft, 8.5f * u, 1.4f, true);
     panel(g, S(388, 350, 588, 292), "Traitement");
-    g.setColour(pal.mute);
-    g.setFont(fnt(10.f * u));
-    const int ns = res ? res->nsl : 0;
-    g.drawFittedText(ns ? u8("Découpes sur ") + noteName(SampleProcessor::kFirstNote) + " \xE2\x80\x93 " + noteName(SampleProcessor::kFirstNote + ns - 1) : u8("Aucune découpe"),
-                     Si(400, 600, 270, 16), juce::Justification::centredLeft, 1);
+
 }
 
 void SampleEditor::paintSrcOver(juce::Graphics& g, WaveView& w) {
@@ -261,9 +241,6 @@ void SampleEditor::paintResOver(juce::Graphics& g, WaveView& w) {
     String info = durText(res->pcm->dur());
     if (res->bpm > 0) info += "  " + fr(res->bpm, 1) + " bpm";
     if (res->pc >= 0) info += "  " + keyName(res->pc, res->minor) + "  " + String(camelot(res->pc, res->minor));
-    g.setColour(pal.screenInk.withAlpha(0.85f));
-    g.setFont(mono(10.5f * u_));
-    g.drawText(info, Rectangle<float>(r.getRight() - 300 * u_, r.getY() + 3 * u_, 294 * u_, 14 * u_), juce::Justification::centredRight);
     const int sp = proc.slicePlaying.load();
     for (int i = 0; i < res->nsl; ++i) {
         const Colour c = bankColour(i / 4);
@@ -278,6 +255,14 @@ void SampleEditor::paintResOver(juce::Graphics& g, WaveView& w) {
     }
     const float pp = proc.playPos.load();
     if (pp >= 0.f) { g.setColour(juce::Colours::white); g.fillRect(r.getX() + pp * r.getWidth() - 0.75f, r.getY(), 1.5f, r.getHeight()); }
+    {   // lecture du résultat sur fond opaque : les traits de découpe ne la coupent plus
+        g.setFont(mono(10.5f * u_));
+        const float tw = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), info) + 12 * u_;
+        auto box = Rectangle<float>(r.getRight() - tw - 4 * u_, r.getY() + 2 * u_, tw, 16 * u_);
+        g.setColour(juce::Colour(0xE0080A0E)); g.fillRoundedRectangle(box, 2.f * u_);
+        g.setColour(pal.screenInk.withAlpha(0.9f));
+        g.drawText(info, box.reduced(6 * u_, 0), juce::Justification::centredRight);
+    }
 }
 
 void SampleEditor::srcDrag(const juce::MouseEvent& e, bool start) {

@@ -110,33 +110,6 @@ String keyName(int pc, bool minor) { return pc < 0 ? String(u8("\xE2\x80\x94")) 
 String durText(double s) { return fr(s, 2) + " s"; }
 
 // ---------------- Seg ----------------
-void Seg::paint(juce::Graphics& g) {
-    auto r = getLocalBounds().toFloat().reduced(0.5f);
-    g.setColour(juce::Colours::black.withAlpha(0.6f));
-    g.fillRoundedRectangle(r, 4.f);
-    g.setColour(juce::Colours::white.withAlpha(0.10f));
-    g.drawRoundedRectangle(r, 4.f, 1.f);
-    const int n = labels_.size();
-    const float w = r.getWidth() / (float)n;
-    for (int i = 0; i < n; ++i) {
-        auto c = Rectangle<float>(r.getX() + w * (float)i, r.getY(), w, r.getHeight()).reduced(2.f);
-        const bool on = i == idx;
-        if (on) {
-            g.setGradientFill(juce::ColourGradient(P.accent.withAlpha(0.55f), c.getX(), c.getY(), P.accent.withAlpha(0.22f), c.getX(), c.getBottom(), false));
-            g.fillRoundedRectangle(c, 3.f);
-            g.setColour(P.accent.withAlpha(0.9f));
-            g.drawRoundedRectangle(c, 3.f, 1.f);
-        }
-        g.setColour(on ? juce::Colours::white : P.ink.withAlpha(0.6f));
-        tracked(g, labels_[i], c, juce::Justification::centred, 1.f, fnt(juce::jmin(10.5f, r.getHeight() * 0.38f), true));
-    }
-}
-void Seg::mouseDown(const juce::MouseEvent& e) {
-    const int n = labels_.size();
-    att.setValueAsCompleteGesture((float)juce::jlimit(0, n - 1, (int)(e.position.x / ((float)getWidth() / (float)n))));
-}
-
-// ---------------- Knob ----------------
 Knob::Knob(juce::AudioProcessorValueTreeState& a, const String& id, const String& caption, const Palette& pal) : apvts(a), P(pal), cap(caption) {
     s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);

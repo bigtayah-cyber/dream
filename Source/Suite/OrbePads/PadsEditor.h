@@ -35,13 +35,13 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
+    kit::w::HelpKey help;
     osamp::WaveView wave;
     osamp::Seg modeSeg, divSeg, playSeg, dltSeg;
     std::unique_ptr<osamp::Seg> grpSeg;
     juce::Slider sens;
     std::unique_ptr<SliderAtt> sensAtt;
-    juce::TextButton importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, clearB{kit::u8("Effacer les repères")};
+    kit::w::PushKey importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, clearB{kit::u8("Effacer les repères")};
     juce::ToggleButton revB;
     std::unique_ptr<ButtonAtt> revAtt;
     std::unique_ptr<osamp::Knob> k[9];

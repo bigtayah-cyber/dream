@@ -24,8 +24,8 @@ private:
     std::string hover, focus;
     std::vector<double> taps;
 
-    juce::ToggleButton captureB;
-    juce::TextButton clearB{"Vider"}, analyzeB{"Analyser"}, halfB, dblB{juce::String::fromUTF8("×2")}, tapB{"Tap"}, applyB;
+    kit::w::PushKey captureB;
+    kit::w::PushKey clearB{"Vider"}, analyzeB{"Analyser"}, halfB, dblB{juce::String::fromUTF8("×2")}, tapB{"Tap"}, applyB;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> capAtt;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DetectEditor)
 };

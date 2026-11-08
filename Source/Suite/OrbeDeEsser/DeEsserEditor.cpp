@@ -9,7 +9,7 @@ public:
     explicit DeScope(DeEsserProcessor& p) : proc(p) { setOpaque(true); }
     void paint(juce::Graphics& g) override {
         const float u = (float)getWidth() / 528.f; const auto pal = of::palette();
-        auto well = getLocalBounds().toFloat(); kit::screenWell(g, pal, well);
+        auto well = getLocalBounds().toFloat(); kit::screenWell(g, pal, well, kit::Display::VFD);
         auto r = well.reduced(10 * u).withTrimmedLeft(24 * u).withTrimmedBottom(12 * u).withTrimmedTop(6 * u);
         constexpr float f0 = 2000.f, f1 = 20000.f, top = -10.f, bot = -100.f;
         const float sr = (float)(proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0);
@@ -26,8 +26,8 @@ public:
         const float xc = gfx::xOf(P.freq, r, f0, f1);
         g.setColour(kPeach); g.drawVerticalLine(juce::roundToInt(xc), r.getY(), r.getBottom());
         const auto pin = gfx::specPath(proc.inAn.db.data(), odsp::Analyzer::kBins, sr, r, top, bot, true, f0, f1);
-        g.setGradientFill(juce::ColourGradient(kLilac.withAlpha(0.30f), 0, r.getY(), kLilac.withAlpha(0.03f), 0, r.getBottom(), false)); g.fillPath(pin);
-        g.setColour(kLilac.withAlpha(0.8f)); g.strokePath(gfx::specPath(proc.inAn.db.data(), odsp::Analyzer::kBins, sr, r, top, bot, false, f0, f1), juce::PathStrokeType(1.2f * u));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xFF8C8F99).withAlpha(0.42f), 0, r.getY(), juce::Colour(0xFF8C8F99).withAlpha(0.10f), 0, r.getBottom(), false)); g.fillPath(pin);
+        g.setColour(juce::Colour(0xFF8C8F99).withAlpha(0.55f)); g.strokePath(gfx::specPath(proc.inAn.db.data(), odsp::Analyzer::kBins, sr, r, top, bot, false, f0, f1), juce::PathStrokeType(1.2f * u));
         g.setColour(kIce); g.strokePath(gfx::specPath(proc.outAn.db.data(), odsp::Analyzer::kBins, sr, r, top, bot, false, f0, f1), juce::PathStrokeType(1.6f * u));
         // seuil : repère horizontal indicatif (niveau de bande, pas de bin)
         g.restoreState();
@@ -38,8 +38,8 @@ public:
         g.setColour(kPeach); g.drawText(fmtHz(P.freq) + "  /  " + String(P.width, 1) + " oct", Rectangle<float>(juce::jlimit(r.getX(), r.getRight() - 120 * u, xc - 60 * u), r.getY() + 2 * u, 120 * u, 11 * u), juce::Justification::centred);
         g.setColour(P.listen ? kPeach : pal.mute); g.drawText(P.listen ? u8("\xE2\x97\x8F \xC3\x89" "COUTE DE LA SIBILANCE") : u8("SPECTRE \xC2\xB7 ENTR\xC3\x89" "E / SORTIE"), Rectangle<float>(r.getX() + 6 * u, r.getY() + 2 * u, 180 * u, 11 * u), juce::Justification::centredLeft);
         float lx = r.getRight() - 6 * u;
-        const struct { const char* t; Colour c; } leg[] = {{"Sortie", kIce}, {"Entr\xC3\xA9" "e", kLilac}};
-        for (auto& l : leg) { const auto t = kit::upper(u8(l.t)); const float w = kit::mono(8.f * u).getStringWidthFloat(t) + 4; lx -= w; g.setColour(pal.mute); g.drawText(t, Rectangle<float>(lx, r.getBottom() - 14 * u, w, 11 * u), juce::Justification::centredRight); lx -= 10 * u; g.setColour(l.c); g.fillRect(Rectangle<float>(lx, r.getBottom() - 9.5f * u, 8 * u, 2.4f * u)); lx -= 10 * u; }
+        const struct { const char* t; Colour c; } leg[] = {{"Sortie", kIce}, {"Entr\xC3\xA9" "e", juce::Colour(0xFF8C8F99)}};
+        for (auto& l : leg) { const auto t = kit::upper(u8(l.t)); const float w = juce::GlyphArrangement::getStringWidth(kit::mono(8.f * u), t) + 4; lx -= w; g.setColour(pal.mute); g.drawText(t, Rectangle<float>(lx, r.getBottom() - 14 * u, w, 11 * u), juce::Justification::centredRight); lx -= 10 * u; g.setColour(l.c); g.fillRect(Rectangle<float>(lx, r.getBottom() - 9.5f * u, 8 * u, 2.4f * u)); lx -= 10 * u; }
     }
 private:
     DeEsserProcessor& proc;
@@ -57,7 +57,18 @@ public:
         g.setColour(peak > 0.05f ? kPeach : pal.screenInk); g.setFont(kit::mono(22.f * u));
         g.drawText(peak > 0.05f ? juce::String::fromUTF8("\xE2\x88\x92") + String(peak, 1) : String("0.0"), Rectangle<float>(6 * u, 20 * u, 144 * u, 28 * u), juce::Justification::centred);
         g.setColour(pal.mute); g.setFont(kit::mono(8.f * u)); g.drawText("dB", Rectangle<float>(100 * u, 48 * u, 48 * u, 10 * u), juce::Justification::centredRight);
-        auto r = Rectangle<float>(12 * u, 64 * u, 132 * u, well.getHeight() - 76 * u);
+        auto r = Rectangle<float>(12 * u, 64 * u, 104 * u, well.getHeight() - 76 * u);
+        {   // barre-graphe vertical de réduction (LED, 0 en haut)
+            const auto bg = Rectangle<float>(126 * u, 64 * u, 18 * u, well.getHeight() - 76 * u);
+            const int n = 16; const float sh = bg.getHeight() / (float)n;
+            const float sc = juce::jmax(6.f, std::ceil(proc.apvts.getRawParameterValue("range")->load() / 3.f) * 3.f);
+            for (int i = 0; i < n; ++i) {
+                const bool on = peak / sc > (float)i / (float)n + 0.001f;
+                const auto c = i >= n * 3 / 4 ? juce::Colour(0xFFFF4A3A) : i >= n / 2 ? juce::Colour(0xFFFFB02E) : kPeach;
+                g.setColour(on ? c : c.withMultipliedBrightness(0.25f).withAlpha(0.6f));
+                g.fillRoundedRectangle(bg.getX(), bg.getY() + sh * (float)i + 0.8f, bg.getWidth(), sh - 1.6f, 1.f);
+            }
+        }
         const float scale = juce::jmax(6.f, std::ceil(proc.apvts.getRawParameterValue("range")->load() / 3.f) * 3.f);
         g.setColour(juce::Colours::white.withAlpha(0.07f));
         for (int i = 0; i <= 4; ++i) g.drawHorizontalLine(juce::roundToInt(r.getY() + r.getHeight() * (float)i / 4.f), r.getX(), r.getRight());
@@ -76,7 +87,7 @@ private:
 };
 
 DeEsserEditor::DeEsserEditor(DeEsserProcessor& p)
-    : AudioProcessorEditor(&p), proc(p), pal(of::palette()), look(pal), power(pal), listenKey(u8("\xC3\x89" "couter la sibilance"), pal, kPeach) {
+    : AudioProcessorEditor(&p), proc(p), pal(of::palette(kPeach)), look(pal), power(pal), listenKey(u8("\xC3\x89" "couter la sibilance"), pal, kPeach) {
     setLookAndFeel(&look);
     scope = std::make_unique<DeScope>(proc); addAndMakeVisible(*scope);
     grPanel = std::make_unique<GrPanel>(proc); addAndMakeVisible(*grPanel);
@@ -88,17 +99,24 @@ DeEsserEditor::DeEsserEditor(DeEsserProcessor& p)
         {"range", "Plage", "R\xC3\xA9" "duction maximale appliqu\xC3\xA9" "e (0 \xC3\xA0 24 dB)."},
         {"atk", "Attaque", "Rapidit\xC3\xA9 de la r\xC3\xA9" "duction quand une sibilance arrive."},
         {"rel", "Rel\xC3\xA2" "che", "Temps de retour au gain normal apr\xC3\xA8s la sibilance."}};
-    for (auto& d : defs) addAndMakeVisible(pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip))));
+    for (auto& d : defs) { auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(pt); }
     modeSeg = std::make_unique<Seg>(proc.apvts, "mode", juce::StringArray{"Split", "Large bande"}, u8("Split : seule la bande de sibilance est att\xC3\xA9nu\xC3\xA9" "e. Large bande : tout le signal baisse (plus fort, moins naturel)."), pal);
     styleSeg = std::make_unique<Seg>(proc.apvts, "style", juce::StringArray{"Doux", "Net"}, u8("Doux : genou large, r\xC3\xA9" "duction progressive. Net : r\xC3\xA9" "duction franche d\xC3\xA8s le seuil."), pal);
     addAndMakeVisible(*modeSeg); addAndMakeVisible(*styleSeg); addAndMakeVisible(listenKey);
     listenKey.setTooltip(u8("N'\xC3\xA9" "coute que la bande de d\xC3\xA9tection pour r\xC3\xA9gler Fr\xC3\xA9quence et Largeur sur les \xC2\xAB s \xC2\xBB."));
     listenAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "listen", listenKey);
     addAndMakeVisible(power);
-    power.setTooltip(u8("Effet en service. Appuie pour le couper (la latence reste compens\xC3\xA9" "e)."));
+    power.setTooltip(u8("Effet en service. Bascule pour le couper (la latence reste compens\xC3\xA9" "e : lookahead 1 ms)."));
+    help.install(*this, "Orbe DeEsser", {u8("Att\xC3\xA9nue les sibilances (\xC2\xAB s \xC2\xBB, \xC2\xAB ch \xC2\xBB) d'une voix."),
+        u8("- Fr\xC3\xA9quence et Largeur placent la bande de d\xC3\xA9tection (zone p\xC3\xAA" "che sur l'\xC3\xA9" "cran). Voix d'homme : 5-7 kHz ; voix de femme : 7-9 kHz."),
+        u8("- \xC3\x89" "couter la sibilance n'envoie que la bande d\xC3\xA9tect\xC3\xA9" "e : r\xC3\xA8gle-la sur les \xC2\xAB s \xC2\xBB, puis coupe l'\xC3\xA9" "coute."),
+        u8("- Seuil : niveau \xC3\xA0 partir duquel on att\xC3\xA9nue ; Plage : r\xC3\xA9" "duction maximale."),
+        u8("- Split n'att\xC3\xA9nue que la bande ; Large bande baisse tout le signal. Doux / Net : forme du genou."),
+        u8("- \xC3\x89" "cran : entr\xC3\xA9" "e en gris, sortie en trait clair. \xC3\x80 droite : r\xC3\xA9" "duction de gain (cr\xC3\xAA" "te et historique)."),
+        u8("- Lookahead 1 ms : la latence est d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te et compens\xC3\xA9" "e.")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     setResizable(true, true);
-    setResizeLimits(380, 246, 1520, 984);
+    setResizeLimits(380, (int)(380 * kH / kW), 1520, (int)(1520 * kH / kW));
     getConstrainer()->setFixedAspectRatio((double)kW / kH);
     setSize((int)kW, (int)kH);
     startTimerHz(30);
@@ -107,12 +125,13 @@ DeEsserEditor::~DeEsserEditor() { stopTimer(); setLookAndFeel(nullptr); }
 
 void DeEsserEditor::resized() {
     u_ = (float)getWidth() / kW;
-    plate = kit::brushedPlate(getWidth(), getHeight(), pal);
-    scope->setBounds(Si(32, 104, 528, 206)); grPanel->setBounds(Si(572, 104, 156, 206));
-    power.setBounds(Si(670, 20, 58, 52));
+    const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
+    power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
+    help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
+    scope->setBounds(Si(32, 66, 528, 206)); grPanel->setBounds(Si(572, 66, 156, 206));
     const float px[6] = {32, 148, 264, 380, 496, 612};
-    for (int i = 0; i < 6; ++i) pots[i]->setBounds(Si(px[i], 348, 116, 76));
-    modeSeg->setBounds(Si(32, 460, 190, 26)); styleSeg->setBounds(Si(238, 460, 150, 26)); listenKey.setBounds(Si(404, 460, 324, 26));
+    for (int i = 0; i < 6; ++i) pots[i]->setBounds(Si(px[i], 308, 116, 78));
+    modeSeg->setBounds(Si(32, 418, 190, 28)); styleSeg->setBounds(Si(238, 418, 150, 28)); listenKey.setBounds(Si(404, 418, 324, 28));
 }
 
 void DeEsserEditor::timerCallback() {
@@ -123,10 +142,8 @@ void DeEsserEditor::timerCallback() {
 
 void DeEsserEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    drawFace(g, pal, plate, u, kW, kH, "Orbe DeEsser", u8("Att\xC3\xA9nuateur de sibilance \xC2\xB7 voix"), "DW-703");
-    section(g, pal, u, u8("D\xC3\xA9tection \xC2\xB7 bande de sibilance"), 32, 328, 464);
-    section(g, pal, u, u8("Dynamique"), 496, 328, 232);
-    section(g, pal, u, u8("Mode \xC2\xB7 \xC3\xA9" "coute"), 32, 438, 696);
-    g.setColour(pal.mute); g.setFont(kit::mono(8.f * u));
-    g.drawText(u8("Lookahead 1 ms \xC2\xB7 latence ") + String(proc.getLatencySamples()) + u8(" \xC3\xA9" "chantillons"), Rectangle<float>(404 * u, 489 * u, 324 * u, 10 * u), juce::Justification::centredRight);
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe DeEsser", kit::w::serial::deesser});
+    section(g, pal, u, u8("D\xC3\xA9tection \xC2\xB7 bande de sibilance"), 32, 286, 464);
+    section(g, pal, u, u8("Dynamique"), 496, 286, 232);
+    section(g, pal, u, u8("Mode \xC2\xB7 \xC3\xA9" "coute"), 32, 396, 696);
 }

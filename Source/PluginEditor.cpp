@@ -4,11 +4,8 @@ using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
 
 Palette VoileEditor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2E2D2B); p.plateBot = Colour(0xFF151413);
-    p.ink = Colour(0xFFEDE8DE); p.mute = Colour(0xFF8D8982); p.line = Colour(0xFF3A3835);
-    p.accent = Colour(0xFFFF5A36); p.accent2 = Colour(0xFFFFB199);
-    p.screen = Colour(0xFF0D0C0B); p.screenInk = Colour(0xFFFFC2AE); p.brush = 1.f;
+    auto p = kit::w::rack(Colour(0xFFFF5A36));   // rack graphite, bande d'accent orange
+    p.accent2 = Colour(0xFFFFB199);
     return p;
 }
 
@@ -24,11 +21,13 @@ VoileEditor::VoileEditor(VoileProcessor& p) : AudioProcessorEditor(&p), proc(p),
         auto& k = knob[i];
         k.setSliderStyle(juce::Slider::RotaryVerticalDrag); k.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
         k.setMouseDragSensitivity(220); k.setTooltip(u8(tips[i]));
+        k.getProperties().set("kitKnob", (int)KnobStyle::Skirt);   // gros boutons à jupe chiffrée
         addAndMakeVisible(k);
         knobAtt[i] = std::make_unique<SliderAtt>(ap, ids[i], k);
     }
     for (auto* s : {&mixS, &outS}) { s->setSliderStyle(juce::Slider::RotaryVerticalDrag); s->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0); s->setMouseDragSensitivity(180); addAndMakeVisible(*s); }
     mixS.setTooltip(u8("Part du son traité")); outS.setTooltip(u8("Niveau de sortie"));
+    for (auto* s : {&mixS, &outS}) s->getProperties().set("kitKnob", (int)KnobStyle::Cap);
     mixAtt = std::make_unique<SliderAtt>(ap, "mix", mixS);
     outAtt = std::make_unique<SliderAtt>(ap, "out", outS);
 
@@ -45,6 +44,13 @@ VoileEditor::VoileEditor(VoileProcessor& p) : AudioProcessorEditor(&p), proc(p),
     presetBox.onChange = [this] { proc.setCurrentProgram(presetBox.getSelectedItemIndex()); };
     addAndMakeVisible(presetBox); addAndMakeVisible(prevB); addAndMakeVisible(nextB);
     prevB.onClick = [this] { stepPreset(-1); }; nextB.onClick = [this] { stepPreset(1); };
+    prevB.setTooltip(u8("Preset précédent")); nextB.setTooltip("Preset suivant");
+    help.install(*this, "Voile", {u8("Chaîne vocale en quatre gestes : la voix est recalée sur la gamme choisie, puis habillée."),
+        u8("- Tension : force de la correction de hauteur (douce à gauche, dure à droite). Mordant : saturation et grain numérique."),
+        u8("- Brume : écho et salle sombre derrière la voix. Halo : doubles à l'octave au-dessus et à la quinte en dessous."),
+        u8("- Tonalité et gamme : la voix est recalée sur cette gamme (Chromatique : sur le demi-ton le plus proche)."),
+        u8("- Aiguille : correction appliquée, en demi-tons (centre = aucune). VU : niveau de sortie."),
+        u8("- Mix : part du son traité ; Sortie : niveau final.")});
 
     setResizable(true, true);
     setResizeLimits(608, 288, 1520, 720);
@@ -62,76 +68,52 @@ void VoileEditor::stepPreset(int d) {
 
 void VoileEditor::resized() {
     u_ = (float)getWidth() / 760.f;
-    plate = brushedPlate(getWidth(), getHeight(), pal);
-    for (int i = 0; i < 4; ++i) knob[i].setBounds(Si(100.f + (float)i * 140.f - 66.f, 190.f - 66.f, 132, 132));
-    presetBox.setBounds(Si(338, 20, 196, 30));
-    prevB.setBounds(Si(304, 20, 28, 30)); nextB.setBounds(Si(540, 20, 28, 30));
-    keyBox.setBounds(Si(612, 112, 56, 28)); scaleBox.setBounds(Si(674, 112, 70, 28));
-    mixS.setBounds(Si(630 - 38, 232 - 38, 76, 76)); outS.setBounds(Si(716 - 38, 232 - 38, 76, 76));
+    help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
+    for (int i = 0; i < 4; ++i) knob[i].setBounds(Si(96.f + (float)i * 128.f - 64.f, 140.f - 64.f, 128, 128));
+    presetBox.setBounds(Si(318, 8, 220, 34));
+    prevB.setBounds(Si(292, 14, 18, 22)); nextB.setBounds(Si(546, 14, 18, 22));
+    mixS.setBounds(Si(608 - 36, 112 - 36, 72, 72)); outS.setBounds(Si(696 - 36, 112 - 36, 72, 72));
+    keyBox.setBounds(Si(564, 290, 64, 28)); scaleBox.setBounds(Si(634, 290, 104, 28));
 }
 
 void VoileEditor::timerCallback() {
     shiftSm += (proc.shift.load() - shiftSm) * 0.3f;
     lvlSm += (proc.level.load() - lvlSm) * 0.25f;
-    repaint(S(20, 292, 560, 52).toNearestInt());
+    vu.step(proc.level.load(), 1.0 / 30.0);
+    repaint(S(18, 250, 540, 106).toNearestInt());
     if (presetBox.getSelectedItemIndex() != proc.getCurrentProgram() && proc.getCurrentProgram() >= 0 && !presetBox.isPopupActive())
         presetBox.setSelectedItemIndex(proc.getCurrentProgram(), juce::dontSendNotification);
 }
 
 void VoileEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    g.drawImageAt(plate, 0, 0);
-    for (auto p : {juce::Point<float>(12, 12), {748, 12}, {12, 348}, {748, 348}}) screw(g, p.x * u, p.y * u, 5.f * u, (p.x + p.y) * 0.8f);
-    g.setColour(juce::Colours::black.withAlpha(0.5f)); g.fillRect(S(0, 70, 760, 1.5f)); g.fillRect(S(0, 282, 760, 1.5f));
-    g.setColour(juce::Colours::white.withAlpha(0.06f)); g.fillRect(S(0, 71.5f, 760, 1.f)); g.fillRect(S(0, 283.5f, 760, 1.f));
-
-    engraved(g, pal, "Voile", S(28, 18, 200, 34), juce::Justification::centredLeft, 28.f * u, 9.f * u, true);
-    g.setColour(pal.mute); g.setFont(fnt(10.f * u));
-    g.drawText(u8("Chaîne vocale · dreamaws"), S(30, 50, 240, 14).toNearestInt(), juce::Justification::centredLeft);
-    g.setColour(pal.mute); g.setFont(mono(9.f * u));
-    g.drawText("DW-100", S(660, 22, 80, 12), juce::Justification::centredRight);
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Voile", kit::w::serial::voile});
+    screenWell(g, pal, S(318, 8, 220, 34), Display::VFD);   // la liste des presets s'affiche dans la police d'écran
+    g.setColour(juce::Colours::black.withAlpha(0.5f)); g.fillRect(S(18, 246, 724, 1.5f));
+    g.setColour(juce::Colours::white.withAlpha(0.06f)); g.fillRect(S(18, 247.5f, 724, 1.f));
 
     const char* names[4] = {"Tension", "Mordant", "Brume", "Halo"};
     const juce::String subs[4] = {u8("hauteur"), u8("grain"), u8("écho · salle"), u8("doubles")};
     for (int i = 0; i < 4; ++i) {
-        const float cx = 100.f + (float)i * 140.f;
-        engraved(g, pal, names[i], S(cx - 60, 246, 120, 16), juce::Justification::centred, 12.f * u, 4.f * u, true);
+        const float cx = 96.f + (float)i * 128.f;
+        engraved(g, pal, names[i], S(cx - 60, 206, 120, 16), juce::Justification::centred, 12.f * u, 4.f * u, true);
         g.setColour(pal.mute); g.setFont(fnt(10.f * u));
-        g.drawText(subs[i], S(cx - 60, 264, 120, 12).toNearestInt(), juce::Justification::centred);
+        g.drawText(subs[i], S(cx - 60, 224, 120, 12).toNearestInt(), juce::Justification::centred);
     }
-    // panneau droit
-    g.setColour(pal.line); g.fillRect(S(590, 90, 1, 180));
-    engraved(g, pal, u8("Tonalité"), S(612, 94, 130, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
-    g.setColour(pal.mute); g.setFont(fnt(9.5f * u));
-    g.drawText(u8("la voix est recalée sur cette gamme"), S(612, 142, 132, 12).toNearestInt(), juce::Justification::centredLeft);
-    engraved(g, pal, "Mix", S(588, 276 - 14, 84, 14), juce::Justification::centred, 10.f * u, 2.f * u);
-    engraved(g, pal, "Sortie", S(674, 276 - 14, 84, 14), juce::Justification::centred, 10.f * u, 2.f * u);
+    g.setColour(pal.line); g.fillRect(S(552, 62, 1, 176)); g.fillRect(S(552, 256, 1, 92));
+    engraved(g, pal, "Mix", S(566, 152, 84, 14), juce::Justification::centred, 10.f * u, 2.f * u, true);
+    engraved(g, pal, "Sortie", S(654, 152, 84, 14), juce::Justification::centred, 10.f * u, 2.f * u, true);
+    auto val = [&](juce::Slider& s, float cx) {
+        g.setColour(pal.screenInk.withAlpha(0.9f)); g.setFont(lcdFont(10.f * u));
+        g.drawText(s.getTextFromValue(s.getValue()), S(cx - 40, 170, 80, 14).toNearestInt(), juce::Justification::centred);
+    };
+    val(mixS, 608); val(outS, 696);
+    engraved(g, pal, u8("Tonalité · gamme"), S(566, 266, 172, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u, true);
 
-    // afficheur de preset
-    screenWell(g, pal, S(338, 20, 196, 30));
-
-    // bas : correction appliquée et niveau
-    auto d = S(28, 296, 548, 40);
-    screenWell(g, pal, d);
+    // correction appliquée : galvanomètre centre zéro (±1 demi-ton) ; niveau de sortie : vrai VU
+    kit::w::dial(g, S(32, 256, 220, 96), shiftSm, -1.f, 1.f, {{-1.f, -0.5f, Colour(0xFFE0603A).withAlpha(0.8f)}, {0.5f, 1.f, Colour(0xFFE0603A).withAlpha(0.8f)}},
+                 {-1.f, -0.5f, 0.f, 0.5f, 1.f}, u8("Correction dt"), true);
+    vuMeter(g, pal, S(268, 254, 168, 100), (float)vu.vu(), lvlSm > 0.89f);
     g.setColour(pal.mute); g.setFont(mono(9.f * u));
-    g.drawText("CORRECTION", Rectangle<float>(d.getX() + 12 * u, d.getY() + 5 * u, 90 * u, 12 * u), juce::Justification::centredLeft);
-    g.setColour(pal.screenInk); g.setFont(mono(15.f * u));
-    g.drawText((shiftSm >= 0 ? "+" : "") + String(shiftSm, 1) + " st", Rectangle<float>(d.getX() + 12 * u, d.getY() + 17 * u, 110 * u, 18 * u), juce::Justification::centredLeft);
-    // jauge de correction centrée (-6.5..+6.5)
-    auto gb = Rectangle<float>(d.getX() + 140 * u, d.getCentreY() - 3 * u, 200 * u, 6 * u);
-    g.setColour(juce::Colours::white.withAlpha(0.08f)); g.fillRoundedRectangle(gb, 3 * u);
-    g.setColour(juce::Colours::white.withAlpha(0.3f)); g.fillRect(gb.getCentreX() - 0.5f, gb.getY() - 3 * u, 1.f, gb.getHeight() + 6 * u);
-    const float sx = juce::jlimit(-1.f, 1.f, shiftSm / 6.5f);
-    g.setColour(pal.accent);
-    g.fillRoundedRectangle(sx >= 0 ? Rectangle<float>(gb.getCentreX(), gb.getY(), sx * gb.getWidth() / 2, gb.getHeight()) : Rectangle<float>(gb.getCentreX() + sx * gb.getWidth() / 2, gb.getY(), -sx * gb.getWidth() / 2, gb.getHeight()), 2.f * u);
-    g.setColour(pal.mute); g.setFont(mono(9.f * u));
-    g.drawText("NIVEAU", Rectangle<float>(d.getX() + 370 * u, d.getY() + 5 * u, 80 * u, 12 * u), juce::Justification::centredLeft);
-    const int nseg = 24; const float db = 20.f * std::log10(juce::jmax(1e-5f, lvlSm));
-    for (int i = 0; i < nseg; ++i) {
-        const float thr = -48.f + 48.f * (float)i / (float)nseg;
-        const bool on = db > thr;
-        const Colour c = i > nseg - 4 ? Colour(0xFFFF3B30) : i > nseg - 8 ? Colour(0xFFFFB02E) : pal.accent2;
-        g.setColour(on ? c : juce::Colours::white.withAlpha(0.07f));
-        g.fillRoundedRectangle(d.getX() + 370 * u + (float)i * 7.2f * u, d.getY() + 20 * u, 5.4f * u, 14 * u, 1.f * u);
-    }
+    g.drawText((shiftSm >= 0 ? "+" : "") + String(shiftSm, 2) + " dt", S(444, 296, 100, 14).toNearestInt(), juce::Justification::centredLeft);
 }

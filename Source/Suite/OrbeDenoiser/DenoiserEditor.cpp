@@ -23,15 +23,15 @@ public:
     void paint(juce::Graphics& g) override {
         const float u = (float)getWidth() / 744.f;
         auto well = getLocalBounds().toFloat();
-        kit::screenWell(g, pal, well);
+        kit::screenWell(g, pal, well, kit::Display::VFD);
         auto r = well.reduced(10 * u).withTrimmedLeft(24 * u).withTrimmedBottom(12 * u).withTrimmedTop(6 * u);
         constexpr float top = -10.f, bot = -110.f;
         g.saveState(); g.reduceClipRegion(r.toNearestInt());
         for (float d = bot; d <= top + 0.1f; d += 20.f) { g.setColour(juce::Colours::white.withAlpha(0.07f)); g.drawHorizontalLine(juce::roundToInt(gfx::yOfDb(d, r, top, bot)), r.getX(), r.getRight()); }
         gfx::freqGrid(g, r, u, 20.f, 20000.f, {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000}, false);
         auto pin = gfx::specPath(inS.data(), dn::kBins, sr, r, top, bot, true);
-        g.setGradientFill(juce::ColourGradient(kLilac.withAlpha(0.32f), 0, r.getY(), kLilac.withAlpha(0.03f), 0, r.getBottom(), false)); g.fillPath(pin);
-        g.setColour(kLilac.withAlpha(0.75f)); g.strokePath(gfx::specPath(inS.data(), dn::kBins, sr, r, top, bot, false), juce::PathStrokeType(1.1f * u));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xFF8C8F99).withAlpha(0.42f), 0, r.getY(), juce::Colour(0xFF8C8F99).withAlpha(0.10f), 0, r.getBottom(), false)); g.fillPath(pin);
+        g.setColour(juce::Colour(0xFF8C8F99).withAlpha(0.55f)); g.strokePath(gfx::specPath(inS.data(), dn::kBins, sr, r, top, bot, false), juce::PathStrokeType(1.1f * u));
         if (known || proc.engine.latency() > 0) {
             juce::Path pn = gfx::specPath(noiseS.data(), dn::kBins, sr, r, top, bot, false);
             g.setColour(kPeach); juce::Path dashed; const float dl[] = {5.f * u, 3.f * u};
@@ -46,9 +46,9 @@ public:
         }
         // légende et état
         float lx = r.getRight() - 6 * u;
-        const struct { const char* t; Colour c; } leg[] = {{"Bruit appris / estim\xC3\xA9", kPeach}, {"Sortie", kIce}, {"Entr\xC3\xA9" "e", kLilac}};
+        const struct { const char* t; Colour c; } leg[] = {{"Bruit appris / estim\xC3\xA9", kPeach}, {"Sortie", kIce}, {"Entr\xC3\xA9" "e", juce::Colour(0xFF8C8F99)}};
         for (auto& l : leg) {
-            const auto t = u8(l.t); const float w = kit::mono(8.f * u).getStringWidthFloat(upper(t)) + 4;
+            const auto t = u8(l.t); const float w = juce::GlyphArrangement::getStringWidth(kit::mono(8.f * u), upper(t)) + 4;
             lx -= w; g.setColour(pal.mute); g.setFont(kit::mono(8.f * u)); g.drawText(upper(t), Rectangle<float>(lx, r.getY() + 3 * u, w, 11 * u), juce::Justification::centredRight);
             lx -= 10 * u; g.setColour(l.c); g.fillRect(Rectangle<float>(lx, r.getY() + 7.5f * u, 8 * u, 2.4f * u)); lx -= 12 * u;
         }
@@ -57,7 +57,7 @@ public:
         g.drawText(learning ? u8("APPRENTISSAGE DU BRUIT\xE2\x80\xA6 ") + String(juce::roundToInt(learnP * 100.f)) + " %" : known ? u8("PROFIL DE BRUIT APPRIS") : u8("AUCUN PROFIL \xC2\xB7 MODE ADAPTATIF"),
                    Rectangle<float>(r.getX() + 6 * u, r.getY() + 3 * u, 300 * u, 11 * u), juce::Justification::centredLeft);
     }
-    kit::Palette pal = of::palette();
+    kit::Palette pal = of::palette(kIce);
 private:
     static String upper(const String& s) { return kit::upper(s); }
     DenoiserProcessor& proc;
@@ -66,8 +66,8 @@ private:
 };
 
 DenoiserEditor::DenoiserEditor(DenoiserProcessor& p)
-    : AudioProcessorEditor(&p), proc(p), pal(of::palette()), look(pal), power(pal),
-      learnKey(u8("Apprendre le bruit"), pal, kPeach), adaptKey("Adaptatif", pal), listenKey(u8("\xC3\x89" "couter le bruit retir\xC3\xA9"), pal, kIce) {
+    : AudioProcessorEditor(&p), proc(p), pal(of::palette(kIce)), look(pal), power(pal),
+      learnKey(u8("Learn"), pal, juce::Colour(0xFFFF3B30)), adaptKey("Adapt", pal, juce::Colour(0xFFFFB02E)), listenKey(u8("Listen"), pal, kIce) {
     setLookAndFeel(&look);
     scope = std::make_unique<DnScope>(proc); addAndMakeVisible(*scope);
     struct D { const char* id; const char* lab; const char* tip; };
@@ -76,7 +76,7 @@ DenoiserEditor::DenoiserEditor(DenoiserProcessor& p)
         {"sens", "Seuil", "Sensibilit\xC3\xA9 : plus haut, plus de bruit est consid\xC3\xA9r\xC3\xA9 comme tel (risque d'entamer la voix)."},
         {"smooth", "Lissage", "Lissage temps/fr\xC3\xA9quence du gain : plus haut, moins de \xC2\xAB bruit musical \xC2\xBB mais attaques plus douces."},
         {"air", "Aigus", "Pr\xC3\xA9servation des aigus et du souffle d'air : limite la r\xC3\xA9" "duction au-dessus de 4 kHz."}};
-    for (auto& d : defs) { auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip))); addAndMakeVisible(pt); }
+    for (auto& d : defs) { auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Fluted); addAndMakeVisible(pt); }
     humSeg = std::make_unique<Seg>(proc.apvts, "hum", juce::StringArray{u8("Coup\xC3\xA9"), "50 Hz", "60 Hz"}, u8("Filtre anti-ronflement du secteur (fondamentale et 3 harmoniques)."), pal);
     addAndMakeVisible(*humSeg);
     for (auto* k : {&learnKey, &adaptKey, &listenKey}) addAndMakeVisible(*k);
@@ -86,12 +86,19 @@ DenoiserEditor::DenoiserEditor(DenoiserProcessor& p)
     adaptKey.setTooltip(u8("Suit en continu le plancher de bruit (minima statistiques). Un son tenu et parfaitement stable peut \xC3\xAAtre pris pour du bruit."));
     listenKey.setTooltip(u8("N'\xC3\xA9" "coute que ce qui est retir\xC3\xA9 : r\xC3\xA8gle le seuil jusqu'\xC3\xA0 n'entendre aucune voix."));
     addAndMakeVisible(power);
-    power.setTooltip(u8("Effet en service. Appuie pour le couper (la latence reste compens\xC3\xA9" "e)."));
+    power.setTooltip(u8("Effet en service. Bascule pour le couper (la latence reste compens\xC3\xA9" "e)."));
+    help.install(*this, "Orbe Denoiser", {u8("R\xC3\xA9" "duit le bruit de fond et le souffle d'une voix (soustraction spectrale de Wiener liss\xC3\xA9" "e)."),
+        u8("- LEARN : joue 1 \xC3\xA0 3 s de bruit seul (sans voix) ; le profil est m\xC3\xA9moris\xC3\xA9 en 2 s environ et enregistr\xC3\xA9 avec la session."),
+        u8("- ADAPT : suit le plancher de bruit en continu, sans apprentissage. Un son tenu et tr\xC3\xA8s stable peut \xC3\xAAtre pris pour du bruit."),
+        u8("- LISTEN : n'\xC3\xA9" "coute que ce qui est retir\xC3\xA9 ; monte le Seuil jusqu'\xC3\xA0 ce qu'aucune voix n'y passe."),
+        u8("- R\xC3\xA9" "duction : att\xC3\xA9nuation maximale ; Lissage : moins de \xC2\xAB bruit musical \xC2\xBB ; Aigus : pr\xC3\xA9serve l'air au-dessus de 4 kHz."),
+        u8("- Anti-ronflement : filtre le secteur \xC3\xA0 50 ou 60 Hz (et 3 harmoniques)."),
+        u8("- Latence ") + String(dn::kLatency) + u8(" \xC3\xA9" "chantillons (FFT 2048, saut 512), d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te.")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     adaptAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "adapt", adaptKey);
     listenAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "listen", listenKey);
     setResizable(true, true);
-    setResizeLimits(404, 234, 1616, 936);
+    setResizeLimits(404, (int)(404 * kH / kW), 1616, (int)(1616 * kH / kW));
     getConstrainer()->setFixedAspectRatio((double)kW / kH);
     setSize((int)kW, (int)kH);
     startTimerHz(30);
@@ -100,12 +107,13 @@ DenoiserEditor::~DenoiserEditor() { stopTimer(); setLookAndFeel(nullptr); }
 
 void DenoiserEditor::resized() {
     u_ = (float)getWidth() / kW;
-    plate = kit::brushedPlate(getWidth(), getHeight(), pal);
-    scope->setBounds(Si(32, 104, 744, 206));
-    power.setBounds(Si(718, 20, 58, 52));
-    for (int i = 0; i < pots.size(); ++i) pots[i]->setBounds(Si(331.f + 111.f * (float)i, 352, 111, 74));
-    learnKey.setBounds(Si(32, 350, 280, 24)); adaptKey.setBounds(Si(32, 378, 280, 24)); listenKey.setBounds(Si(32, 406, 280, 24));
-    humSeg->setBounds(Si(172, 434, 140, 22));
+    const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
+    power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
+    help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
+    scope->setBounds(Si(32, 64, 744, 206));
+    for (int i = 0; i < pots.size(); ++i) pots[i]->setBounds(Si(331.f + 111.f * (float)i, 312, 111, 78));
+    learnKey.setBounds(Si(32, 314, 90, 40)); adaptKey.setBounds(Si(127, 314, 90, 40)); listenKey.setBounds(Si(222, 314, 90, 40));
+    humSeg->setBounds(Si(152, 368, 160, 26));
 }
 
 void DenoiserEditor::timerCallback() {
@@ -113,16 +121,14 @@ void DenoiserEditor::timerCallback() {
     const bool l = proc.engine.learning();
     learnKey.setToggleState(l, juce::dontSendNotification);
     learnKey.fill = l ? proc.engine.learnProgress() : 0.f;
-    learnKey.setButtonText(l ? u8("Apprentissage\xE2\x80\xA6") : u8("Apprendre le bruit"));
+    learnKey.setButtonText(l ? String(juce::roundToInt(proc.engine.learnProgress() * 100.f)) + " %" : u8("Learn"));
     learnKey.repaint();
 }
 
 void DenoiserEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    drawFace(g, pal, plate, u, kW, kH, "Orbe Denoiser", u8("R\xC3\xA9" "ducteur de bruit et de souffle \xC2\xB7 voix"), "DW-701");
-    section(g, pal, u, u8("Analyse du bruit"), 32, 330, 280);
-    section(g, pal, u, u8("R\xC3\xA9" "duction \xC2\xB7 spectre Wiener liss\xC3\xA9"), 331, 330, 445);
-    kit::engraved(g, pal, "Anti-ronflement", Rectangle<float>(36 * u, 436 * u, 130 * u, 18 * u), juce::Justification::centredLeft, 8.4f * u, 1.6f * u, true);
-    g.setColour(pal.mute); g.setFont(kit::mono(8.f * u));
-    g.drawText(u8("Latence ") + String(dn::kLatency) + u8(" \xC3\xA9" "chantillons \xC2\xB7 FFT 2048 / saut 512"), Rectangle<float>(331 * u, 438 * u, 445 * u, 12 * u), juce::Justification::centredRight);
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Denoiser", kit::w::serial::denoiser});
+    section(g, pal, u, u8("Analyse du bruit"), 32, 290, 280);
+    section(g, pal, u, u8("R\xC3\xA9" "duction \xC2\xB7 spectre Wiener liss\xC3\xA9"), 331, 290, 445);
+    kit::engraved(g, pal, "Anti-ronflement", Rectangle<float>(36 * u, 372 * u, 112 * u, 18 * u), juce::Justification::centredLeft, 8.4f * u, 1.6f * u, true);
 }

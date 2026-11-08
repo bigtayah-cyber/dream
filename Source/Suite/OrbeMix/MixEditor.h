@@ -16,7 +16,7 @@ private:
     MixProcessor& proc;
     oa::MixSnap snap; oa::Report rep; bool ready = false, blank = false; int wantEpoch = 0, scroll = 0;
     juce::ComboBox styleBox;
-    juce::TextButton resetB;
+    kit::w::PushKey resetB;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> styleAtt;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixEditor)
 };

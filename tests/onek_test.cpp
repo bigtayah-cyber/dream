@@ -6,8 +6,19 @@
 #include <fstream>
 #include "../Source/OneKnob/OneKnob.h"
 #include "../Source/Kit/BypassFadeTest.h"
+#include <new>
+#include <cstdlib>
 using namespace onek;
 static int fails = 0;
+// compteur d'allocations (test « zéro allocation en temps réel »)
+static bool gCountAlloc = false;
+static long gAllocs = 0;
+void* operator new(std::size_t n) { if (gCountAlloc) ++gAllocs; if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
+void* operator new[](std::size_t n) { if (gCountAlloc) ++gAllocs; if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 #define CHECK(c, ...) do { if (!(c)) { ++fails; std::printf("  ECHEC: "); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
 
 // lecteur WAV PCM16/24/32/float -> mono
@@ -157,6 +168,81 @@ int main(int argc, char** argv) {
         const double db = 10 * std::log10(worst / pf + 1e-30);
         std::printf("[1d] limiteur doux (tanh ADAA), sinus 5 kHz à 0,9 : repliement %.1f dB (tanh direct : -79 dB)\n", db);
         CHECK(db < -85.0, "repliement du limiteur %.1f dB", db);
+    }
+    // [3] volet avancé (chantier 8)
+    {
+        const double fs = 48000.0;
+        // voix synthétique : 5 harmoniques, syllabes de 180 ms (enveloppe), RMS ramené à -18 dBFS
+        auto voice = [&](double secs, float gainDb) {
+            std::vector<float> x((size_t)(secs * fs)); double ph = 0, s2 = 0;
+            for (size_t i = 0; i < x.size(); ++i) {
+                const double t = (double)i / fs, f = 196.0 * (1.0 + 0.03 * std::sin(2 * 3.14159265 * 0.7 * t));
+                ph += f / fs; ph -= std::floor(ph);
+                double v = 0; for (int h = 1; h <= 5; ++h) v += std::sin(2 * 3.14159265 * h * ph) / h;
+                const double syl = std::fmod(t, 0.24) < 0.18 ? std::sin(3.14159265 * std::fmod(t, 0.24) / 0.18) : 0.0;
+                x[i] = (float)(v * syl); s2 += x[i] * (double)x[i];
+            }
+            const float k = (float)(std::pow(10.0, (-18.0 + gainDb) / 20.0) / std::sqrt(s2 / (double)x.size()));
+            for (auto& v : x) v *= k;
+            return x;
+        };
+        // réduction de gain moyenne sur les 2 dernières secondes (6 s de signal)
+        auto grOf = [&](const Voicing& v, float levelDb, float trimDb, bool autoIn) {
+            auto x = voice(6.0, levelDb);
+            Chain c; c.prepare(fs, 512); Extras e; e.trimDb = trimDb; e.autoIn = autoIn; c.setExtras(e);
+            std::vector<float> L(512), R(512); double acc = 0; int nb = 0;
+            for (size_t p = 0; p + 512 <= x.size(); p += 512) {
+                c.setKnob(0.6f, v); c.process(&x[p], nullptr, L.data(), R.data(), 512);
+                if ((double)p > 4.0 * fs) { acc += c.meanReduction(); ++nb; }
+            }
+            return acc / std::max(1, nb);
+        };
+        for (auto& v : voicings()) {
+            const double g0 = grOf(v, 0, 0, true), gm = grOf(v, -12, 0, true), gp = grOf(v, 12, 0, true);
+            const double tm = grOf(v, 0, -12, true), tp = grOf(v, 0, 12, true);
+            const double om = grOf(v, -12, 0, false), op = grOf(v, 12, 0, false);
+            std::printf("[3a] %s auto-entrée : réduction %.2f dB à -18 dBFS ; entrée -12/+12 dB : %.2f / %.2f ; trim -12/+12 : %.2f / %.2f (sans auto : %.2f / %.2f)\n",
+                        v.name, g0, gm, gp, tm, tp, om, op);
+            for (double gg : {gm, gp, tm, tp}) CHECK(std::fabs(gg - g0) <= 1.0, "auto-entrée %s : réduction %.2f dB au lieu de %.2f ±1", v.name, gg, g0);
+        }
+        // mix 0 = sec retardé de la latence, exact
+        for (auto& v : voicings()) {
+            Chain c; c.prepare(fs, 512); Extras e; e.mix = 0.f; e.toneDb = 4.f; e.special = 1.f; c.setExtras(e);
+            const int n = 48000; std::vector<float> a(n), b(n), L(n), R(n); unsigned sd = 7;
+            for (int i = 0; i < n; ++i) { sd = sd * 1664525u + 1013904223u; a[(size_t)i] = 0.4f * ((float)(sd >> 8) / 16777216.f - 0.5f); b[(size_t)i] = 0.3f * std::sin(0.01f * (float)i); }
+            for (int p = 0; p < n; p += 480) { c.setKnob(0.8f, v); c.process(&a[(size_t)p], &b[(size_t)p], &L[(size_t)p], &R[(size_t)p], 480); }
+            double err = 0, ref = 0; const int lat = c.latency();
+            for (int i = lat; i < n; ++i) { err += std::pow(L[(size_t)i] - a[(size_t)(i - lat)], 2) + std::pow(R[(size_t)i] - b[(size_t)(i - lat)], 2); ref += a[(size_t)i] * (double)a[(size_t)i]; }
+            const double db = 10 * std::log10(err / ref + 1e-30);
+            std::printf("[3b] %s mix 0 : écart au sec retardé de %d échantillons %.1f dB\n", v.name, lat, db);
+            CHECK(db < -120.0, "mix 0 (%s) : %.1f dB", v.name, db);
+        }
+        // pas de NaN, latence inchangée par le volet, aucune allocation dans process()
+        for (auto& v : voicings()) {
+            Chain c; c.prepare(fs, 512);
+            const int n = 96000; std::vector<float> a(n), L(n), R(n); unsigned sd = 99;
+            for (int i = 0; i < n; ++i) { sd = sd * 1664525u + 1013904223u; const float w = (float)(sd >> 8) / 16777216.f - 0.5f;
+                a[(size_t)i] = i < 20000 ? 1.8f * w : i < 40000 ? 0.f : i < 60000 ? 0.9f : 0.5f * std::sin(0.3f * (float)i) + 1e-30f * w; }
+            bool bad = false; gAllocs = 0; gCountAlloc = true;
+            for (int p = 0, blk = 0; p < n; p += 512, ++blk) {
+                Extras e; e.trimDb = (blk % 3 - 1) * 12.f; e.toneDb = (blk % 5 - 2) * 3.f; e.mix = (float)(blk % 4) / 3.f; e.outDb = (blk % 2) * 12.f;
+                e.special = (float)(blk % 3) / 2.f; e.autoIn = blk % 7 != 0; e.autoGain = blk % 5 != 0;
+                c.setExtras(e); c.setKeySel(blk % 13, blk % 3); c.setKnob((float)(blk % 11) / 10.f, v);
+                const int m = std::min(512, n - p); c.process(&a[(size_t)p], nullptr, &L[(size_t)p], &R[(size_t)p], m);
+            }
+            gCountAlloc = false;
+            for (int i = 0; i < n; ++i) if (!std::isfinite(L[(size_t)i]) || !std::isfinite(R[(size_t)i])) bad = true;
+            std::printf("[3c] %s réglages extrêmes : %s, %ld allocation(s) dans process()\n", v.name, bad ? "NaN/inf !" : "aucun NaN", gAllocs);
+            CHECK(!bad, "NaN/inf (%s)", v.name);
+            CHECK(gAllocs == 0, "allocation en temps réel (%s) : %ld", v.name, gAllocs);
+            // latence mesurée avec le volet à fond (ton, largeur, drive, sortie)
+            Chain d; d.prepare(fs, 512); Extras e; e.toneDb = 6.f; e.special = 1.f; e.outDb = -6.f; e.autoIn = true; d.setExtras(e); d.setKnob(0.5f, v);
+            std::vector<float> in(30000, 0.f), l2(in.size()), r2(in.size()); in[4000] = 0.01f;
+            for (size_t i = 0; i < in.size(); i += 500) { d.setKnob(0.5f, v); d.process(&in[i], nullptr, &l2[i], &r2[i], 500); }
+            size_t pk = 0; for (size_t i = 0; i < l2.size(); ++i) if (std::fabs(l2[i]) > std::fabs(l2[pk])) pk = i;
+            std::printf("[3d] %s volet à fond : latence déclarée %d, mesurée %d\n", v.name, d.latency(), (int)pk - 4000);
+            CHECK(std::abs((int)pk - 4000 - d.latency()) <= 2, "latence avec volet %s : mesurée %d, déclarée %d", v.name, (int)pk - 4000, d.latency());
+        }
     }
     // 2. chaîne sur une vraie prise
     std::vector<float> in; double sr = 44100;

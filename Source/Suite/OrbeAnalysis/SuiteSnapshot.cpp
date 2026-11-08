@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc->createEditor());
     ed->setSize(w, (int)(w * 0.64));
     for (int i = 0; i < 8; ++i) pump(40);
-    auto img = ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.5f);
+    auto img = ed->createComponentSnapshot(ed->getLocalBounds(), true, 2.0f);
     juce::File f(argv[2]); f.deleteFile(); juce::FileOutputStream os(f);
     juce::PNGImageFormat().writeImageToStream(img, os);
     ed.reset(); proc.reset();

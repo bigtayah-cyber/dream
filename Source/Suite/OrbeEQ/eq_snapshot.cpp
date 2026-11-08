@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
     if (v.size() < 48000 * 2) { v = snap::noise(48000 * 2, -30.f, 3); float lp = 0; for (auto& s : v) { lp += 0.08f * (s - lp); s = lp * 5.f; } }
     v.resize(48000 * 2);
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
-    ed->setSize(900, 548);
+    ed->setSize(900, 500);
     snap::feed(proc, v); snap::settle(300); snap::feed(proc, v); snap::settle(200);
 
     // Interaction : glisser le point de la bande 5 (cloche 3,2 kHz), molette, double-clic, clic sur une pastille

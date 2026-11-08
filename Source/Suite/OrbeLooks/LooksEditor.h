@@ -20,14 +20,15 @@ private:
     kit::Palette pal;
     oc::ui::ScaledLook look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
     float u_ = 1.f, outDb = -60.f, grDisp = 0.f, shiftDisp = 0.f;
     int shownKey = -2;
     bool moved = false;
+    float modLevel[8] = {};
     juce::OwnedArray<oc::ui::Pot> pots;
     juce::ComboBox keyBox, scaleBox;
-    juce::ArrowButton prev{"prev", 0.5f, oc::ui::kLilac}, next{"next", 0.f, oc::ui::kLilac};
+    juce::ArrowButton prev{"prev", 0.5f, kit::w::kSilk.withAlpha(0.7f)}, next{"next", 0.f, kit::w::kSilk.withAlpha(0.7f)};
     oc::ui::Power power;
+    kit::w::HelpKey help;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt, scaleAtt;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LooksEditor)

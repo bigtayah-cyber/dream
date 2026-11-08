@@ -4,7 +4,7 @@ using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
 
 namespace {
-const Colour kLilac(0xFFCFC6FF), kIce(0xFFA9ECFF), kPeach(0xFFFFC4AB);
+using kit::w::kLilac, kit::w::kIce, kit::w::kPeach;
 constexpr float W = 1100.f, H = 660.f;
 // Sections (unités de conception) et cellules de potard.
 const Rectangle<float> kS1{20, 70, 560, 204}, kS2{596, 70, 484, 204}, kS3{20, 286, 560, 204}, kS4{596, 286, 484, 204};
@@ -301,15 +301,7 @@ void Wheel::paint(juce::Graphics& g) {
 }  // namespace osui
 
 // ---------------- Éditeur ----------------
-Palette OrbeSynthEditor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2B2B31); p.plateBot = Colour(0xFF16161A);
-    p.ink = Colour(0xFFE9E7F0); p.mute = Colour(0xFF8F8D9B); p.line = Colour(0xFF3B3B44);
-    p.accent = kLilac; p.accent2 = kIce;
-    p.screen = Colour(0xFF0B0C11); p.screenInk = Colour(0xFFEDEBF6);
-    p.brush = 1.f;
-    return p;
-}
+Palette OrbeSynthEditor::palette() { return kit::w::instrument(kLilac); }
 
 OrbeSynthEditor::OrbeSynthEditor(OrbeSynthProcessor& p)
     : AudioProcessorEditor(&p), proc(p), pal(palette()), look(pal), presetBar(p, pal), envView(p, pal), fltView(p, pal),
@@ -344,6 +336,13 @@ OrbeSynthEditor::OrbeSynthEditor(OrbeSynthProcessor& p)
     };
     for (auto& k : ks) { knobs.push_back(std::make_unique<osui::Knob>(ap, k.id, u8(k.label), u8(k.tip), pal)); addAndMakeVisible(*knobs.back()); }
 
+    look.knobStyle = KnobStyle::Skirt;   // potards à jupe graduée
+    help.install(*this, "Orbe Synth", {u8("Synthé polyphonique : deux oscillateurs, filtre passe-bas résonant, enveloppe ADSR, effets."),
+        u8("- Barre de preset : flèches ou clic pour la liste ; MODIFIÉ apparaît dès qu'un réglage change."),
+        u8("- 01 Oscillateurs : formes d'onde, transposition et niveau de l'oscillateur 2, FM, unisson (1 à 7 voix) et désaccord, sub une octave plus bas."),
+        u8("- 02 Filtre : coupure, résonance, enveloppe de filtre (quantité et déclin). L'écran montre la courbe du filtre."),
+        u8("- 03 Enveloppe : attaque, déclin, sustain, relâche du volume. 04 Effets : delay synchronisé sur le tempo de l'hôte."),
+        u8("- Molettes : pitch bend (±2 demi-tons) et modulation (ouvre le filtre). Clavier : clic et glissé pour jouer.")});
     setResizable(true, true);
     setResizeLimits(825, 495, 2200, 1320);
     getConstrainer()->setFixedAspectRatio((double)W / (double)H);
@@ -367,13 +366,13 @@ void OrbeSynthEditor::resized() {
     divSeg->setBounds(Si(kS4.getX() + 16, kS4.getY() + 152, 300, 28));
     bendWheel.setBounds(Si(26, 518, 36, 116)); modWheel.setBounds(Si(70, 518, 36, 116));
     keyboard.setBounds(Si(122, 514, 958, 126));
-    plate = juce::Image();
+    help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false, 56.f).toNearestInt(), getLocalBounds());
     repaint();
 }
 
 void OrbeSynthEditor::timerCallback() {
     const int v = proc.voices.load();
-    if (v != lastVoices) { lastVoices = v; repaint(S(800, 12, 280, 36).toNearestInt()); }
+    if (v != lastVoices) { lastVoices = v; repaint(S(780, 8, 260, 42).toNearestInt()); }
     uint64_t m[2] = {0, 0};
     for (int n = 0; n < 128; ++n) if (proc.keys.isNoteOnForChannels(0xffff, n)) m[n >> 6] |= (uint64_t)1 << (n & 63);
     if (m[0] != lastMask[0] || m[1] != lastMask[1]) { lastMask[0] = m[0]; lastMask[1] = m[1]; keyboard.repaint(); }
@@ -400,19 +399,16 @@ void OrbeSynthEditor::section(juce::Graphics& g, float u, Rectangle<float> d, co
     g.setColour(pal.mute);
     g.setFont(fnt(9.5f * u));
     g.drawText(sub, S(d.getRight() - 300, d.getY() + 8, 284, 16).toNearestInt(), juce::Justification::centredRight);
-    g.setColour(juce::Colours::black.withAlpha(.5f)); g.fillRect(S(d.getX() + 16, d.getY() + 29, d.getWidth() - 32, 1.f));
+    static const Colour stripe[4] = {kPeach, kLilac, kIce, Colour(0xFFFFD27A)};   // sections soulignées de couleur
+    g.setColour(stripe[juce::jlimit(0, 3, String(num).getIntValue() - 1)].withAlpha(.85f)); g.fillRect(S(d.getX() + 16, d.getY() + 28, d.getWidth() - 32, 2.f));
     g.setColour(juce::Colours::white.withAlpha(.06f)); g.fillRect(S(d.getX() + 16, d.getY() + 30, d.getWidth() - 32, 1.f));
 }
 
 void OrbeSynthEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    if (plate.isNull() || plate.getWidth() != getWidth() || plate.getHeight() != getHeight()) plate = brushedPlate(getWidth(), getHeight(), pal);
-    g.drawImageAt(plate, 0, 0);
-    for (float y : {60.f, 502.f}) {
-        g.setColour(Colour(0xFF000000).withAlpha(.5f)); g.fillRect(S(0, y, W, 1.5f));
-        g.setColour(juce::Colours::white.withAlpha(.06f)); g.fillRect(S(0, y + 1.5f, W, 1.f));
-    }
-    for (auto p : {juce::Point<float>(12, 12), {1088, 12}, {12, 648}, {1088, 648}}) screw(g, p.x * u, p.y * u, 5.f * u, (p.x + p.y) * .9f);
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe Synth", kit::w::serial::synth, 56.f});
+    g.setColour(Colour(0xFF000000).withAlpha(.5f)); g.fillRect(S(18, 502, W - 36, 1.5f));
+    g.setColour(juce::Colours::white.withAlpha(.06f)); g.fillRect(S(18, 503.5f, W - 36, 1.f));
     paintHeader(g, u);
 
     section(g, u, kS1, "01", "Oscillateurs", u8("Deux oscillateurs · unisson · FM · sub"));
@@ -431,21 +427,11 @@ void OrbeSynthEditor::paint(juce::Graphics& g) {
 }
 
 void OrbeSynthEditor::paintHeader(juce::Graphics& g, float u) {
-    const float cx = 44 * u, cy = 31 * u, r = 16 * u;  // l'orbe : sphère éclairée entourée d'un anneau, signature de la marque
-    g.setColour(juce::Colours::black.withAlpha(.5f)); g.fillEllipse(cx - r - 3 * u, cy - r - 1 * u, (r + 3 * u) * 2, (r + 3 * u) * 2);
-    g.setGradientFill(juce::ColourGradient(kIce, cx - r * .5f, cy - r * .6f, Colour(0xFF5A46C8), cx + r, cy + r, true));
-    g.fillEllipse(cx - r, cy - r, r * 2, r * 2);
-    g.setColour(juce::Colours::white.withAlpha(.5f)); g.fillEllipse(cx - r * .62f, cy - r * .78f, r * .7f, r * .42f);
-    g.setColour(kLilac.withAlpha(.8f)); g.drawEllipse(cx - r * 1.28f, cy - r * 1.28f, r * 2.56f, r * 2.56f, 1.f * u);
-    engraved(g, pal, "Orbe Synth", S(80, 12, 300, 30), juce::Justification::centredLeft, 24.f * u, 6.5f * u, true);
-    g.setColour(pal.mute); g.setFont(fnt(9.f * u));
-    g.drawText(u8("dreamaws · suite Orbe · synthé polyphonique"), S(82, 42, 300, 12).toNearestInt(), juce::Justification::centredLeft);
-
-    screenWell(g, pal, S(804, 14, 272, 32));
-    engraved(g, pal, "Voix", S(818, 22, 40, 16), juce::Justification::centredLeft, 9.f * u, 1.8f * u);
+    screenWell(g, pal, S(784, 12, 252, 34), Display::VFD);
+    engraved(g, pal, "Voix", S(796, 21, 40, 16), juce::Justification::centredLeft, 9.f * u, 1.8f * u);
     const int v = proc.voices.load();
     for (int i = 0; i < osyn::kMaxVoices; ++i) {
-        const float x = (866.f + (float)i * 10.5f) * u, y = 30.f * u, rr = 2.6f * u;
+        const float x = (842.f + (float)i * 10.5f) * u, y = 29.f * u, rr = 2.6f * u;
         if (i < v) {
             g.setGradientFill(juce::ColourGradient(kLilac.withAlpha(.4f), x, y, kLilac.withAlpha(0.f), x + rr * 3, y, true));
             g.fillEllipse(x - rr * 3, y - rr * 3, rr * 6, rr * 6);
@@ -454,5 +440,5 @@ void OrbeSynthEditor::paintHeader(juce::Graphics& g, float u) {
         g.fillEllipse(x - rr, y - rr, rr * 2, rr * 2);
     }
     g.setColour(kIce); g.setFont(mono(11.f * u));
-    g.drawText(String(v).paddedLeft('0', 2) + "/" + String(osyn::kMaxVoices), S(1030, 22, 42, 16).toNearestInt(), juce::Justification::centredRight);
+    g.drawText(String(v).paddedLeft('0', 2) + "/" + String(osyn::kMaxVoices), S(986, 21, 42, 16).toNearestInt(), juce::Justification::centredRight);
 }

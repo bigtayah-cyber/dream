@@ -33,7 +33,7 @@ private:
     juce::ComboBox keyBox, modeBox;
     std::unique_ptr<ou::Seg> gridSeg, octSeg;
     juce::ToggleButton snapT, tuneT, followT, playT, monT;
-    juce::TextButton recB, clearB;
+    kit::w::PushKey recB, clearB;
     std::unique_ptr<MidiHandle> handle;
     std::unique_ptr<SliderAtt> sensA, minA, bpmA;
     std::unique_ptr<ComboAtt> keyA, modeA;

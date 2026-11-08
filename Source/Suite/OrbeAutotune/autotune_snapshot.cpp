@@ -24,9 +24,9 @@ int main(int argc, char** argv) {
         proc.processBlock(b, m);
     }
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
-    ed->setSize(1000, 566);
+    ed->setSize(1000, 548);
     for (int i = 0; i < 12; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil(30);
-    auto img = ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.5f);
+    auto img = ed->createComponentSnapshot(ed->getLocalBounds(), true, 2.0f);
     juce::File f(argv[1]); f.deleteFile();
     juce::FileOutputStream os(f);
     juce::PNGImageFormat().writeImageToStream(img, os);

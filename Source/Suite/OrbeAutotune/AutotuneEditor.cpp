@@ -4,8 +4,8 @@ using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
 
 namespace {
-constexpr float kW = 1000.f, kH = 566.f, kPotH = 78.f, kKnobR = 19.f;
-const Colour kLilac(0xFFCFC6FF), kIce(0xFFA9ECFF), kPeach(0xFFFFC4AB);
+constexpr float kW = 1000.f, kH = 548.f, kPotH = 82.f, kKnobR = 19.f;
+using kit::w::kLilac, kit::w::kIce, kit::w::kPeach;
 struct PotDef { const char* id; const char* label; const char* tip; float x; };
 const PotDef kPots[] = {
     {"speed", "Vitesse", "Rapidit\xC3\xA9 de la correction vers la note. 0 = effet robot (saut imm\xC3\xA9" "diat), 10 \xC3\xA0 30 ms = tendance moderne, 100 ms et plus = naturel.", 24},
@@ -19,48 +19,9 @@ const PotDef kPots[] = {
     {"dbl", "Doublage", "Deux voix l\xC3\xA9g\xC3\xA8rement d\xC3\xA9saccord\xC3\xA9" "es et d\xC3\xA9" "cal\xC3\xA9" "es, ouvertes en st\xC3\xA9r\xC3\xA9o.", 806},
     {"mix", "Mix", "Sec / trait\xC3\xA9 : 100 % = voix corrig\xC3\xA9" "e seule.", 898},
 };
-constexpr float kPotY = 446.f;
+constexpr float kPotY = 450.f;
 String nName(int midi) { return String(atn::noteNames()[atn::pcOf(midi)]) + String(midi / 12 - 1); }
 }  // namespace
-
-AtPot::AtPot(juce::AudioProcessorValueTreeState& a, const String& id, const String& lab, const String& tip) : label(lab) {
-    par = a.getParameter(id);
-    s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-    s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    s.setMouseDragSensitivity(240);
-    s.setTooltip(tip + u8(" Double-clic : valeur d'origine."));
-    s.onValueChange = [this] { repaint(); };
-    addAndMakeVisible(s);
-    att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(a, id, s);
-    s.setDoubleClickReturnValue(true, par->convertFrom0to1(par->getDefaultValue()));
-}
-void AtPot::resized() {
-    const float u = (float)getHeight() / kPotH;
-    s.setBounds(juce::Rectangle<float>((float)getWidth() / 2 - 1.5f * kKnobR * u, (30.f - 1.5f * kKnobR) * u, 3 * kKnobR * u, 3 * kKnobR * u).toNearestInt());
-}
-void AtPot::paint(juce::Graphics& g) {
-    const float u = (float)getHeight() / kPotH, w = (float)getWidth();
-    Palette pal; pal.ink = Colour(0xFFE9E6F5);
-    engraved(g, pal, label, Rectangle<float>(0, 57 * u, w, 11 * u), juce::Justification::centred, 8.4f * u, 1.1f * u, true);
-    auto r = Rectangle<float>(w / 2 - 28 * u, 68 * u, 56 * u, 11.5f * u);
-    g.setColour(juce::Colours::black.withAlpha(0.42f)); g.fillRoundedRectangle(r, 2.5f * u);
-    g.setColour(juce::Colours::white.withAlpha(0.05f)); g.drawRoundedRectangle(r, 2.5f * u, 1.f);
-    g.setColour(kIce.withAlpha(0.92f)); g.setFont(mono(8.8f * u));
-    g.drawText(par ? par->getText(par->getValue(), 0) : String(), r, juce::Justification::centred);
-}
-
-void AtPower::paintButton(juce::Graphics& g, bool hover, bool down) {
-    auto r = getLocalBounds().toFloat();
-    const float cx = r.getCentreX(), cy = r.getCentreY() - 5, rad = juce::jmin(r.getWidth(), r.getHeight() - 12) * 0.42f;
-    const bool on = !getToggleState();
-    g.setColour(juce::Colours::black.withAlpha(0.55f)); g.fillEllipse(cx - rad - 2, cy - rad, (rad + 2) * 2, (rad + 2) * 2);
-    g.setGradientFill(juce::ColourGradient(Colour(0xFF6A6A72), cx - rad * 0.6f, cy - rad, Colour(0xFF17171B), cx + rad * 0.6f, cy + rad, false));
-    g.fillEllipse(cx - rad, cy - rad + (down ? 1.f : 0.f), rad * 2, rad * 2);
-    g.setColour(juce::Colours::white.withAlpha(hover ? 0.3f : 0.14f)); g.drawEllipse(cx - rad, cy - rad, rad * 2, rad * 2, 1.f);
-    led(g, cx, cy, rad * 0.28f, on, P.accent);
-    g.setColour(P.ink.withAlpha(0.8f));
-    tracked(g, "In", Rectangle<float>(0, r.getBottom() - 11, r.getWidth(), 11), juce::Justification::centred, 1.6f, fnt(juce::jmax(7.f, rad * 0.55f), true));
-}
 
 // ------------------------------------------------------------------ clavier de masque
 int AtKeys::keyAt(juce::Point<float> p) const {
@@ -75,63 +36,58 @@ void AtKeys::mouseDown(const juce::MouseEvent& e) {
     if (mode == 2) return;   // grille inconnue : rien à éditer
     proc.toggleNote(keyAt(e.position));
 }
+// Touches éclairées : note de la gamme = touche claire + LED ambre ; hors gamme = touche éteinte.
 void AtKeys::paint(juce::Graphics& g) {
     const float w = (float)getWidth(), h = (float)getHeight(), kw = w / 7.f, bh = h * 0.6f, u = h / 48.f;
     auto bounds = getLocalBounds().toFloat();
     const auto pal0 = AutotuneEditor::palette();
-    screenWell(g, pal0, bounds.reduced(2.f));
+    g.setColour(juce::Colours::black.withAlpha(0.75f)); g.fillRoundedRectangle(bounds.reduced(1.f), 3.f);
     static const int whitePc[7] = {0, 2, 4, 5, 7, 9, 11};
     static const int blackPc[5] = {1, 3, 6, 8, 10};
     static const float blackX[5] = {1.f, 2.f, 4.f, 5.f, 6.f};
     auto on = [&](int pc) { return ((mask >> pc) & 1) != 0; };
-    g.setFont(mono(7.6f * u));
+    const Colour amber(0xFFFFB02E);
     for (int i = 0; i < 7; ++i) {
         const int pc = whitePc[i];
-        auto r = Rectangle<float>((float)i * kw + 2.f, 5.f, kw - 4.f, h - 10.f);
+        auto r = Rectangle<float>((float)i * kw + 1.5f, 3.f, kw - 3.f, h - 6.f);
         const bool lit = on(pc);
-        g.setGradientFill(lit ? juce::ColourGradient(kLilac.withAlpha(0.9f), r.getX(), r.getY(), kLilac.withAlpha(0.5f), r.getX(), r.getBottom(), false)
-                              : juce::ColourGradient(Colour(0xFF3A3A42), r.getX(), r.getY(), Colour(0xFF1F1F25), r.getX(), r.getBottom(), false));
-        g.fillRoundedRectangle(r, 3.f);
-        g.setColour(juce::Colours::white.withAlpha(lit ? 0.45f : 0.10f)); g.drawRoundedRectangle(r, 3.f, 1.f);
-        g.setColour(lit ? Colour(0xFF1A1A22) : pal0.mute);
-        g.drawText(atn::noteNames()[pc], r.withTrimmedBottom(2.f), juce::Justification::centredBottom);
-        if (pc == sung) { g.setColour(kIce); g.fillRoundedRectangle(r.getCentreX() - 5.f * u, r.getBottom() - 15.f * u, 10.f * u, 3.f * u, 1.5f * u); }
-        if (pc == root && mode != 2) { g.setColour(kPeach); g.fillEllipse(r.getCentreX() - 3.f * u, r.getBottom() - 25.f * u, 6.f * u, 6.f * u); }
+        g.setGradientFill(lit ? juce::ColourGradient(Colour(0xFFF3EEDF), r.getX(), r.getY(), Colour(0xFFCFC8B6), r.getX(), r.getBottom(), false)
+                              : juce::ColourGradient(Colour(0xFF56565C), r.getX(), r.getY(), Colour(0xFF3A3A40), r.getX(), r.getBottom(), false));
+        g.fillRoundedRectangle(r, 2.5f);
+        g.setColour(juce::Colours::black.withAlpha(0.5f)); g.drawRoundedRectangle(r, 2.5f, 1.f);
+        led(g, r.getCentreX(), r.getBottom() - 21.f * u, 2.6f * u, lit ? 1.f : 0.f, amber, LedBezel::None);
+        g.setColour(lit ? Colour(0xFF1A1A22) : Colour(0xFFB5B3BD)); g.setFont(fnt(9.f * u, true));
+        g.drawText(atn::noteNames()[pc], r.withTrimmedBottom(3.f * u), juce::Justification::centredBottom);
+        if (pc == sung) { g.setColour(kIce); g.fillRoundedRectangle(r.getX() + 3.f * u, r.getBottom() - 3.5f * u, r.getWidth() - 6.f * u, 2.5f * u, 1.2f * u); }
+        if (pc == root && mode != 2) { g.setColour(Colour(0xFFE0603A)); g.fillRoundedRectangle(r.getX() + 3.f * u, r.getY() + bh + 2.f * u, r.getWidth() - 6.f * u, 2.f * u, 1.f * u); }
     }
     for (int i = 0; i < 5; ++i) {
         const int pc = blackPc[i];
-        auto r = Rectangle<float>(blackX[i] * kw - kw * 0.29f, 5.f, kw * 0.58f, bh);
+        auto r = Rectangle<float>(blackX[i] * kw - kw * 0.29f, 3.f, kw * 0.58f, bh);
         const bool lit = on(pc);
-        g.setColour(juce::Colours::black.withAlpha(0.6f)); g.fillRoundedRectangle(r.translated(0, 2.f), 3.f);
-        g.setGradientFill(lit ? juce::ColourGradient(Colour(0xFF9C90E8), r.getX(), r.getY(), Colour(0xFF5E52B0), r.getX(), r.getBottom(), false)
-                              : juce::ColourGradient(Colour(0xFF17171B), r.getX(), r.getY(), Colour(0xFF0B0B0E), r.getX(), r.getBottom(), false));
-        g.fillRoundedRectangle(r, 3.f);
-        g.setColour(juce::Colours::white.withAlpha(lit ? 0.4f : 0.12f)); g.drawRoundedRectangle(r, 3.f, 1.f);
-        g.setColour(lit ? Colour(0xFFF4F1FF) : pal0.mute);
-        g.setFont(mono(6.8f * u)); g.drawText(atn::noteNames()[pc], r.withTrimmedBottom(2.f), juce::Justification::centredBottom);
-        if (pc == sung) { g.setColour(kIce); g.fillRoundedRectangle(r.getCentreX() - 4.f * u, r.getY() + 4.f * u, 8.f * u, 3.f * u, 1.5f * u); }
-        if (pc == root && mode != 2) { g.setColour(kPeach); g.fillEllipse(r.getCentreX() - 2.5f * u, r.getY() + 10.f * u, 5.f * u, 5.f * u); }
+        g.setColour(juce::Colours::black.withAlpha(0.6f)); g.fillRoundedRectangle(r.translated(0, 2.f), 2.5f);
+        g.setGradientFill(juce::ColourGradient(Colour(lit ? 0xFF2A2A30 : 0xFF141417), r.getX(), r.getY(), Colour(0xFF07070A), r.getX(), r.getBottom(), false));
+        g.fillRoundedRectangle(r, 2.5f);
+        g.setColour(juce::Colours::white.withAlpha(lit ? 0.25f : 0.08f)); g.drawRoundedRectangle(r, 2.5f, 1.f);
+        led(g, r.getCentreX(), r.getY() + 7.f * u, 2.3f * u, lit ? 1.f : 0.f, amber, LedBezel::None);
+        g.setColour(lit ? Colour(0xFFF4F1FF) : pal0.mute.withAlpha(0.7f));
+        g.setFont(fnt(8.f * u, true)); g.drawText(atn::noteNames()[pc], r.withTrimmedBottom(2.f * u), juce::Justification::centredBottom);
+        if (pc == sung) { g.setColour(kIce); g.fillRoundedRectangle(r.getX() + 2.f * u, r.getBottom() - 3.f * u, r.getWidth() - 4.f * u, 2.f * u, 1.f * u); }
+        if (pc == root && mode != 2) { g.setColour(Colour(0xFFE0603A)); g.fillEllipse(r.getCentreX() - 2.5f * u, r.getY() + 13.f * u, 5.f * u, 5.f * u); }
     }
     if (mode == 2) {
-        g.setColour(Colour(0xE00B0B10)); g.fillRoundedRectangle(bounds.reduced(2.f), 4.f);
-        g.setColour(kLilac.withAlpha(0.85f));
-        tracked(g, u8("Tonalit\xC3\xA9 en recherche \xC2\xB7 la hauteur passe telle quelle"), bounds, juce::Justification::centred, 1.6f * u, fnt(9.4f * u, true));
+        g.setColour(Colour(0xD00B0B10)); g.fillRoundedRectangle(bounds.reduced(1.f), 3.f);
+        g.setColour(Colour(0xFFFFB02E));
+        tracked(g, u8("Tonalit\xC3\xA9 en recherche"), bounds, juce::Justification::centred, 1.6f * u, fnt(9.4f * u, true));
     }
 }
 
 // ------------------------------------------------------------------ éditeur
-Palette AutotuneEditor::palette() {
-    Palette p;
-    p.plateTop = Colour(0xFF2E2E36); p.plateBot = Colour(0xFF16161B);
-    p.ink = Colour(0xFFE9E6F5); p.accent = kLilac; p.accent2 = kIce;
-    p.mute = p.ink.withAlpha(0.55f); p.line = p.ink.withAlpha(0.14f);
-    p.screen = Colour(0xFF0B0B10); p.screenInk = kIce; p.brush = 0.9f;
-    return p;
-}
+Palette AutotuneEditor::palette() { return kit::w::rack(Colour(0xFFFF6A50)); }
 
 AutotuneEditor::AutotuneEditor(AutotuneProcessor& p) : AudioProcessorEditor(&p), proc(p), pal(palette()), look(pal), keys(p), power(pal) {
     setLookAndFeel(&look);
-    for (auto& d : kPots) { pots.add(new AtPot(proc.apvts, d.id, u8(d.label), u8(d.tip))); addAndMakeVisible(pots.getLast()); }
+    for (auto& d : kPots) { auto* pt = pots.add(new kit::w::Pot(proc.apvts, d.id, u8(d.label), u8(d.tip), nullptr, kKnobR, Colour(0xFFFF6A50))); pt->setStyle(KnobStyle::Fluted); addAndMakeVisible(pt); }
     // listes
     keyBox.addItem(u8("Auto (d'apr\xC3\xA8s la voix)"), 1);
     for (int i = 0; i < 12; ++i) keyBox.addItem(atn::noteNames()[i], i + 2);
@@ -161,10 +117,17 @@ AutotuneEditor::AutotuneEditor(AutotuneProcessor& p) : AudioProcessorEditor(&p),
     resetNotes.setTooltip(u8("Annule les notes ajout\xC3\xA9" "es ou retir\xC3\xA9" "es \xC3\xA0 la main : retour \xC3\xA0 la gamme pure."));
     resetNotes.onClick = [this] { proc.clearNotes(); };
     addAndMakeVisible(resetNotes); addAndMakeVisible(keys); addAndMakeVisible(power);
-    power.setTooltip(u8("Effet en service. Appuie pour le couper (la latence reste compens\xC3\xA9" "e)."));
+    power.setTooltip(u8("Effet en service. Bascule pour le couper (la latence reste compens\xC3\xA9" "e)."));
+    help.install(*this, "Orbe Autotune", {u8("Correction de hauteur en temps r\xC3\xA9" "el (d\xC3\xA9tection YIN), harmonie et doublage."),
+        u8("- \xC3\x89" "cran : hauteur chant\xC3\xA9" "e (bleu), sortie corrig\xC3\xA9" "e (p\xC3\xAA" "che), note cible (blanc) ; les lignes claires sont les notes de la gamme."),
+        u8("- Afficheur rouge : note chant\xC3\xA9" "e et \xC3\xA9" "cart en cents ; aiguille : correction appliqu\xC3\xA9" "e (\xC2\xB1" "50 ct)."),
+        u8("- Clavier : touches allum\xC3\xA9" "es = notes de la gamme ; clic sur une touche pour l'ajouter ou la retirer. Notes \xC3\xA0 z\xC3\xA9ro : retour \xC3\xA0 la gamme pure."),
+        u8("- Tonalit\xC3\xA9 Auto : estim\xC3\xA9" "e d'apr\xC3\xA8s la voix ; tant qu'elle n'est pas s\xC3\xBBre, la hauteur passe telle quelle."),
+        u8("- Vitesse 0 = effet robot ; 10 \xC3\xA0 30 ms = moderne ; 100 ms et plus = naturel."),
+        u8("- Latence : Direct (moins de 6 ms, sans formants) ou Qualit\xC3\xA9 (formants pr\xC3\xA9serv\xC3\xA9s, environ 37 ms) ; d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te.")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     setResizable(true, true);
-    setResizeLimits(600, 340, 1800, 1019);
+    setResizeLimits(600, (int)(600 * kH / kW), 1800, (int)(1800 * kH / kW));
     getConstrainer()->setFixedAspectRatio((double)kW / kH);
     setSize((int)kW, (int)kH);
     startTimerHz(30);
@@ -173,14 +136,15 @@ AutotuneEditor::~AutotuneEditor() { stopTimer(); setLookAndFeel(nullptr); }
 
 void AutotuneEditor::resized() {
     u_ = (float)getWidth() / kW;
-    plate = brushedPlate(getWidth(), getHeight(), pal);
-    for (int i = 0; i < pots.size(); ++i) pots[i]->setBounds(Si(kPots[i].x, kPotY, 78, kPotH));
-    keyBox.setBounds(Si(770, 86, 206, 26)); scaleBox.setBounds(Si(770, 136, 206, 26));
-    harmBox.setBounds(Si(642, 420, 148, 22)); presetBox.setBounds(Si(430, 30, 200, 28));
+    const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
+    power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
+    help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
+    for (int i = 0; i < pots.size(); ++i) { pots[i]->setBounds(Si(kPots[i].x, kPotY, 78, kPotH)); pots[i]->setScale(u_); }
+    keyBox.setBounds(Si(770, 76, 206, 26)); scaleBox.setBounds(Si(770, 124, 206, 26));
+    harmBox.setBounds(Si(642, 420, 148, 24)); presetBox.setBounds(Si(440, 11, 200, 28));
     formToggle.setBounds(Si(290, 420, 150, 20));
-    latSeg->setBounds(Si(644, 30, 116, 26));
-    keys.setBounds(Si(24, 342, 726, 48)); resetNotes.setBounds(Si(770, 352, 206, 28));
-    power.setBounds(Si(920, 8, 58, 52));
+    latSeg->setBounds(Si(718, 9, 130, 32));
+    keys.setBounds(Si(24, 338, 726, 52)); resetNotes.setBounds(Si(770, 356, 206, 32));
 }
 
 String AutotuneEditor::tonText() const {
@@ -211,7 +175,7 @@ void AutotuneEditor::timerCallback() {
         formToggle.setEnabled(lm == 1); for (int i = 0; i < pots.size(); ++i) if (juce::String(kPots[i].id) == "form") pots[i]->setEnabled(lm == 1);
         repaint();
     }
-    repaint(S(24, 62, 952, 276).toNearestInt());
+    repaint(S(24, 58, 952, 280).toNearestInt());
 }
 
 void AutotuneEditor::module(juce::Graphics& g, const char* title, float x, float w, float y) {
@@ -222,7 +186,7 @@ void AutotuneEditor::module(juce::Graphics& g, const char* title, float x, float
 
 void AutotuneEditor::paintScreen(juce::Graphics& g, Rectangle<float> r) {
     const float u = u_;
-    screenWell(g, pal, r);
+    screenWell(g, pal, r, Display::OLED);
     auto f = r.reduced(6 * u, 8 * u);
     auto p = f.withTrimmedLeft(30 * u);
     const auto& t = proc.tel();
@@ -291,66 +255,38 @@ void AutotuneEditor::paintScreen(juce::Graphics& g, Rectangle<float> r) {
 }
 
 void AutotuneEditor::paintGauge(juce::Graphics& g, Rectangle<float> r) {
-    const float u = u_;
-    screenWell(g, pal, r);
-    g.setColour(pal.mute); tracked(g, "Correction", Rectangle<float>(r.getX() + 10 * u, r.getY() + 7 * u, r.getWidth() - 20 * u, 10 * u), juce::Justification::centredLeft, 1.3f * u, fnt(7.6f * u, true));
-    const float x0 = r.getX() + 14 * u, x1 = r.getRight() - 14 * u, yb = r.getY() + 60 * u, yt = r.getY() + 38 * u;
-    auto X = [&](float ct) { return x0 + (x1 - x0) * (juce::jlimit(-50.f, 50.f, ct) + 50.f) / 100.f; };
-    g.setFont(mono(6.8f * u));
-    for (int c = -50; c <= 50; c += 10) {
-        const bool big = c % 50 == 0 || c == 0;
-        g.setColour(c == 0 ? kLilac : pal.mute.withAlpha(big ? 0.9f : 0.45f));
-        g.drawLine(X((float)c), yb - (big ? 12.f : 7.f) * u, X((float)c), yb, c == 0 ? 1.6f : 1.f);
-        if (c % 25 == 0 || c == 0) g.drawText(c > 0 ? "+" + String(c) : String(c), Rectangle<float>(X((float)c) - 12 * u, yb + 2 * u, 24 * u, 9 * u), juce::Justification::centred);
-    }
-    const float nx = X(dispCorr), c = juce::jlimit(-50.f, 50.f, dispCorr);
-    g.setColour(kPeach.withAlpha(0.35f)); g.fillRect(Rectangle<float>(juce::jmin(X(0), nx), yt, std::fabs(nx - X(0)), yb - yt - 12 * u));
-    juce::Path tri; tri.addTriangle(nx - 5 * u, yt - 3 * u, nx + 5 * u, yt - 3 * u, nx, yt + 6 * u);
-    g.setColour(std::fabs(dispCorr) > 50.f ? kPeach.brighter(0.3f) : kPeach); g.fillPath(tri);
-    g.fillRect(nx - 0.8f * u, yt + 4 * u, 1.6f * u, yb - yt - 14 * u);
-    g.setColour(kIce); g.setFont(mono(11.f * u));
-    g.drawText(String::formatted("%+.0f ct", (double)dispCorr), Rectangle<float>(r.getRight() - 80 * u, r.getY() + 5 * u, 72 * u, 14 * u), juce::Justification::centredRight);
-    (void)c;
+    kit::w::dial(g, r, dispCorr, -50.f, 50.f, {{-50.f, -25.f, Colour(0xFFE0603A).withAlpha(0.8f)}, {25.f, 50.f, Colour(0xFFE0603A).withAlpha(0.8f)}},
+                 {-50.f, -25.f, 0.f, 25.f, 50.f}, u8("Correction ct"), true);
 }
 
+// Afficheur rouge à 7 segments : note chantée (grande), écart en cents, note cible.
 void AutotuneEditor::paintReadout(juce::Graphics& g, Rectangle<float> r) {
     const float u = u_;
-    screenWell(g, pal, r);
+    screenWell(g, pal, r, Display::Seg7);
+    const auto ink = displayColours(Display::Seg7, pal).ink;
     const bool v = lastDet > 0.f;
     const int sungN = (int)std::lround(lastDet);
-    const String sung = v ? nName(sungN) : String(u8("\xE2\x80\x94"));
     const float dev = v ? (lastDet - (lastTgt > 0.f ? lastTgt : (float)sungN)) * 100.f : 0.f;
-    const String tg = v && lastTgt > 0.f ? nName((int)lastTgt) : String(u8("\xE2\x80\x94"));
-    auto row = [&](float y, const char* name, const String& val, Colour c) {
-        g.setColour(pal.mute); g.setFont(mono(7.6f * u)); g.drawText(u8(name), Rectangle<float>(r.getX() + 10 * u, r.getY() + y * u, 70 * u, 14 * u), juce::Justification::centredLeft);
-        g.setColour(c); g.setFont(mono(11.f * u)); g.drawText(val, Rectangle<float>(r.getX() + 60 * u, r.getY() + y * u, r.getWidth() - 70 * u, 14 * u), juce::Justification::centredRight);
-    };
-    row(7, "CHANT\xC3\x89", sung + (v ? String::formatted("  %+.0f ct", (double)dev) : String()), kIce);
-    row(29, "CIBLE", tg, kLilac);
+    g.setColour(ink.withAlpha(0.07f)); g.setFont(lcdFont(40.f * u)); g.drawText("888", Rectangle<float>(r.getX() + 8 * u, r.getY() + 4 * u, 100 * u, r.getHeight() - 8 * u), juce::Justification::centredLeft, false);
+    g.setColour(ink); g.drawText(v ? nName(sungN) : String("--"), Rectangle<float>(r.getX() + 8 * u, r.getY() + 4 * u, 100 * u, r.getHeight() - 8 * u), juce::Justification::centredLeft, false);
+    screenText(g, pal, Display::Seg7, v ? String::formatted("%+03d", juce::roundToInt(dev)) : String("---"), Rectangle<float>(r.getRight() - 92 * u, r.getY() + 8 * u, 84 * u, 30 * u), juce::Justification::centredRight, 24.f * u);
+    g.setColour(ink.withAlpha(0.7f)); g.setFont(mono(8.f * u));
+    g.drawText("CT", Rectangle<float>(r.getRight() - 30 * u, r.getY() + 40 * u, 22 * u, 10 * u), juce::Justification::centredRight);
+    g.drawText(u8("CIBLE ") + (v && lastTgt > 0.f ? nName((int)lastTgt) : String("--")), Rectangle<float>(r.getRight() - 120 * u, r.getBottom() - 16 * u, 84 * u, 10 * u), juce::Justification::centredRight);
 }
 
 void AutotuneEditor::paint(juce::Graphics& g) {
     const float u = u_;
-    g.drawImageAt(plate, 0, 0);
-    for (float y : {14.f, 552.f}) for (float x : {14.f, 986.f}) screw(g, x * u, y * u, 5.f * u, (x + y) * 0.7f);
-    g.setColour(juce::Colours::black.withAlpha(0.45f)); g.fillRect(S(0, 0, 3, kH)); g.fillRect(S(997, 0, 3, kH));
-    g.setColour(juce::Colours::white.withAlpha(0.07f)); g.fillRect(S(3, 0, 1, kH)); g.fillRect(S(996, 0, 1, kH));
+    kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Autotune", kit::w::serial::autotune});
+    engraved(g, pal, "Preset", S(370, 11, 64, 28), juce::Justification::centredRight, 8.f * u, 2.f * u, true);
+    engraved(g, pal, "Latence", S(650, 11, 62, 28), juce::Justification::centredRight, 8.f * u, 2.f * u, true);
+    engraved(g, pal, u8("Tonalit\xC3\xA9"), S(770, 62, 200, 12), juce::Justification::centredLeft, 8.f * u, 2.f * u, true);
+    engraved(g, pal, "Gamme", S(770, 110, 200, 12), juce::Justification::centredLeft, 8.f * u, 2.f * u, true);
 
-    engraved(g, pal, "dreamaws", S(30, 14, 120, 12), juce::Justification::centredLeft, 8.8f * u, 2.6f * u);
-    engraved(g, pal, "Orbe Autotune", S(30, 28, 340, 30), juce::Justification::centredLeft, 24.f * u, 3.6f * u, true);
-    g.setColour(pal.mute); g.setFont(fnt(9.6f * u));
-    g.drawText(u8("Correction de hauteur en temps r\xC3\xA9" "el \xC2\xB7 d\xC3\xA9tection YIN"), S(30, 58, 340, 13), juce::Justification::centredLeft);
-    g.setFont(mono(8.4f * u)); g.drawText("DW-701", S(372, 22, 60, 12), juce::Justification::centredLeft);
-    g.setColour(kPeach.withAlpha(0.9f)); g.fillRect(S(440, 62, 28, 1.6f)); g.setColour(kLilac.withAlpha(0.9f)); g.fillRect(S(468, 62, 28, 1.6f)); g.setColour(kIce.withAlpha(0.9f)); g.fillRect(S(496, 62, 28, 1.6f));
-    engraved(g, pal, "Latence", S(644, 16, 100, 12), juce::Justification::centredLeft, 7.8f * u, 2.f * u, true);
-    engraved(g, pal, "Preset", S(430, 16, 100, 12), juce::Justification::centredLeft, 7.8f * u, 2.f * u, true);
-    engraved(g, pal, u8("Tonalit\xC3\xA9"), S(770, 72, 200, 12), juce::Justification::centredLeft, 7.8f * u, 2.f * u, true);
-    engraved(g, pal, "Gamme", S(770, 122, 200, 12), juce::Justification::centredLeft, 7.8f * u, 2.f * u, true);
-
-    paintScreen(g, S(24, 76, 726, 258));
-    paintGauge(g, S(770, 172, 206, 76));
-    paintReadout(g, S(770, 258, 206, 56));
-    engraved(g, pal, u8("Masque de notes \xC2\xB7 clique pour modifier"), S(770, 322, 206, 11), juce::Justification::centredLeft, 6.6f * u, 1.2f * u, true);
+    paintScreen(g, S(24, 62, 726, 268));
+    paintReadout(g, S(770, 160, 206, 62));
+    paintGauge(g, S(770, 230, 206, 100));
+    engraved(g, pal, u8("Masque de notes"), S(770, 340, 206, 12), juce::Justification::centredLeft, 8.f * u, 1.6f * u, true);
 
     module(g, "Correction", 24, 234, 398);
     module(g, "Hauteur", 282, 156, 398);
@@ -359,11 +295,4 @@ void AutotuneEditor::paint(juce::Graphics& g) {
     module(g, "Doublage", 806, 78, 398);
     module(g, "Sortie", 898, 78, 398);
 
-    const int lat = proc.getLatencySamples(); const double sr = proc.getSampleRate() > 0 ? proc.getSampleRate() : 48000.0;
-    auto lw = S(24, 534, 230, 20);
-    screenWell(g, pal, lw);
-    g.setColour(pal.mute); g.setFont(mono(8.f * u));
-    g.drawText(u8("LATENCE ") + String(lat) + u8(" \xC3\xA9" "ch. \xC2\xB7 ") + String(1000.0 * lat / sr, 1) + " ms", lw.reduced(8 * u, 0), juce::Justification::centredLeft);
-    g.setColour(pal.mute); g.setFont(fnt(9.f * u));
-    g.drawText(u8("Hauteur chant\xC3\xA9" "e (bleu) \xC2\xB7 sortie corrig\xC3\xA9" "e (p\xC3\xAA" "che) \xC2\xB7 note cible (blanc) \xC2\xB7 lignes lilas : notes de la gamme"), S(270, 534, 700, 20), juce::Justification::centredLeft);
 }

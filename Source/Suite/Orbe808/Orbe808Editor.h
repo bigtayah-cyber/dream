@@ -42,7 +42,7 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    juce::Image plate;
+    kit::w::HelpKey help;
     float u_ = 1.f;
 
     juce::Slider knobs[kKnobs];
