@@ -47,15 +47,16 @@ jobs:
           ditto -c -k dist dreamaws-effets-macOS.zip
           ditto -c -k dist-instruments dreamaws-instruments-macOS.zip
 
-      - name: Valider (pluginval niveau 5)
+      - name: Valider (pluginval niveau 10, VST3 et AU)
         continue-on-error: true
         run: |
           curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pv.zip
-          for V in dist/*.vst3 dist-instruments/*.vst3; do
-            P=$(basename "$V" .vst3)
-            { echo "--- pluginval VST3 $P ---"
-              ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --skip-gui-tests --validate "$V" 2>&1 | tail -3
+          for V in dist/*.vst3 dist-instruments/*.vst3 dist/*.component dist-instruments/*.component; do
+            [ -e "$V" ] || continue
+            P=$(basename "$V")
+            { echo "--- pluginval $P ---"
+              ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --timeout-ms 120000 --validate "$V" 2>&1 | tail -4
             } >> validation.txt 2>&1
           done
 
