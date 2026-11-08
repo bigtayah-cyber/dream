@@ -1,0 +1,109 @@
+// Test console du moteur Orbe Denoiser (sans JUCE). Cible : orbedenoiser_test (EXCLUDE_FROM_ALL).
+#include <cstdio>
+#include <random>
+#include "../../Kit/BypassFadeTest.h"
+#include <cstdlib>
+#include <new>
+#include "DenoiserDsp.h"
+
+static long g_allocs = 0; static bool g_count = false;   // allocateur instrumenté
+void* operator new(std::size_t n) { if (g_count) ++g_allocs; if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+static int fails = 0;
+#define CHECK(c, ...) do { if (!(c)) { ++fails; std::printf("ECHEC: " __VA_ARGS__); std::printf("\n"); } } while (0)
+static const float sr = 48000.f;
+
+static void run(dn::Engine& e, const std::vector<float>& x, std::vector<float>& y) {
+    y.assign(x.size(), 0.f); std::vector<float> r(480);
+    for (size_t p = 0; p < x.size(); p += 480) { const int c = (int)std::min<size_t>(480, x.size() - p); e.process(x.data() + p, nullptr, y.data() + p, r.data(), c); }
+}
+static double rms(const std::vector<float>& v, size_t a, size_t b) { double s = 0; for (size_t i = a; i < b; ++i) s += (double)v[i] * v[i]; return std::sqrt(s / (double)(b - a)); }
+static double db(double x) { return 20 * std::log10(x + 1e-12); }
+// amplitude de la composante à f (démodulation)
+static double tone(const std::vector<float>& v, size_t a, size_t b, double f) {
+    double c = 0, s = 0; for (size_t i = a; i < b; ++i) { const double w = 2 * odsp::kPi * f * (double)i / sr; c += v[i] * std::cos(w); s += v[i] * std::sin(w); }
+    return 2 * std::sqrt(c * c + s * s) / (double)(b - a);
+}
+
+int main() {
+    std::mt19937 rng(7); std::normal_distribution<float> nd(0.f, 1.f);
+    const float nAmp = std::pow(10.f, -40.f / 20.f);  // bruit blanc gaussien de -40 dBFS efficace
+    auto noise = [&](size_t n) { std::vector<float> v(n); for (auto& s : v) s = nAmp * nd(rng); return v; };
+    dn::Params prm;  // réglages par défaut
+
+    { // bruit seul, profil appris : réduction >= 12 dB
+        dn::Engine e; e.prepare(sr); e.set(prm);
+        auto x = noise((size_t)(sr * 8)); std::vector<float> y;
+        e.startLearn(); run(e, x, y);
+        CHECK(e.profileKnown(), "profil non appris");
+        const double rin = rms(x, (size_t)(sr * 4), (size_t)(sr * 8)), rout = rms(y, (size_t)(sr * 4), (size_t)(sr * 8));
+        std::printf("bruit seul (profil appris) : %.1f dB de réduction\n", db(rin) - db(rout));
+        CHECK(db(rin) - db(rout) >= 12.0, "réduction insuffisante %.1f", db(rin) - db(rout));
+        bool ok = true; for (float v : y) ok &= std::isfinite(v); CHECK(ok, "NaN");
+    }
+    { // bruit seul, mode adaptatif sans profil
+        dn::Engine e; e.prepare(sr); e.set(prm);
+        auto x = noise((size_t)(sr * 10)); std::vector<float> y; run(e, x, y);
+        const double r = db(rms(x, (size_t)(sr * 6), (size_t)(sr * 10))) - db(rms(y, (size_t)(sr * 6), (size_t)(sr * 10)));
+        std::printf("bruit seul (adaptatif) : %.1f dB de réduction\n", r);
+        CHECK(r >= 8.0, "adaptatif trop faible %.1f", r);
+    }
+    { // sinus 1 kHz -20 dBFS dans le bruit : sinus préservé (< 1 dB)
+        dn::Engine e; e.prepare(sr); e.set(prm);
+        auto n0 = noise((size_t)(sr * 2.5)); std::vector<float> y; run(e, n0, y);  // silence : apprentissage
+        e.startLearn(); run(e, n0, y);
+        auto x = noise((size_t)(sr * 6)); for (size_t i = 0; i < x.size(); ++i) x[i] += 0.1f * std::sin(2 * (float)odsp::kPi * 1000.f * (float)i / sr);
+        run(e, x, y);
+        const size_t a = (size_t)(sr * 3), b = (size_t)(sr * 6);
+        const double din = db(tone(x, a, b, 1000)), dout = db(tone(y, a + dn::kLatency, b + dn::kLatency > y.size() ? y.size() : b, 1000));
+        // la sortie est retardée : on compare sur une fenêtre décalée de la latence
+        std::vector<float> yy(y.begin() + dn::kLatency, y.end()); yy.resize(x.size());
+        const double dout2 = db(tone(yy, a, b - 1000, 1000));
+        std::printf("sinus 1 kHz : entrée %.2f dBFS, sortie %.2f dBFS (écart %.2f dB)\n", din, dout2, dout2 - din);
+        CHECK(std::fabs(dout2 - din) < 1.0, "sinus altéré de %.2f dB", dout2 - din); (void)dout;
+        std::vector<float> nn(yy.begin() + a, yy.begin() + b); (void)nn;
+    }
+    { // latence mesurée = latence déclarée (réduction 0 dB => sortie = entrée retardée)
+        dn::Params p0 = prm; p0.reduction = 0.f; p0.adaptive = false;
+        dn::Engine e; e.prepare(sr); e.set(p0);
+        std::vector<float> x((size_t)(sr * 2)), y;
+        for (size_t i = 0; i < x.size(); ++i) x[i] = 0.3f * std::sin(2 * (float)odsp::kPi * 1000.f * (float)i / sr) + 0.2f * std::sin(2 * (float)odsp::kPi * 3777.f * (float)i / sr) + 0.05f * nd(rng);
+        run(e, x, y);
+        int best = -1; double be = 1e30;
+        for (int d = 0; d < 4000; ++d) { double err = 0; for (size_t i = 20000; i < 30000; ++i) { const double v = y[i] - x[i - (size_t)d]; err += v * v; } if (err < be) { be = err; best = d; } }
+        std::printf("latence mesurée %d (déclarée %d), erreur %.2e\n", best, e.latency(), be / 10000);
+        CHECK(best == e.latency(), "latence %d != %d", best, e.latency()); CHECK(be / 10000 < 1e-8, "reconstruction imparfaite");
+    }
+    { // bypass transparent (exactement l'entrée retardée)
+        odsp::BypassDelay b; b.init(dn::kLatency);
+        auto x = noise(6000); auto a = x, c = x;
+        b.process(a.data(), c.data(), 6000, true);
+        bool ok = true; for (size_t i = 0; i < 6000; ++i) ok &= a[i] == (i >= (size_t)dn::kLatency ? x[i - (size_t)dn::kLatency] : 0.f) && c[i] == a[i];
+        CHECK(ok, "bypass non transparent");
+    }
+    { // réglages extrêmes, ronflement, écoute du bruit retiré, autres fréquences d'échantillonnage
+        for (double s : {44100.0, 96000.0}) for (int hum : {0, 1, 2}) {
+            dn::Engine e; e.prepare(s); dn::Params p; p.reduction = 24; p.sens = 1; p.smooth = 1; p.air = 1; p.hum = hum; p.listen = hum == 2;
+            e.set(p); auto x = noise(100000); std::vector<float> y; run(e, x, y); e.startLearn(); run(e, x, y);
+            bool ok = true; for (float v : y) ok &= std::isfinite(v) && std::fabs(v) < 4.f; CHECK(ok, "NaN/hors borne à %g Hz hum %d", s, hum);
+        }
+    }
+    { // bypass honoré (même Fader que processBlock) : sortie = entrée retardée de la latence (< -120 dB), saut au basculement < -60 dBFS
+        dn::Engine e; dn::Params p; p.reduction = 18.f; std::vector<float> sc(4096);
+        auto m = bypassfx::measure(sr, e.latency(), 512, [&] { e.prepare(sr); e.set(p); }, [&](float* l, float* r, int n) { e.process(l, r, l, r ? r : sc.data(), n); });
+        std::printf("bypass %s : latence %d, erreur %.1f dB, saut au basculement %.1f dBFS (signal seul : %.1f)\n", "OrbeDenoiser", e.latency(), m.exactDb, m.jumpDb, m.plainDb);
+        CHECK(m.exactDb < -120.0, "bypass non exact : %.1f dB", m.exactDb); CHECK(m.jumpDb < -60.0, "clic au basculement : %.1f dBFS", m.jumpDb);
+    }
+    { // zéro allocation dans le temps réel : set + process (apprentissage, hum, écoute, adaptatif), après prepare
+        dn::Engine e; e.prepare(sr); dn::Params p; std::vector<float> x(48000), y(48000), z(48000); for (auto& s : x) s = 0.01f * nd(rng);
+        std::vector<float> prof((size_t)dn::kBins, 1e-6f);
+        g_allocs = 0; g_count = true;
+        e.startLearn(); e.setProfile(prof);
+        for (int pass = 0; pass < 4; ++pass) { p.hum = pass % 3; p.listen = pass == 2; p.adaptive = pass != 1; e.set(p); if (pass == 2) e.startLearn(); for (int s = 0; s + 480 <= 48000; s += 480) e.process(x.data() + s, x.data() + s, y.data() + s, z.data() + s, 480); }
+        g_count = false;
+        std::printf("allocations dans set/process du Denoiser (apprentissage, hum, écoute) : %ld\n", g_allocs); CHECK(g_allocs == 0, "%ld allocation(s) dans le chemin temps réel", g_allocs);
+    }
+    std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
+    return fails ? 1 : 0;
+}
