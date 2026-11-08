@@ -1,0 +1,88 @@
+name: build-macos
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tests des moteurs (Voile et Orbe)
+        run: |
+          clang++ -O2 -std=c++17 tests/offline.cpp -o offline_test && ./offline_test
+          clang++ -O2 -std=c++17 tests/orbe_test.cpp -o orbe_test && ./orbe_test
+          clang++ -O2 -std=c++17 tests/onek_test.cpp -o onek_test && ./onek_test
+
+      - name: Configurer (binaire universel arm64 + x86_64)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Compiler VST3 et AU
+        run: cmake --build build --config Release -j 4
+
+      - name: Signer (ad hoc) et empaqueter
+        run: |
+          mkdir -p dist
+          find build -name "*.vst3" -type d -prune | while read -r VST; do
+            P=$(basename "$VST" .vst3)
+            AU="$(dirname "$VST")/../AU/$P.component"
+            [ -d "$AU" ] || AU=$(find build -name "$P.component" -type d | head -1)
+            codesign --force --deep -s - "$VST"
+            codesign --force --deep -s - "$AU"
+            cp -R "$VST" "$AU" dist/
+            echo "$P architectures : $(lipo -archs "$VST/Contents/MacOS/$P")" | tee -a validation.txt
+          done
+          # deux paquets (GitHub refuse un fichier de plus de 100 Mo) : effets et instruments
+          mkdir -p dist-instruments
+          for N in "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne"; do
+            mv "dist/$N.vst3" "dist/$N.component" dist-instruments/ 2>/dev/null || true
+          done
+          mkdir -p dist-studio
+          for N in "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix"; do
+            mv "dist/$N.vst3" "dist/$N.component" dist-studio/ 2>/dev/null || true
+          done
+          for D in dist dist-studio dist-instruments; do
+            cp installer/Installer-dreamaws.command $D/
+            chmod +x $D/Installer-dreamaws.command
+          done
+          ditto -c -k dist dreamaws-voix-macOS.zip
+          ditto -c -k dist-studio dreamaws-studio-macOS.zip
+          ditto -c -k dist-instruments dreamaws-instruments-macOS.zip
+
+      - name: Valider (pluginval niveau 10, VST3 et AU)
+        continue-on-error: true
+        run: |
+          curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pv.zip
+          for V in dist/*.vst3 dist-studio/*.vst3 dist-instruments/*.vst3 dist/*.component dist-studio/*.component dist-instruments/*.component; do
+            [ -e "$V" ] || continue
+            P=$(basename "$V")
+            { echo "--- pluginval $P ---"
+              ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --timeout-ms 120000 --validate "$V" 2>&1 | tail -4
+            } >> validation.txt 2>&1
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dreamaws-plugins-macOS
+          path: |
+            dreamaws-voix-macOS.zip
+            dreamaws-studio-macOS.zip
+            dreamaws-instruments-macOS.zip
+            validation.txt
+
+      - name: Publier sur la branche builds
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir out && cp dreamaws-voix-macOS.zip dreamaws-studio-macOS.zip dreamaws-instruments-macOS.zip validation.txt out/
+          cd out
+          git init -q -b builds
+          git config user.name build
+          git config user.email build@users.noreply.github.com
+          git add .
+          git commit -qm "build macOS ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" builds
