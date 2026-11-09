@@ -108,8 +108,9 @@ PadsEditor::PadsEditor(PadsProcessor& p)
     clearB.setTooltip(u8("Supprimer tous les repères sauf le premier"));
     importB.onClick = [this] {
         chooser = std::make_unique<juce::FileChooser>(u8("Choisir un sample"), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.m4a;*.caf");
+        juce::Component::SafePointer<PadsEditor> self(this);
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                             [safe = juce::Component::SafePointer<PadsEditor>(this)](const juce::FileChooser& fc) { if (safe && fc.getResult().existsAsFile()) safe->loadFile(fc.getResult()); });
+                             [safe = self](const juce::FileChooser& fc) { if (safe && fc.getResult().existsAsFile()) safe->loadFile(fc.getResult()); });
     };
     demoB.onClick = [this] { proc.loadDemo(); };
     clearB.onClick = [this] { proc.clearMarks(); };
@@ -330,7 +331,7 @@ void PadsEditor::waveDown(const juce::MouseEvent& e) {
         for (int i = 1; i < (int)m2.size(); ++i) if (std::abs(m2[(size_t)i] - f) < snap->pcm->sr * 0.03) dragMark = i;
         return;
     }
-    for (int i = 0; i < snap->nsl; ++i) if (f >= snap->a[i] && f < snap->b[i]) { selectPad(i); proc.padDown(i, 0.9f); juce::Timer::callAfterDelay(160, [safe = juce::Component::SafePointer<PadsEditor>(this), i] { if (safe) safe->proc.padUp(i); }); break; }
+    for (int i = 0; i < snap->nsl; ++i) if (f >= snap->a[i] && f < snap->b[i]) { selectPad(i); proc.padDown(i, 0.9f); { juce::Component::SafePointer<PadsEditor> self(this); juce::Timer::callAfterDelay(160, [safe = self, i] { if (safe) safe->proc.padUp(i); }); } break; }
 }
 
 void PadsEditor::waveDrag(const juce::MouseEvent& e) {

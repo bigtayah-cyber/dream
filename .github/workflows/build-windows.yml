@@ -22,7 +22,7 @@ jobs:
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
 
       - name: Compiler les VST3
-        run: cmake --build build -j 4
+        run: cmake --build build -j 4 -- -k 0
 
       - name: Empaqueter
         run: |

@@ -89,8 +89,9 @@ SampleEditor::SampleEditor(SampleProcessor& p)
     importB.setTooltip(u8("Charger un son (WAV, AIFF, FLAC, OGG) : il est enregistré dans le projet"));
     importB.onClick = [this] {
         chooser = std::make_unique<juce::FileChooser>(u8("Choisir un son"), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.m4a;*.caf");
+        juce::Component::SafePointer<SampleEditor> self(this);
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                             [safe = juce::Component::SafePointer<SampleEditor>(this)](const juce::FileChooser& fc) { if (safe && fc.getResult().existsAsFile()) safe->loadFile(fc.getResult()); });
+                             [safe = self](const juce::FileChooser& fc) { if (safe && fc.getResult().existsAsFile()) safe->loadFile(fc.getResult()); });
     };
     demoB.onClick = [this] { proc.loadDemo(); };
 
