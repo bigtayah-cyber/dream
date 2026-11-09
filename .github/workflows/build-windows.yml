@@ -1,0 +1,63 @@
+name: build-windows
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  win:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer (x64, MSVC)
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compiler les VST3
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Empaqueter
+        run: |
+          mkdir -p dist dist-studio dist-instruments
+          find build -type d -name "*.vst3" -path "*Release*" -prune | while read -r V; do cp -R "$V" dist/; done
+          ls dist
+          for N in "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne"; do
+            [ -d "dist/$N.vst3" ] && mv "dist/$N.vst3" dist-instruments/ || true
+          done
+          for N in "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix"; do
+            [ -d "dist/$N.vst3" ] && mv "dist/$N.vst3" dist-studio/ || true
+          done
+          for D in dist dist-studio dist-instruments; do cp installer/Installer-dreamaws.bat $D/; done
+          powershell -NoProfile -Command "Compress-Archive -Path dist/* -DestinationPath dreamaws-voix-Windows.zip"
+          powershell -NoProfile -Command "Compress-Archive -Path dist-studio/* -DestinationPath dreamaws-studio-Windows.zip"
+          powershell -NoProfile -Command "Compress-Archive -Path dist-instruments/* -DestinationPath dreamaws-instruments-Windows.zip"
+          ls -l *.zip
+
+      - name: Valider (pluginval niveau 10)
+        continue-on-error: true
+        run: |
+          curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          unzip -q pv.zip
+          for V in dist/*.vst3 dist-studio/*.vst3 dist-instruments/*.vst3; do
+            [ -e "$V" ] || continue
+            { echo "--- pluginval $(basename "$V") ---"
+              ./pluginval.exe --strictness-level 10 --skip-gui-tests --timeout-ms 120000 --validate "$V" 2>&1 | tail -4
+            } >> validation-windows.txt 2>&1
+          done
+
+      - name: Publier sur la branche builds-win
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir out && cp dreamaws-*-Windows.zip out/ && cp validation-windows.txt out/ || true
+          cd out
+          git init -q -b builds-win
+          git config user.name build
+          git config user.email build@users.noreply.github.com
+          git add .
+          git commit -qm "build Windows ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" builds-win

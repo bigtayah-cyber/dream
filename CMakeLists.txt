@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 
+if(MSVC)
+    add_compile_options(/utf-8 /bigobj /Zc:__cplusplus)
+endif()
+
 include(FetchContent)
 FetchContent_Declare(juce
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
