@@ -14,16 +14,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configurer (x64, MSVC)
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configurer (x64, MSVC, Ninja)
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
 
       - name: Compiler les VST3
-        run: cmake --build build --config Release --parallel 4
+        run: cmake --build build -j 4
 
       - name: Empaqueter
         run: |
           mkdir -p dist dist-studio dist-instruments
-          find build -type d -name "*.vst3" -path "*Release*" -prune | while read -r V; do cp -R "$V" dist/; done
+          find build -type d -name "*.vst3" -prune | while read -r V; do cp -R "$V" dist/; done
           ls dist
           for N in "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne"; do
             [ -d "dist/$N.vst3" ] && mv "dist/$N.vst3" dist-instruments/ || true
