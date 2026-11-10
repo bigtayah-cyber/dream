@@ -40,7 +40,31 @@ Légende : **D** = documenté (source), **H** = hypothèse / valeur plausible. T
 | 9 | Sépia | Boom-bap chaleureux (US/FR 90s) | EQ chaud → Comp doux → Sat « bande » → De-ess → Slap → Room |
 | 10 | Satin | Pop électro alternative intime, doublée (S1) | EQ → Comp doux → Sat discrète → De-ess 6,5 kHz → Doubles → Reverb sèche |
 
-## 3. Plages de réglage par look (EQ, dynamique, saturation, hauteur)
+## 2 bis. Les 17 looks ajoutés (vague 2, index 11 à 27)
+
+Ajoutés à la suite des 10 d'origine, qui gardent leur index (compatibilité des projets). La liste de l'éditeur les range par catégorie : **Classiques** (les 10 d'origine), **Rap** (8), **Pop électro** (9). Toutes les valeurs sont des **hypothèses d'écoute (H)**, construites à partir des sources du § 1 et des familles du § 2, sans mesure de chaîne réelle ; à juger à l'oreille dans FL Studio. Colonne « Modules » : ceux que le look déclare (champ `mods` de `Source/Suite/OrbeChain/Looks.h`, lettres gravées sur la face).
+
+| # | Nom | Catégorie | Description (affichée) | Modules |
+|---|---|---|---|---|
+| 11 | Obsidienne | Rap | Trap sombre, graves pleins, écho de noire | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 12 | Poussière | Rap | Boom-bap voilé, médiums gras, poussière | EQ, comp, sat, de-ess, delay, reverb |
+| 13 | Givre | Rap | Voix froide et fine, attaque sèche | EQ, comp, sat, de-ess, delay, reverb |
+| 14 | Brume | Rap | Voix flottante dans la brume, large et floue | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 15 | Mirage | Rap | Autotune mélodique lisse et brillant | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 16 | Cassette | Rap | Grain de bande usée, bas débit | EQ, comp, sat, delay, reverb |
+| 17 | Ruelle | Rap | Ad-libs : slap et échos de noire en avant | EQ, comp, sat, de-ess, delay, reverb |
+| 18 | Gueulante | Rap | Rap frontal, compression serrée, mordant | EQ, comp, sat, de-ess, delay, reverb |
+| 19 | Paillettes | Pop électro | Hyperpop étincelant, octave haute, ultra net | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 20 | Rêverie | Pop électro | Pop onirique, halo de réverbération long | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 21 | Opale | Pop électro | Synth-pop nacré, voix lustrée et aérienne | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 22 | Ondes | Pop électro | Voix de radio, bande médium compressée | EQ, comp, sat, delay, reverb |
+| 23 | Allô | Pop électro | Voix de téléphone, bande très étroite | EQ, comp, sat, delay, reverb |
+| 24 | Soupir | Pop électro | Souffle proche, très présent, très sec | EQ, comp, sat, de-ess, doubles, reverb |
+| 25 | Chorale | Pop électro | Chœur large, voix multipliées en éventail | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 26 | Automate | Pop électro | Voix robotique douce, hauteur verrouillée | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+| 27 | Nocturne | Pop électro | Pop alternatif nocturne, velouté et sombre | EQ, comp, sat, tune, de-ess, doubles, delay, reverb |
+
+## 3. Plages de réglage par look (EQ, dynamique, saturation, hauteur) : les 10 d'origine
 
 | Look | HP (Hz) | Creux / bosses EQ | Étagère aigus | Comp : ratio / attaque / release / GR | Saturation | Tune (retune · gamme) | Statut |
 |---|---|---|---|---|---|---|---|

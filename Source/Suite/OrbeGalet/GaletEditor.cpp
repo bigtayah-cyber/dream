@@ -2,6 +2,7 @@
 
 using namespace of;
 using kit::u8;
+namespace v3 = kit::v3;
 
 namespace {
 const Colour kJade(0xFFA8E6CF);   // galet de rivière : vert d'eau pâle
@@ -19,7 +20,67 @@ public:
         setTooltip(u8("Clic : ajouter un point. Glisser : d\xC3\xA9placer. Double-clic ou clic droit : supprimer. "
                       "Losange : courbure du segment (double-clic : droit). Haut = effet plein, bas = neutre."));
     }
+    const v3::Theme* T = nullptr;   // nul : rendu Classique
+    void setTheme(const v3::Theme* t) { T = t; setOpaque(t == nullptr); repaint(); }
+    void paint3(juce::Graphics& g) {
+        const auto& t = *T; const float u = k();
+        const auto r = area(); refreshLut();
+        const bool sync = ch(proc, "sync") == 0;
+        const double cq = sync ? gal::cycleQuarters(ch(proc, "div"), ch(proc, "feel")) : 4.0;
+        const int nd = divisions();
+        for (int i = 0; i <= nd; ++i) {
+            const float x = r.getX() + r.getWidth() * (float)i / (float)nd; const double q = cq * (double)i / (double)nd;
+            const bool beat = sync && std::fabs(q - std::round(q)) < 1e-6, bar = beat && ((int)std::llround(q) % 4 == 0);
+            g.setColour(juce::Colours::white.withAlpha(bar ? 0.16f : beat ? 0.10f : 0.045f)); g.fillRect(std::round(x), r.getY(), 1.f, r.getHeight());
+        }
+        for (int i = 0; i <= 4; ++i) { g.setColour(juce::Colours::white.withAlpha(i % 2 ? 0.04f : 0.08f)); g.fillRect(r.getX(), std::round(r.getY() + r.getHeight() * (float)i / 4.f), r.getWidth(), 1.f); }
+        juce::Path line, fill; const int steps = juce::jmax(64, (int)r.getWidth());
+        for (int i = 0; i <= steps; ++i) {
+            const float tt = (float)i / (float)steps, x = r.getX() + r.getWidth() * tt, y = yOf(at(tt), r);
+            if (i == 0) { line.startNewSubPath(x, y); fill.startNewSubPath(x, r.getBottom()); fill.lineTo(x, y); } else { line.lineTo(x, y); fill.lineTo(x, y); }
+        }
+        fill.lineTo(r.getRight(), r.getBottom()); fill.closeSubPath();
+        g.setGradientFill(juce::ColourGradient(t.accent.withAlpha(0.32f), 0, r.getY(), t.accent.withAlpha(0.02f), 0, r.getBottom(), false)); g.fillPath(fill);
+        const juce::PathStrokeType rs(1.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        g.setColour(t.accent.withAlpha(0.10f)); g.strokePath(line, juce::PathStrokeType(10.f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(t.accent.withAlpha(0.22f)); g.strokePath(line, juce::PathStrokeType(5.f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(t.accent.brighter(0.45f)); g.strokePath(line, juce::PathStrokeType(2.2f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        const auto& s = proc.shape();
+        if (ch(proc, "interp") != gal::Spline)
+            for (int kk = 0; kk < s.n; ++kk) {
+                const auto hp = handlePos(kk, r); if (hp.x < 0) continue;
+                juce::Path d; d.addPolygon(hp, 4, 4.6f * u, juce::MathConstants<float>::pi * 0.25f);
+                g.setColour((dragHandle == kk || hoverHandle == kk) ? t.accent.brighter(0.5f) : t.accent.withAlpha(0.55f)); g.fillPath(d);
+            }
+        for (int kk = 0; kk < s.n; ++kk) {
+            const auto c = ptPos(kk, r); const bool hot = dragPt == kk || hoverPt == kk; const float rad = (hot ? 7.f : 5.6f) * u;
+            g.setColour(juce::Colour(0xFF0A0D1C)); g.fillEllipse(Rectangle<float>(rad * 2, rad * 2).withCentre(c));
+            g.setColour(hot ? t.scrInk : t.accent.brighter(0.3f)); g.drawEllipse(Rectangle<float>(rad * 2, rad * 2).withCentre(c), 2.f * u);
+            if (hot) g.fillEllipse(Rectangle<float>(rad * 0.9f, rad * 0.9f).withCentre(c));
+        }
+        const float ph = proc.phaseNow(), m = proc.modNow(), px = r.getX() + r.getWidth() * ph;
+        g.setColour(t.out.withAlpha(0.55f)); g.fillRect(std::round(px), r.getY(), 1.4f, r.getHeight());
+        g.setColour(t.out.withAlpha(0.25f)); g.fillEllipse(Rectangle<float>(16.f * u, 16.f * u).withCentre({px, yOf(m, r)}));
+        g.setColour(t.out); g.fillEllipse(Rectangle<float>(9.f * u, 9.f * u).withCentre({px, yOf(m, r)}));
+        const juce::StringArray divs{"4 mes.", "2 mes.", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32"}, feels{"", " triolet", u8(" point\xC3\xA9")};
+        const String head = sync ? u8("Forme \xC2\xB7 cycle ") + divs[ch(proc, "div")] + feels[ch(proc, "feel")] : u8("Forme \xC2\xB7 cycle ") + v3::fmt::hz(proc.raw("hz"));
+        g.setColour(t.scrMute); v3::caps(g, head, Rectangle<float>(r.getX(), 10 * u, 360 * u, 18 * u), 11.5f * u, juce::Justification::centredLeft);
+        g.setColour(t.scrMute); v3::caps(g, String(s.n) + " / 32 pts", Rectangle<float>(r.getRight() - 300 * u, 10 * u, 130 * u, 18 * u), 11.5f * u, juce::Justification::centredRight);
+        g.setColour(t.accent.brighter(0.3f)); v3::tabular(g, "MOD " + v3::fmt::pct(m), Rectangle<float>(r.getRight() - 160 * u, 8 * u, 160 * u, 22 * u), v3::font(15.f * u, true), juce::Justification::centredRight);
+        const float by = r.getBottom() + 6 * u;
+        g.setFont(v3::font(11.5f * u));
+        if (sync && cq >= 1.0) {
+            const int nq = (int)std::floor(cq + 1e-6), stepQ = nq > 8 ? 2 : 1;
+            for (int q = 0; q < nq; q += stepQ) { const float x = r.getX() + r.getWidth() * (float)(q / cq); g.setColour(q % 4 == 0 ? t.scrInk : t.scrMute); g.drawText(String(q / 4 + 1) + "," + String(q % 4 + 1), Rectangle<float>(x + 2 * u, by, 40 * u, 16 * u), juce::Justification::centredLeft, false); }
+        } else {
+            g.setColour(t.scrMute);
+            g.drawText("0", Rectangle<float>(r.getX() + 2 * u, by, 30 * u, 16 * u), juce::Justification::centredLeft, false);
+            g.drawText(u8("\xC2\xBD"), Rectangle<float>(r.getCentreX() - 15 * u, by, 30 * u, 16 * u), juce::Justification::centred, false);
+            g.drawText("1 cycle", Rectangle<float>(r.getRight() - 80 * u, by, 80 * u, 16 * u), juce::Justification::centredRight, false);
+        }
+    }
     void paint(juce::Graphics& g) override {
+        if (T != nullptr) { paint3(g); return; }
         const float u = (float)getWidth() / 600.f; const auto pal = of::palette(kJade);
         auto well = getLocalBounds().toFloat(); kit::screenWell(g, pal, well, kit::Display::OLED);
         const auto r = area();
@@ -135,7 +196,8 @@ public:
         if (hh >= 0) { s.p[hh].c = 0.f; proc.setShape(s); }
     }
 private:
-    juce::Rectangle<float> area() const { const float u = (float)getWidth() / 600.f; return getLocalBounds().toFloat().withTrimmedLeft(12 * u).withTrimmedRight(12 * u).withTrimmedTop(22 * u).withTrimmedBottom(19 * u); }
+    float k() const { return (float)getWidth() / (T != nullptr ? 740.f : 600.f); }
+    juce::Rectangle<float> area() const { const float u = k(); return getLocalBounds().toFloat().withTrimmedLeft((T ? 20 : 12) * u).withTrimmedRight((T ? 20 : 12) * u).withTrimmedTop((T ? 40 : 22) * u).withTrimmedBottom((T ? 32 : 19) * u); }
     static float yOf(float v, juce::Rectangle<float> r) { return r.getBottom() - r.getHeight() * v; }
     static float valOf(float y, juce::Rectangle<float> r) { float v = juce::jlimit(0.f, 1.f, (r.getBottom() - y) / r.getHeight()); if (v < 0.015f) v = 0.f; if (v > 0.985f) v = 1.f; return v; }
     int divisions() const {
@@ -155,14 +217,14 @@ private:
         return {r.getX() + r.getWidth() * xm, yOf(ym, r)};
     }
     int hitPoint(juce::Point<float> p, juce::Rectangle<float> r) const {
-        const float u = (float)getWidth() / 600.f; int best = -1; float bd = 8.f * u;
+        const float u = k(); int best = -1; float bd = (T ? 11.f : 8.f) * u;
         for (int k = 0; k < proc.shape().n; ++k) { const float d = ptPos(k, r).getDistanceFrom(p); if (d < bd) { bd = d; best = k; } }
         return best;
     }
     int hitHandle(juce::Point<float> p, juce::Rectangle<float> r) const {
         if (ch(proc, "interp") == gal::Spline) return -1;
-        const float u = (float)getWidth() / 600.f;
-        for (int k = 0; k < proc.shape().n; ++k) { const auto h = handlePos(k, r); if (h.x >= 0 && h.getDistanceFrom(p) < 7.f * u) return k; }
+        const float u = this->k();
+        for (int i = 0; i < proc.shape().n; ++i) { const auto h = handlePos(i, r); if (h.x >= 0 && h.getDistanceFrom(p) < (T ? 10.f : 7.f) * u) return i; }
         return -1;
     }
     static void remove(gal::Shape& s, int k) { if (k <= 0 || k >= s.n) return; for (int i = k; i < s.n - 1; ++i) s.p[i] = s.p[i + 1]; --s.n; }
@@ -176,7 +238,59 @@ private:
 class TransferView : public juce::Component {
 public:
     explicit TransferView(GaletProcessor& p) : proc(p) { setOpaque(true); }
+    const v3::Theme* T = nullptr;
+    void setTheme(const v3::Theme* t) { T = t; setOpaque(t == nullptr); repaint(); }
+    void paint3(juce::Graphics& g) {
+        const auto& t = *T; const float u = (float)getWidth() / 380.f;
+        const int type = ch(proc, "drv_type"); const bool on = ch(proc, "drv_on") == 1;
+        const float maxDb = proc.raw("drv_drive") * proc.raw("drv_depth") * (on ? 1.f : 0.f), live = proc.driveNow(), color = proc.raw("drv_color");
+        const juce::StringArray types{"Tanh", "Arctan", "Pli doux"};
+        g.setColour(t.scrMute); v3::caps(g, u8("Transfert \xC2\xB7 ") + types[type], Rectangle<float>(18 * u, 12 * u, 220 * u, 18 * u), 11.5f * u, juce::Justification::centredLeft);
+        if (!on) { g.setColour(t.out); v3::caps(g, u8("Module coup\xC3\xA9"), Rectangle<float>(200 * u, 12 * u, 162 * u, 18 * u), 11.5f * u, juce::Justification::centredRight); }
+        auto r = Rectangle<float>(18 * u, 42 * u, 138 * u, 138 * u);
+        g.setColour(juce::Colours::white.withAlpha(0.08f)); g.fillRect(std::round(r.getCentreX()), r.getY(), 1.f, r.getHeight()); g.fillRect(r.getX(), std::round(r.getCentreY()), r.getWidth(), 1.f);
+        g.setColour(juce::Colours::white.withAlpha(0.06f)); g.drawRoundedRectangle(r, 6 * u, 1.f);
+        juce::Path diag; diag.startNewSubPath(r.getX(), r.getBottom()); diag.lineTo(r.getRight(), r.getY());
+        const float dash[] = {3.f * u, 3.f * u}; juce::Path dd; juce::PathStrokeType(1.f).createDashedStroke(dd, diag, dash, 2); g.setColour(juce::Colours::white.withAlpha(0.2f)); g.fillPath(dd);
+        auto curve = [&](float db) {
+            juce::Path p;
+            for (int i = 0; i <= 96; ++i) {
+                const float x = -1.f + 2.f * (float)i / 96.f, y = juce::jlimit(-1.2f, 1.2f, gal::transfer(type, db, color, x));
+                const float px = r.getX() + r.getWidth() * (x + 1.f) * 0.5f, py = r.getCentreY() - r.getHeight() * 0.5f * y / 1.2f;
+                if (i == 0) p.startNewSubPath(px, py); else p.lineTo(px, py);
+            }
+            return p;
+        };
+        { juce::Graphics::ScopedSaveState st(g); g.reduceClipRegion(r.toNearestInt());
+          g.setColour(t.accent.withAlpha(0.45f)); g.strokePath(curve(maxDb), juce::PathStrokeType(1.6f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+          const auto lp = curve(live);
+          g.setColour(t.accent.withAlpha(0.2f)); g.strokePath(lp, juce::PathStrokeType(6.f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+          g.setColour(t.scrInk); g.strokePath(lp, juce::PathStrokeType(2.2f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded)); }
+        const float ix = 184.f * u, iw = 180.f * u;
+        auto row = [&](float y, const String& kk, const String& v, Colour c) {
+            g.setColour(t.scrMute); v3::caps(g, kk, Rectangle<float>(ix, y, iw, 16 * u), 11.f * u, juce::Justification::centredLeft);
+            g.setColour(c); v3::tabular(g, v, Rectangle<float>(ix, y + 14 * u, iw, 24 * u), v3::font(18.f * u, true), juce::Justification::centredLeft);
+        };
+        row(40 * u, "Drive max", v3::fmt::withUnit("+" + v3::fmt::num(maxDb, 1), "dB"), t.accent.brighter(0.4f));
+        row(80 * u, "En direct", v3::fmt::withUnit("+" + v3::fmt::num(live, 1), "dB"), t.scrInk);
+        row(120 * u, "Couleur", v3::fmt::pct(color), t.accent.brighter(0.4f));
+        g.setColour(t.scrMute); g.setFont(v3::font(11.f * u));
+        g.drawText(u8("\xC3\x97" "4 \xC2\xB7 ADAA \xC2\xB7 ") + String(gal::Engine::kLatency) + u8(" \xC3\xA9" "ch."), Rectangle<float>(ix, 164 * u, iw, 16 * u), juce::Justification::centredLeft, false);
+        const char* names[4] = {"Vol", "Filtre", "Dist", "Pan"}; const char* ids[4] = {"vol_on", "flt_on", "drv_on", "pan_on"};
+        const float bw = 80.f * u;
+        for (int kk = 0; kk < 4; ++kk) {
+            const float x = 18.f * u + (float)kk * (bw + 8.f * u), y0 = 194.f * u;
+            const bool en = ch(proc, ids[kk]) == 1; const float v = juce::jlimit(0.f, 1.f, std::fabs(proc.envNow(kk)));
+            if (en && v > 0.02f) { g.setColour(t.accent.withAlpha(0.25f * v)); g.fillEllipse(Rectangle<float>(14.f * u, 14.f * u).withCentre({x + 5 * u, y0 + 8 * u})); }
+            g.setColour(en ? t.accent.withAlpha(0.35f + 0.65f * v) : t.scrMute.withAlpha(0.4f)); g.fillEllipse(Rectangle<float>(7.f * u, 7.f * u).withCentre({x + 5 * u, y0 + 8 * u}));
+            g.setColour(en ? t.scrInk : t.scrMute); v3::caps(g, names[kk], Rectangle<float>(x + 14 * u, y0, bw - 14 * u, 16 * u), 11.f * u, juce::Justification::centredLeft);
+            auto bar = Rectangle<float>(x, y0 + 20 * u, bw, 6 * u);
+            g.setColour(juce::Colours::white.withAlpha(0.08f)); g.fillRoundedRectangle(bar, 3 * u);
+            g.setColour(en ? t.accent : t.scrMute.withAlpha(0.4f)); g.fillRoundedRectangle(bar.withWidth(juce::jmax(6.f * u, bw * v)), 3 * u);
+        }
+    }
     void paint(juce::Graphics& g) override {
+        if (T != nullptr) { paint3(g); return; }
         const float u = (float)getWidth() / 280.f; const auto pal = of::palette(kJade);
         auto well = getLocalBounds().toFloat(); kit::screenWell(g, pal, well, kit::Display::OLED);
         const int type = ch(proc, "drv_type"); const bool on = ch(proc, "drv_on") == 1;
@@ -260,17 +374,21 @@ GaletEditor::GaletEditor(GaletProcessor& p)
         {"drv_depth", "Profondeur", "Part du drive appliqu\xC3\xA9" "e par la forme."},
         {"pan_pan", "Pan", "Position atteinte quand la forme est en haut (G / D)."},
         {"pan_width", "Largeur", "Largeur st\xC3\xA9r\xC3\xA9o atteinte quand la forme est en haut (-100 % : mono, +100 % : \xC3\xA9largi)."}};
-    for (auto& d : defs) { auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(pt); }
-    syncSeg = std::make_unique<Seg>(proc.apvts, "sync", juce::StringArray{"Tempo", "Hz"}, u8("Tempo : cycle cal\xC3\xA9 sur le tempo de l'h\xC3\xB4te. Hz : vitesse libre."), pal);
-    retrigSeg = std::make_unique<Seg>(proc.apvts, "retrig", juce::StringArray{u8("H\xC3\xB4te"), "Note", "Libre"},
+    for (auto& d : defs) {
+        auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(pt);
+        auto* k = k3.add(new v3::Knob3(proc.apvts, d.id, u8(d.lab), u8(d.tip), v3::KnobSize::S));
+        k->setBipolar(v3::rk::bipolarOf(proc.apvts, d.id)); k->setLabelPx(11.f); addChildComponent(k);
+    }
+    syncSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "sync", juce::StringArray{"Tempo", "Hz"}, u8("Tempo : cycle cal\xC3\xA9 sur le tempo de l'h\xC3\xB4te. Hz : vitesse libre."), pal);
+    retrigSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "retrig", juce::StringArray{u8("H\xC3\xB4te"), "Note", "Libre"},
                                       u8("H\xC3\xB4te : suit la position de lecture. Note : chaque note MIDI relance la forme. Libre : tourne sans fin."), pal);
-    feelSeg = std::make_unique<Seg>(proc.apvts, "feel", juce::StringArray{"Droit", "Triolet", u8("Point\xC3\xA9")}, u8("Valeur de la division : droite, en triolet (\xC3\x97 2/3) ou point\xC3\xA9" "e (\xC3\x97 1,5)."), pal);
-    interpSeg = std::make_unique<Seg>(proc.apvts, "interp", juce::StringArray{"Libre", "En S", "Spline"},
+    feelSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "feel", juce::StringArray{"Droit", "Triolet", u8("Point\xC3\xA9")}, u8("Valeur de la division : droite, en triolet (\xC3\x97 2/3) ou point\xC3\xA9" "e (\xC3\x97 1,5)."), pal);
+    interpSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "interp", juce::StringArray{"Libre", "En S", "Spline"},
                                       u8("Libre : courbure exponentielle par segment. En S : courbure sym\xC3\xA9trique. Spline : passe en douceur par tous les points."), pal);
     for (auto* s : {syncSeg.get(), retrigSeg.get(), feelSeg.get(), interpSeg.get()}) addAndMakeVisible(s);
     const char* mods[4] = {"vol_on", "flt_on", "drv_on", "pan_on"};
     for (auto* id : mods) {
-        auto* k = modKeys.add(new Key("On", pal, kJade)); addAndMakeVisible(k);
+        auto* k = modKeys.add(new v3::rk::Key("On", pal, kJade)); addAndMakeVisible(k);
         k->setTooltip(u8("Active le module : la forme le pilote (fondu sans clic)."));
         modAtts.add(new juce::AudioProcessorValueTreeState::ButtonAttachment(proc.apvts, id, *k));
     }
@@ -279,7 +397,7 @@ GaletEditor::GaletEditor(GaletProcessor& p)
     snapKey.setTooltip(u8("Les points s'accrochent \xC3\xA0 la grille."));
     addAndMakeVisible(snapKey);
     for (int i = 0; i < gal::kNumStarts; ++i) {
-        auto* b = starts.add(new kit::w::PushKey(u8(gal::kStartNames[i]), pal, kJade)); addAndMakeVisible(b);
+        auto* b = starts.add(new v3::bridge::PushKey(u8(gal::kStartNames[i]), pal, kJade)); addAndMakeVisible(b);
         b->setTooltip(u8("Remplace la forme par une forme de d\xC3\xA9part (modifiable ensuite)."));
         b->onClick = [this, i] {
             int ip = gal::Free; const auto s = gal::startShape(i, &ip);
@@ -302,17 +420,49 @@ GaletEditor::GaletEditor(GaletProcessor& p)
         u8("- Chaque module s'allume avec sa touche On et a sa propre profondeur."),
         u8("- Distorsion : sur-\xC3\xA9" "chantillonn\xC3\xA9" "e \xC3\x97" "4 avec anti-repliement ADAA ; la courbe de transfert est \xC3\xA0 droite."),
         u8("- Latence de 71 \xC3\xA9" "chantillons d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te ; le Mix reste en phase.")});
+    addAndMakeVisible(skin.btn);
+    skin.btn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
+    skin.btn.onScale = [this](float s) { setUiScale(s); };
     setResizable(true, true);
-    setResizeLimits(560, (int)(560 * kH / kW), 1680, (int)(1680 * kH / kW));
-    getConstrainer()->setFixedAspectRatio((double)kW / kH);
-    setSize((int)kW, (int)kH);
+    scale_ = v3::Prefs::scale("galet", 1.f);
+    setThemeMode(v3::Prefs::theme("galet", v3::Mode::Light), false);
     timerCallback();
     startTimerHz(30);
 }
-GaletEditor::~GaletEditor() { stopTimer(); setLookAndFeel(nullptr); }
+GaletEditor::~GaletEditor() { stopTimer(); v3::Prefs::setScale("galet", scale_); setLookAndFeel(nullptr); }
+
+void GaletEditor::setThemeMode(v3::Mode m, bool persist) {
+    skin.set(m);
+    const bool n3 = isV3();
+    setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&skin.look3) : static_cast<juce::LookAndFeel*>(&look));
+    const v3::Theme* tp = skin.tp();
+    shapeView->setTheme(tp); transfer->setTheme(tp);
+    for (auto* p : pots) p->setVisible(!n3);
+    for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
+    for (auto* sg : {syncSeg.get(), retrigSeg.get(), feelSeg.get(), interpSeg.get()}) { sg->T = tp; sg->repaint(); }
+    for (auto* k : modKeys) k->T = tp;
+    snapKey.T = tp; for (auto* b : starts) b->T = tp;
+    power.T = tp; help.T = tp;
+    if (persist) v3::Prefs::setTheme("galet", m);
+    if (v3::rk::fit(*this, n3, {kW3, kH3}, {kW, kH}, 0.583f, 1.75f, scale_)) resized();
+    sendLookAndFeelChange();
+    repaint();
+}
+
+void GaletEditor::setUiScale(float s) {
+    const bool n3 = isV3();
+    scale_ = juce::jlimit(n3 ? 0.75f : 0.583f, n3 ? 1.5f : 1.75f, s);
+    setSize(juce::roundToInt((n3 ? kW3 : kW) * scale_), juce::roundToInt((n3 ? kH3 : kH) * scale_));
+    v3::Prefs::setScale("galet", scale_);
+}
 
 void GaletEditor::resized() {
-    u_ = (float)getWidth() / kW;
+    if (isV3()) resized3(); else resizedClassic();
+    skin.btn.scale = scale_;
+}
+
+void GaletEditor::resizedClassic() {
+    u_ = (float)getWidth() / kW; scale_ = u_;
     const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
     power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
     help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
@@ -336,10 +486,13 @@ void GaletEditor::timerCallback() {
     shapeView->repaint(); transfer->repaint();
     const bool sync = ch(proc, "sync") == 0;   // réglages sans effet dans le mode courant : estompés
     pots[0]->setAlpha(sync ? 1.f : 0.4f); pots[1]->setAlpha(sync ? 0.4f : 1.f); feelSeg->setAlpha(sync ? 1.f : 0.4f);
+    k3[0]->setAlpha(sync ? 1.f : 0.4f); k3[1]->setAlpha(sync ? 0.4f : 1.f);
+    for (auto* k : k3) k->tickMod(1.f / 30.f);
     if (proc.getCurrentProgram() != shownProgram) { shownProgram = proc.getCurrentProgram(); presets.setSelectedId(shownProgram + 1, juce::dontSendNotification); }
 }
 
 void GaletEditor::paint(juce::Graphics& g) {
+    if (isV3()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Galet", kit::w::serial::galet});
     section(g, pal, u, u8("Cycle \xC2\xB7 d\xC3\xA9part"), 32, 306, 600);
@@ -351,4 +504,51 @@ void GaletEditor::paint(juce::Graphics& g) {
     section(g, pal, u, u8("Sortie"), 648, 476, 280);
     section(g, pal, u, u8("Distorsion lisse"), 32, 584, 600 - 52);
     section(g, pal, u, u8("Pan \xC2\xB7 largeur"), 648, 584, 280 - 52);
+}
+
+// ============================================================ v3 « hybride v2 » : coordonnées de conception 1180 x 884
+namespace {
+constexpr float kCardH = 148.f, kRowC = 390.f, kRowD = 550.f, kRowE = 710.f;
+}
+
+void GaletEditor::resized3() {
+    u_ = (float)getWidth() / kW3; scale_ = u_;
+    help.layout(Si(1054, 34, 30, 30), getLocalBounds());
+    skin.btn.setBounds(Si(1020, 35, 28, 28));
+    power.setBounds(Si(1090, 36, 70, 26));
+    presets.setBounds(Si(360, 34, 270, 32));
+    shapeView->setBounds(Si(20, 84, 740, 230)); transfer->setBounds(Si(780, 84, 380, 230));
+    syncSeg->setBounds(Si(40, 336, 140, 32)); retrigSeg->setBounds(Si(194, 336, 230, 32)); feelSeg->setBounds(Si(438, 336, 280, 32));
+    interpSeg->setBounds(Si(800, 336, 230, 32)); snapKey.setBounds(Si(1044, 336, 100, 32));
+    for (auto* s : {syncSeg.get(), retrigSeg.get(), feelSeg.get(), interpSeg.get()}) s->px = 12.f * u_;
+    const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false), kw = 104.f;
+    auto place = [&](int i, float cx, float y) { k3[i]->setScale(u_); k3[i]->setBounds(Si(cx - kw * 0.5f, y, kw, kh)); };
+    for (int i = 0; i < 5; ++i) place(i, 40.f + 110.f * ((float)i + 0.5f), kRowC + 34.f);
+    for (int i = 0; i < gal::kNumStarts; ++i) starts[i]->setBounds(Si(660.f + 122.f * (float)(i % 4), kRowC + 40.f + 52.f * (float)(i / 4), 116, 44));
+    place(5, 95.f, kRowD + 34.f);
+    for (int i = 0; i < 4; ++i) place(6 + i, 190.f + 110.f * ((float)i + 0.5f), kRowD + 34.f);
+    place(10, 700.f + 55.f, kRowD + 34.f); place(11, 700.f + 165.f, kRowD + 34.f);
+    for (int i = 0; i < 4; ++i) place(12 + i, 40.f + 110.f * ((float)i + 0.5f), kRowE + 34.f);
+    place(16, 700.f + 55.f, kRowE + 34.f); place(17, 700.f + 165.f, kRowE + 34.f);
+    modKeys[0]->setBounds(Si(120, kRowD + 8, 56, 26)); modKeys[1]->setBounds(Si(574, kRowD + 8, 56, 26));
+    modKeys[2]->setBounds(Si(424, kRowE + 8, 56, 26)); modKeys[3]->setBounds(Si(864, kRowE + 8, 56, 26));
+}
+
+void GaletEditor::paint3(juce::Graphics& g) {
+    const auto& T0 = skin.T; juce::ignoreUnused(T0);
+    skin.art.draw(g, String("bd|") + v3::modeKey(skin.mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) {
+        const float k = b.getWidth() / kW3; const auto& t = skin.T;
+        auto R = [k](float x, float y, float w, float h) { return Rectangle<float>(x * k, y * k, w * k, h * k); };
+        v3::background(ig, t, b);
+        v3::rk::brand(ig, t, k, "Orbe", "Galet");
+        v3::rk::label(ig, t.inkMute, k, "Preset", 362, 14, 120);
+        v3::hero(ig, t, R(20, 84, 740, 230), 22.f * k); v3::hero(ig, t, R(780, 84, 380, 230), 22.f * k);
+        v3::card(ig, t, R(20, 326, 1140, 56), 18.f * k);
+        for (float y : {kRowC, kRowD, kRowE}) v3::card(ig, t, R(20, y, 1140, kCardH), 18.f * k);
+        const auto c = t.inkMute;
+        v3::rk::label(ig, c, k, u8("Rythme"), 40, kRowC + 12, 200); v3::rk::label(ig, c, k, u8("Formes de d\xC3\xA9part"), 660, kRowC + 12, 300);
+        v3::rk::label(ig, c, k, u8("Volume"), 40, kRowD + 12, 100); v3::rk::label(ig, c, k, u8("Filtre"), 190, kRowD + 12, 200); v3::rk::label(ig, c, k, u8("Sortie"), 700, kRowD + 12, 200);
+        v3::rk::label(ig, c, k, u8("Distorsion lisse"), 40, kRowE + 12, 300); v3::rk::label(ig, c, k, u8("Pan \xC2\xB7 largeur"), 700, kRowE + 12, 200);
+        v3::rk::sep(ig, t, k, 180, kRowD + 14, 120); v3::rk::sep(ig, t, k, 690, kRowD + 14, 120); v3::rk::sep(ig, t, k, 690, kRowE + 14, 120); v3::rk::sep(ig, t, k, 640, kRowC + 14, 120);
+    });
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include "../Orbe808/SuiteUi.h"
 #include "OrbeBeatProcessor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 
 // Grille de pas : 8 pistes × 16 ou 32 pas. Outils : dessiner, roll, vélocité, note (808).
 class OrbeBeatGrid : public juce::Component {
@@ -12,7 +13,9 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override { paintMode = 0; }
+    const kit::v3::Theme* T = nullptr;   // nul ou Classique : rendu d'origine
 private:
+    void paint3(juce::Graphics&);
     bool locate(juce::Point<float>, int& lane, int& step) const;
     void apply(int lane, int step, bool first, bool alt);
     OrbeBeatProcessor& proc;
@@ -42,18 +45,21 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    kit::w::HelpKey help;
+    kit::v3::bridge::HelpKey help;
+    kit::v3::Skin skin{"orbebeat", kit::v3::accents::lilac};
+    juce::OwnedArray<kit::v3::Knob3> k3;
+    void resized3(); void paint3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
     float u_ = 1.f;
 
     OrbeBeatGrid grid;
     juce::ComboBox kitBox, keyBox;
-    std::unique_ptr<suiteui::Segmented> patSeg, stepsSeg, chainSeg, midiSeg, modeSeg;
-    kit::w::PushKey genB{kit::u8("Générer")}, varyB{"Varier"}, clearB{"Vider"}, auditionB{kit::u8("Écouter")};
-    kit::w::PushKey toolB[4];
+    std::unique_ptr<kit::v3::GridSeg> patSeg, stepsSeg, chainSeg, midiSeg, modeSeg;
+    kit::v3::bridge::PushKey genB{kit::u8("Générer")}, varyB{"Varier"}, clearB{"Vider"}, auditionB{kit::u8("Écouter")};
+    kit::v3::bridge::PushKey toolB[4];
     juce::ToggleButton seqB;
     juce::Slider swingK, masterK, vol[obeat::kLanes];
-    kit::w::PushKey muteB[obeat::kLanes], soloB[obeat::kLanes];
-    std::unique_ptr<suiteui::DragHandle> handle;
+    kit::v3::bridge::PushKey muteB[obeat::kLanes], soloB[obeat::kLanes];
+    std::unique_ptr<kit::v3::DragHandle3> handle;
     std::unique_ptr<ComboAtt> kitAtt, keyAtt;
     std::unique_ptr<SliderAtt> swingAtt, masterAtt, volAtt[obeat::kLanes];
     std::unique_ptr<ButtonAtt> muteAtt[obeat::kLanes], soloAtt[obeat::kLanes], seqAtt;

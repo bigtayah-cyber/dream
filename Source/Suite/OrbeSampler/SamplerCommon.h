@@ -5,6 +5,7 @@
 #include <functional>
 #include <mutex>
 #include "../../Kit/Widgets.h"
+#include "../../Kit/v3/Widgets3.h"
 #include "PadEngine.h"
 #include "TransformEngine.h"
 
@@ -110,6 +111,7 @@ public:
     double frameAt(float x) const { auto r = inner(); return smp ? juce::jlimit(0.0, 1.0, (double)((x - r.getX()) / r.getWidth())) * smp->size() : 0.0; }
     void setColour(juce::Colour c) { col = c; repaint(); }
     juce::String emptyText;
+    const kit::v3::Theme* T = nullptr;   // nul ou Classique : rendu d'origine
     std::function<void(juce::Graphics&, WaveView&)> paintOver;
     std::function<void(const juce::MouseEvent&)> onDown, onDrag, onUp, onDouble, onMove;
     void paint(juce::Graphics&) override;
@@ -121,6 +123,8 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override { if (onDouble) onDouble(e); }
 private:
     void rebuild();
+    void paint3(juce::Graphics&);
+    kit::v3::Trace trTop, trBot;
     kit::Palette P;
     juce::Colour col;
     std::shared_ptr<const Sample> smp;

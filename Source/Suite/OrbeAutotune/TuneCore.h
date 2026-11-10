@@ -40,6 +40,10 @@ struct Params {
     bool formants = true;     // préservation des formants (LPC) ; sinon le timbre suit la hauteur
     // édition note par note (prioritaire sur tout le reste) : cible MIDI fractionnaire, < 0 = aucune
     float editTarget = -1.f, editAmount = 1.f, editExpr = -1.f, editSpeedMs = -1.f;
+    // Rendu « Satin » : hauteur médiane (sans extrapolation), expression gardée, note à hystérésis large, correction lissée
+    // au 2e ordre (glissement glideMs), voix corrigée jamais mélangée au sec quand la correction frôle zéro (pas de peigne).
+    bool satin = false;
+    float glideMs = 40.f;
 };
 
 // État publié à chaque trame d'analyse (aligné sur l'échantillon qui sort du décaleur).
@@ -69,7 +73,7 @@ public:
         Nw = 1; while (Nw < (int)(sr * 0.023)) Nw <<= 1;
         for (auto* v : {&mid, &dec, &res[0], &res[1], &raw[0], &raw[1]}) v->assign((size_t)kRing, 0.f);
         seg.assign((size_t)(W + tMax + 2), 0.f); cm.assign((size_t)tMax + 3, 1.f);
-        lpcWin.resize((size_t)Nw); lpcBuf.resize((size_t)Nw);
+        lpcWin.resize((size_t)Nw); lpcBuf.resize((size_t)Nw); lpcBufD.resize((size_t)Nw);
         for (int j = 0; j < Nw; ++j) lpcWin[(size_t)j] = 0.5f - 0.5f * std::cos(2.f * kPi * ((float)j + 0.5f) / (float)Nw);
         Kr.assign((size_t)kKRing * kMaxP, 0.f);
         aa1.set(sr, 0.21 * decSr); aa2.set(sr, 0.21 * decSr);
@@ -110,6 +114,7 @@ public:
         sp.reset(this);
         st = State{}; sCur = sTgt = sStep = 0.f; offCur = offStep = 0.f; wetG = 0.f; wetTgt = 0.f;
         c1 = c2a = c2b = 0.f; vibVar = 0.f; glideRun = 0.f; glideSign = 0; slope = 0.f; pPrev = 0.f; noteCur = -1.f; unvHops = 1000; glide = 0.f; c1Prev = 0.f; heldS = 0.f;
+        sG = 0.f; pH[0] = pH[1] = pH[2] = 0.f; nP = 0; t0S = 0.f;
         dryA = 0.f;
     }
 
@@ -145,7 +150,7 @@ public:
             const float semi = (wetG > 0.f) ? sCur + offCur * 0.01f : 0.f;
             const float ratio = std::exp2(semi * (1.f / 12.f));
             const float cents = std::fabs(semi) * 100.f;
-            const float a = sat((cents - 0.5f) * 0.4f) * wetG;
+            const float a = Pm.satin ? wetG : sat((cents - 0.5f) * 0.4f) * wetG;   // Satin : pas de mélange partiel sec/corrigé (retards différents = peigne)
             float out[2];
             const bool useRes = Pm.formants;
             if (a <= 0.f) {
@@ -208,11 +213,29 @@ private:
         float pp = midAt(end - Nw - 1);
         for (int j = 0; j < Nw; ++j) { const float v = midAt(end - Nw + j); lpcBuf[(size_t)j] = (v - 0.9f * pp) * lpcWin[(size_t)j]; pp = v; }
         double r[kMaxP + 1];
+        // Autocorrélation par blocs de 8 retards : chaînes d'addition indépendantes (vectorisables entre retards) au lieu d'une
+        // seule. Chaque somme garde exactement l'ordre j croissant de la boucle simple : résultat identique au bit près.
+        double* lb = lpcBufD.data();
+        for (int j = 0; j < Nw; ++j) lb[j] = (double)lpcBuf[(size_t)j];
+        for (int l0 = 0; l0 <= P; l0 += 8) {
+            const int nl = std::min(8, P + 1 - l0), j0 = l0 + nl - 1;
+            double s[8] = {};
+            for (int k = 0; k < nl; ++k)   // têtes : j de l0+k à j0-1 (avant la zone commune)
+                for (int j = l0 + k; j < j0; ++j) s[k] += lb[j] * lb[j - l0 - k];
+            if (nl == 8) {   // accumulateurs nommés : gardés en registres
+                double a0 = s[0], a1 = s[1], a2 = s[2], a3 = s[3], a4 = s[4], a5 = s[5], a6 = s[6], a7 = s[7];
+                for (int j = j0; j < Nw; ++j) {
+                    const double v = lb[j]; const double* q = lb + (j - l0);
+                    a0 += v * q[0]; a1 += v * q[-1]; a2 += v * q[-2]; a3 += v * q[-3]; a4 += v * q[-4]; a5 += v * q[-5]; a6 += v * q[-6]; a7 += v * q[-7];
+                }
+                s[0] = a0; s[1] = a1; s[2] = a2; s[3] = a3; s[4] = a4; s[5] = a5; s[6] = a6; s[7] = a7;
+            } else
+                for (int j = j0; j < Nw; ++j) { const double v = lb[j]; const double* q = lb + (j - l0); for (int k = 0; k < nl; ++k) s[k] += v * q[-k]; }
+            for (int k = 0; k < nl; ++k) r[l0 + k] = s[k];
+        }
         for (int lag = 0; lag <= P; ++lag) {
-            double s = 0.0;
-            for (int j = lag; j < Nw; ++j) s += (double)lpcBuf[(size_t)j] * lpcBuf[(size_t)(j - lag)];
             const double bb = 2.0 * 3.14159265358979 * lagB * lag / sr;   // fenêtre de retard gaussienne : lisse les harmoniques
-            r[lag] = s * std::exp(-0.5 * bb * bb);
+            r[lag] *= std::exp(-0.5 * bb * bb);
             rS[lag] += 0.5f * (r[lag] - rS[lag]); r[lag] = rS[lag];   // autocorrélation lissée (~4 ms) : enveloppe moins fluctuante d'une trame à l'autre
         }
         for (int j = 0; j < P; ++j) K[j] = 0.f;
@@ -393,18 +416,23 @@ private:
             if (unvHops == 0 && pPrev > 0.f) slope += (1.f - std::exp(-dt / 0.008f)) * ((pRaw - pPrev) / dt - slope); else slope = 0.f;
             pPrev = pRaw;
             p = pRaw + clampf(slope * lead, -0.5f, 0.5f);
+            if (Pm.satin) {   // médiane des 3 dernières estimations : la gigue de l'estimateur ne passe pas dans le rapport
+                if (unvHops > 0) nP = 0;
+                pH[nP % 3] = pRaw; if (++nP >= 6) nP -= 3;   // borné
+                p = nP >= 3 ? std::max(std::min(pH[0], pH[1]), std::min(std::max(pH[0], pH[1]), pH[2])) : pRaw;
+            }
         } else pPrev = 0.f;
         const bool edit = Pm.editTarget >= 0.f;
         const float speed = edit && Pm.editSpeedMs >= 0.f ? Pm.editSpeedMs : Pm.speedMs;
         const float exprU = edit && Pm.editExpr >= 0.f ? Pm.editExpr : Pm.expr;
         const float amount = edit ? Pm.editAmount : Pm.amount;
         // expression conservée : nulle à vitesse 0 (robot), pleine à partir de 50 ms
-        const float h = sat(exprU) * sat((speed - 5.f) / 45.f);
+        const float h = Pm.satin ? std::max(0.8f, sat(exprU)) : sat(exprU) * sat((speed - 5.f) / 45.f);   // Satin : le vibrato chanté reste (rapport quasi constant)
         float desired = 0.f;
         if (voiced) {
             if (unvHops * dt > 0.06f || c1 <= 0.f) {   // début de phrase : centres repartis de la hauteur, correction depuis 0
                 c1 = c2a = c2b = c1Prev = p; noteCur = -1.f; vibVar = 0.f; glide = 0.f; glideRun = 0.f; glideSign = 0; heldS = 0.f;
-                sCur = sTgt = 0.f;
+                sCur = sTgt = 0.f; sG = 0.f;
             }
             unvHops = 0;
             const float a1 = 1.f - std::exp(-dt / 0.030f), a2 = 1.f - std::exp(-dt / 0.090f);
@@ -422,7 +450,7 @@ private:
             float N = -1.f;
             if (edit) N = Pm.editTarget;
             else if (Pm.forcedNote >= 0) { const float f = (float)Pm.forcedNote; N = f + 12.f * std::round((c1 - f) / 12.f); }
-            else if (Pm.mask & 0xFFF) N = pickNote(c1, Pm.mask, noteCur);
+            else if (Pm.mask & 0xFFF) N = pickNote(c1, Pm.mask, noteCur, Pm.satin ? 0.35f : 0.2f);
             if (N >= 0.f && N != noteCur && noteCur >= 0.f) { c2a = c2b = c1; }
             noteCur = N;
             if (N >= 0.f) {
@@ -444,14 +472,18 @@ private:
         const float spd = glide > 0.5f && voiced && !edit ? std::min(speed, 25.f) : speed;
         const float al = spd > 0.5f ? 1.f - std::exp(-dt * 1000.f / spd) : 1.f;
         sTgt += al * (desired - sTgt);
-        sStep = (sTgt - sCur) / (float)hop;
+        if (Pm.satin) {   // 2e pôle : glissement doux entre notes, aucun escalier dans le rapport
+            const float ag = 1.f - std::exp(-dt * 1000.f / std::max(5.f, Pm.glideMs * 0.5f));
+            sG += ag * (sTgt - sG);
+            sStep = (sG - sCur) / (float)hop;
+        } else { sG = sTgt; sStep = (sTgt - sCur) / (float)hop; }
         offStep = (Pm.offsetCents - offCur) / (float)hop;
         const bool active = voiced && (noteCur >= 0.f || std::fabs(Pm.offsetCents) > 0.4f);
         wetTgt = active ? 1.f : 0.f;
         st.voiced = voiced; st.pitch = voiced ? p : 0.f; st.center = voiced ? c2b : 0.f; st.note = voiced ? noteCur : -1.f; st.shift = sTgt; st.conf = conf;
     }
 
-    static float pickNote(float m, int mask, float cur) {
+    static float pickNote(float m, int mask, float cur, float hyst = 0.2f) {
         int best = -1; float bd = 1e9f;
         const int b = (int)std::lround(m);
         for (int n = b - 7; n <= b + 7; ++n) {
@@ -461,7 +493,7 @@ private:
         }
         if (best < 0) return -1.f;
         const int ci = (int)std::lround(cur);
-        if (cur >= 0.f && ci != best && ((mask >> pcOf(ci)) & 1) && std::fabs(m - (float)ci) < bd + 0.2f) return (float)ci;   // hystérésis
+        if (cur >= 0.f && ci != best && ((mask >> pcOf(ci)) & 1) && std::fabs(m - (float)ci) < bd + hyst) return (float)ci;   // hystérésis
         return (float)best;
     }
 
@@ -479,8 +511,10 @@ private:
             const float sr = (float)o->sr;
             const float p = o->st.voiced && o->st.pitch > 0.f ? sr / (440.f * std::exp2((o->st.pitch - 69.f) / 12.f)) : t0;
             t0 = clampf(p, 40.f, 2400.f);
+            if (o->Pm.satin) { o->t0S = o->t0S > 0.f ? o->t0S + 0.002f * (t0 - o->t0S) : t0; t0 = o->t0S; }   // période lissée : raccords de longueur stable
             const bool q = o->quality;
             xfLen = q ? (int)clampf(0.75f * t0, 48.f, 480.f) : (int)clampf(0.5f * t0, 32.f, 160.f);
+            if (o->Pm.satin) xfLen = (int)clampf(t0, 48.f, q ? 480.f : std::max(48.f, 0.6f * (float)o->L));   // fondu d'une période entière
             const float rate = 1.f - ratio;
             d += rate; if (xfOn) dOld += rate;
             const float L = (float)o->L, minD = 24.f;
@@ -545,6 +579,7 @@ private:
     Params Pm;
     State st;
     std::vector<float> mid, dec, res[2], raw[2], seg, cm, lpcWin, lpcBuf, Kr;
+    std::vector<double> lpcBufD;
     float kA[kMaxP] = {}, dkA[kMaxP] = {}, kS[kMaxP] = {}, bA[2][kMaxP] = {}, bS[2][kMaxP] = {};
     Frame fr[kF];
     Lp2 aa1, aa2;
@@ -553,7 +588,8 @@ private:
     float pePrev[2] = {}, dePrev[2] = {}, e1 = 0.f, e2 = 0.f, prevMid = 0.f, rmsPeak = 0.f;
     float sCur = 0.f, sTgt = 0.f, sStep = 0.f, offCur = 0.f, offStep = 0.f, wetG = 0.f, wetTgt = 0.f, wetRate = 1.f / 200.f;
     float c1 = 0.f, c2a = 0.f, c2b = 0.f, c1Prev = 0.f, vibVar = 0.f, noteCur = -1.f, glide = 0.f, heldS = 0.f, dryA = 0.f;
-    float glideRun = 0.f, slope = 0.f, pPrev = 0.f;
+    float glideRun = 0.f, slope = 0.f, pPrev = 0.f, sG = 0.f, pH[3] = {}, t0S = 0.f;
+    int nP = 0;
     int unvHops = 1000, glideSign = 0;
     Splicer sp;
 };

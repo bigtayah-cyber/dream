@@ -1,7 +1,9 @@
 // Rend l'éditeur d'Orbe Sample dans un PNG (sans DAW). Usage : orbe_sample_snapshot sortie.png [largeur] [préréglage]
 #include "SampleEditor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    kit::v3::snapshotTheme("orbesample");
     SampleProcessor proc;
     proc.prepareToPlay(48000, 512);
     if (argc > 1 && juce::String(argv[1]) == "--etat") {  // aller-retour de l'état : l'audio embarqué doit revenir à l'identique

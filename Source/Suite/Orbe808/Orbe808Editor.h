@@ -1,6 +1,7 @@
 #pragma once
 #include "Orbe808Processor.h"
 #include "SuiteUi.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 
 // Clavier de deux octaves (C1–B2) pour jouer la basse depuis l'interface ; glisser d'une touche à l'autre fait glisser la hauteur (legato).
 class Orbe808Keys : public juce::Component {
@@ -11,7 +12,9 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override { press(keyAt(e.position)); }
     void mouseUp(const juce::MouseEvent&) override { press(-1); }
     static constexpr int kBase = 24, kWhite = 14;
+    const kit::v3::Theme* T = nullptr;   // nul ou Classique : rendu d'origine
 private:
+    void paint3(juce::Graphics&);
     int keyAt(juce::Point<float>) const;
     void press(int note);
     Orbe808Processor& proc;
@@ -42,12 +45,16 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    kit::w::HelpKey help;
+    kit::v3::bridge::HelpKey help;
+    kit::v3::Skin skin{"orbe808", kit::v3::accents::peach};
+    juce::OwnedArray<kit::v3::Knob3> k3;
+    kit::v3::Trace trMax, trMin;
+    void resized3(); void paint3(juce::Graphics&); void paintScope3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
     float u_ = 1.f;
 
     juce::Slider knobs[kKnobs];
     std::unique_ptr<SliderAtt> att[kKnobs];
-    std::unique_ptr<suiteui::Segmented> presetSeg, satSeg, bendSeg;
+    std::unique_ptr<kit::v3::GridSeg> presetSeg, satSeg, bendSeg;
     Orbe808Keys keysUi;
 
     static constexpr int kCols = 640;

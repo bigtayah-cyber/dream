@@ -1,8 +1,10 @@
 // Rend l'éditeur d'un plugin dans un PNG (sans DAW) pour contrôle visuel. Usage : snapshot sortie.png [largeur] [aleatoire]
 #include "../Source/Orbe/OrbeProcessor.h"
+#include "../Source/Kit/v3/InstrumentSkin.h"
 #include "../Source/Orbe/OrbeEditor.h"
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    kit::v3::snapshotTheme("orbe");
     OrbeProcessor proc;
     if (argc > 3) proc.generate(OrbeProcessor::Gen::All);
     proc.prepareToPlay(48000, 512);

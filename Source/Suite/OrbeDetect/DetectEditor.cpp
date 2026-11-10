@@ -2,6 +2,7 @@
 
 using namespace ou;
 using kit::u8;
+namespace v3 = kit::v3;
 
 namespace {
 String mmss(double s) { const int t = (int)s; return String(t / 60) + ":" + String(t % 60).paddedLeft('0', 2); }
@@ -11,7 +12,7 @@ void txt(juce::Graphics& g, const String& s, juce::Rectangle<float> r, float h, 
 }  // namespace
 
 DetectEditor::DetectEditor(DetectProcessor& p)
-    : Base(p, 1000.f, 640.f, u8("Orbe Détect"), kit::w::serial::detect, kit::Display::VFD, kOk), proc(p), cur(p.result()), halfB(u8("×½")) {
+    : Base3(p, 1000.f, 640.f, 1180.f, 762.f, u8("Orbe Détect"), kit::w::serial::detect, kit::Display::VFD, kOk, "detect", "Orbe", u8("Détect"), v3::accents::mint), proc(p), cur(p.result()), halfB(u8("×½")) {
     captureB.setButtonText("Capturer"); addAndMakeVisible(captureB);
     capAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "capture", captureB);
     for (auto* b : {&clearB, &analyzeB, &halfB, &dblB, &tapB, &applyB}) addAndMakeVisible(*b);
@@ -33,7 +34,7 @@ DetectEditor::DetectEditor(DetectProcessor& p)
              u8("- Tap : tape au moins 3 fois en rythme ; « Appliquer le tap » remplace le tempo détecté."),
              u8("- Roue de Camelot : clique une case pour la choisir et voir ses voisines compatibles ; reclique pour revenir à la détection."),
              u8("- 808 : accorde la fondamentale du 808 sur la tonique (note MIDI 24 + hauteur de la tonique) ; les autres notes de la gamme servent aux glissés et aux changements d'accord.")});
-    start(24);
+    start(24, "detect");
 }
 
 void DetectEditor::layout() {
@@ -41,6 +42,10 @@ void DetectEditor::layout() {
     analyzeB.setBounds(Ri(36, 224, 278, 28));
     halfB.setBounds(Ri(36, 424, 134, 28)); dblB.setBounds(Ri(180, 424, 134, 28));
     tapB.setBounds(Ri(36, 462, 134, 44)); applyB.setBounds(Ri(36, 514, 278, 24));
+}
+
+void DetectEditor::themeChanged(const v3::Theme* tp) {
+    for (auto* b : {&captureB, &clearB, &analyzeB, &halfB, &dblB, &tapB, &applyB}) { b->T = tp; b->repaint(); }
 }
 
 void DetectEditor::tap() {
@@ -217,6 +222,153 @@ void DetectEditor::body(juce::Graphics& g) {
             txt(g, T(comp[(size_t)i]), chip, 12.f * u, Colour(0xFF101014), juce::Justification::centred, true, true);
             txt(g, T(oa::keyLong(p, m)), R(738, y, 230, 14), 12.f * u, pal.ink.withAlpha(.92f), juce::Justification::centredLeft, true);
             txt(g, u8(why[i]), R(738, y + 15, 230, 12), 9.f * u, pal.mute);
+        }
+    }
+}
+
+// ============================================================ v3 « hybride v2 » : coordonnées de conception 1180 x 762
+void DetectEditor::layout3() {
+    captureB.setBounds(Ri(214, 112, 130, 32)); clearB.setBounds(Ri(214, 150, 130, 28));
+    analyzeB.setBounds(Ri(36, 254, 308, 32));
+    halfB.setBounds(Ri(36, 452, 150, 32)); dblB.setBounds(Ri(194, 452, 150, 32));
+    tapB.setBounds(Ri(36, 496, 150, 48)); applyB.setBounds(Ri(36, 552, 308, 32));
+}
+
+void DetectEditor::backdrop3(juce::Graphics& g, float k) {
+    const auto& t = skin.T;
+    auto Rk = [k](float x, float y, float w, float h) { return juce::Rectangle<float>(x * k, y * k, w * k, h * k); };
+    for (auto r : {Rk(20, 84, 340, 216), Rk(20, 312, 340, 430), Rk(380, 84, 340, 290), Rk(380, 386, 340, 356), Rk(740, 84, 420, 400), Rk(740, 496, 420, 246)}) v3::card(g, t, r, 18.f * k);
+    auto inset = [&](juce::Rectangle<float> r, float rad) {
+        g.setGradientFill(juce::ColourGradient(t.scrTop, r.getX(), r.getY(), t.scrBot, r.getX(), r.getBottom(), false)); g.fillRoundedRectangle(r, rad);
+        g.setColour(juce::Colours::white.withAlpha(0.07f)); g.drawRoundedRectangle(r.reduced(0.5f), rad, 1.f);
+    };
+    inset(Rk(36, 190, 308, 52), 12 * k); inset(Rk(36, 344, 308, 96), 16 * k); inset(Rk(194, 496, 150, 48), 14 * k); inset(Rk(396, 112, 308, 78), 16 * k);
+    v3::rk::label(g, t.inkMute, k, "Capture", 40, 96, 200); v3::rk::label(g, t.inkMute, k, "Tempo", 40, 324, 200);
+    v3::rk::label(g, t.inkMute, k, u8("Tonalit\xC3\xA9"), 400, 96, 200); v3::rk::label(g, t.inkMute, k, u8("808 \xC2\xB7 Accordage"), 400, 398, 250);
+    v3::rk::label(g, t.inkMute, k, "Roue de Camelot", 760, 96, 250);
+}
+
+void DetectEditor::body3(juce::Graphics& g) {
+    const float u = u_; const auto& r = *cur; const bool ok = r.valid; const auto& T = skin.T;
+    auto t3 = [&](const String& s, juce::Rectangle<float> rc, float px, juce::Colour c, juce::Justification j = juce::Justification::centredLeft, bool bold = false) {
+        g.setColour(c); g.setFont(v3::font(px * u, bold)); g.drawText(s, rc, j, true);
+    };
+    auto tab = [&](const String& s, juce::Rectangle<float> rc, float px, juce::Colour c, juce::Justification j, bool bold = true) { g.setColour(c); v3::tabular(g, s, rc, v3::font(px * u, bold), j); };
+    auto dotc = [&](juce::Colour c) { return T.dark ? c : c.darker(0.35f); };
+    // ---- en-tête : état
+    { auto pill = R(560, 34, 400, 32); g.setColour(T.field); g.fillRoundedRectangle(pill, 14 * u); g.setColour(T.fieldEdge); g.drawRoundedRectangle(pill.reduced(0.5f), 14 * u, 1.f);
+      const String st = busy ? u8("Analyse en cours\xE2\x80\xA6") : ok ? v3::fmt::withUnit(v3::fmt::num(r.bpm, 1), "BPM") + kDot + ou::T(oa::keyShort(r.pc, r.minor)) + kDot + ou::T(oa::camelot(r.pc, r.minor)) : u8("En attente") + kDot + mmss(capSec) + " / 2:00";
+      tab(st, pill.reduced(16 * u, 0), 15.f, T.ink, juce::Justification::centred); }
+    // ---- capture
+    tab(mmss(capSec), R(40, 108, 170, 56), 46.f, full ? T.out : T.ink, juce::Justification::centredLeft);
+    t3("/ 2:00", R(40, 162, 170, 20), 13.f, T.inkMute);
+    { const int n = proc.peakCount(); const auto w = R(36, 190, 308, 52).reduced(10.f * u, 8.f * u); const int span = juce::jmax(n, 200);
+      for (int x = 0; x < (int)(w.getWidth() / (3.f * u)); ++x) {
+          const int i = (int)((float)x * 3.f * u / w.getWidth() * (float)span); if (i >= n) break;
+          const float a = juce::jlimit(0.f, 1.f, std::sqrt(proc.peakAt(i)) * 1.1f) * w.getHeight() * .5f;
+          g.setColour(T.sung.withAlpha(0.9f)); g.fillRoundedRectangle(w.getX() + (float)x * 3.f * u, w.getCentreY() - juce::jmax(1.f, a), 2.f * u, juce::jmax(2.f, a * 2), 1.f * u);
+      } }
+    // ---- tempo
+    tab(ok ? v3::fmt::num(r.bpm, 1) : u8("\xE2\x80\x94"), R(50, 348, 220, 74), 62.f, ok ? T.out : T.scrMute, juce::Justification::centredLeft);
+    t3("BPM", R(268, 386, 60, 24), 16.f, T.scrMute, juce::Justification::centredLeft);
+    if (ok) {
+        const auto c = confColour(r.bconf);
+        g.setColour(c); g.fillEllipse(juce::Rectangle<float>(8 * u, 8 * u).withCentre(R(56, 424, 1, 1).getPosition()));
+        g.setColour(T.scrInk); v3::caps(g, confLabel(r.bconf), R(66, 416, 120, 16), 11.f * u, juce::Justification::centredLeft);
+        if (r.nAlt) { String a = u8("Aussi : "); for (int i = 0; i < r.nAlt; ++i) a += (i ? u8(" \xC2\xB7 ") : String()) + fr(r.alt[i]); t3(a, R(170, 414, 166, 20), 12.f, T.scrMute, juce::Justification::centredRight); }
+    }
+    t3("TAP", R(204, 500, 40, 16), 10.f, T.scrMute, juce::Justification::centredLeft, true);
+    tab(tapBpm > 0 ? fr(tapBpm) : (taps.empty() ? String(u8("\xE2\x80\x94")) : "..."), R(200, 512, 138, 32), 24.f, T.out, juce::Justification::centredRight);
+    g.setColour(T.fieldEdge); g.fillRect(R(36, 600, 308, 1));
+    v3::rk::label(g, T.inkMute, u, u8("Tempo de l'h\xC3\xB4te"), 40, 610, 160, 11.f);
+    tab(hostBpm > 0 ? v3::fmt::withUnit(v3::fmt::num(hostBpm, 1), "BPM") : u8("\xE2\x80\x94"), R(190, 606, 154, 24), 17.f, T.ink, juce::Justification::centredRight);
+    {
+        String v; juce::Colour c = T.inkMute;
+        if (hostBpm <= 0) v = u8("Inconnu");
+        else if (!ok) v = u8("\xE2\x80\x94");
+        else {
+            const double d = (r.bpm - hostBpm) / hostBpm; double best = 1e9; int mult = 0; const double m[3] = {1.0, 0.5, 2.0};
+            for (int i = 0; i < 3; ++i) { const double dd = std::abs(r.bpm * m[i] - hostBpm) / hostBpm; if (dd < best) { best = dd; mult = i; } }
+            if (std::abs(d) < .005) { v = u8("Identique au projet."); c = dotc(kOk); }
+            else if (mult == 0 && best <= .06) { v = u8("Proche du projet : ") + v3::fmt::signedNum(r.bpm - hostBpm, 1) + " BPM (" + v3::fmt::num(std::abs(d) * 100, 1) + u8("\xC2\xA0%)."); c = dotc(kOk); }
+            else if (mult != 0 && best <= .06) { v = u8(mult == 1 ? "M\xC3\xAAme tempo en moiti\xC3\xA9 : essaie \xC3\x97" "2." : "M\xC3\xAAme tempo en double : essaie \xC3\x97\xC2\xBD."); c = dotc(kWarn); }
+            else { v = u8("\xC3\x89" "cart de ") + v3::fmt::signedNum(r.bpm - hostBpm, 1) + u8(" BPM avec le projet."); c = dotc(kBad); }
+        }
+        if (c != T.inkMute) { g.setColour(c); g.fillEllipse(juce::Rectangle<float>(9 * u, 9 * u).withCentre(R(45, 650, 1, 1).getPosition())); }
+        g.setColour(c != T.inkMute ? T.ink : T.inkMute); g.setFont(v3::font(14.f * u)); g.drawFittedText(v, R(c != T.inkMute ? 58.f : 40.f, 636, 290, 56).toNearestInt(), juce::Justification::topLeft, 3, 1.f);
+    }
+    // ---- tonalité
+    t3(ok ? ou::T(oa::keyLong(r.pc, r.minor)) : String(u8("\xE2\x80\x94")), R(396, 114, 308, 74), 34.f, T.accent.brighter(0.4f), juce::Justification::centred, true);
+    const std::string cam = ok ? oa::camelot(r.pc, r.minor) : std::string();
+    {
+        auto chip = R(396, 206, 64, 34);
+        g.setColour(ok ? camColour(std::atoi(cam.c_str()), 1.f, .7f, T.dark ? .72f : .62f) : T.track); g.fillRoundedRectangle(chip, 17 * u);
+        t3(ok ? ou::T(cam) : u8("\xE2\x80\x94"), chip, 17.f, Colour(0xFF101014), juce::Justification::centred, true);
+        if (ok) { g.setColour(dotc(confColour(r.kconf))); g.fillEllipse(juce::Rectangle<float>(9 * u, 9 * u).withCentre(R(478, 218, 1, 1).getPosition()));
+                  t3(confLabel(r.kconf), R(488, 208, 120, 20), 13.f, T.ink); t3("Camelot", R(488, 224, 120, 16), 11.f, T.inkMute);
+                  t3(u8("Sinon : ") + ou::T(oa::keyLong(r.rankPc[1], r.rankMinor[1])) + kDot + ou::T(oa::camelot(r.rankPc[1], r.rankMinor[1])), R(396, 246, 308, 20), 13.f, T.inkMute); }
+    }
+    {
+        const auto a = R(396, 276, 308, 76); const float bw = a.getWidth() / 12.f;
+        const int* iv = ok && r.minor ? oa::kMinor : oa::kMajor;
+        for (int i = 0; i < 12; ++i) {
+            const int rel = ok ? ((i - r.pc) % 12 + 12) % 12 : -1; bool inScale = false; for (int kk = 0; kk < 7; ++kk) if (iv[kk] == rel) inScale = true;
+            const float v = ok ? (float)r.chroma[i] : 0.f; const float hh = juce::jmax(5.f * u, a.getHeight() * juce::jmax(.02f, v));
+            auto well = juce::Rectangle<float>(a.getX() + bw * (float)i + 3 * u, a.getY(), bw - 6 * u, a.getHeight());
+            g.setColour(T.track.withAlpha(0.6f)); g.fillRoundedRectangle(well, 4 * u);
+            g.setColour(!ok ? T.track : rel == 0 ? T.out : inScale ? T.accent : T.tick); g.fillRoundedRectangle(well.withTop(well.getBottom() - hh), 4 * u);
+            t3(note(i), juce::Rectangle<float>(well.getX() - 3 * u, a.getBottom() + 4 * u, well.getWidth() + 6 * u, 16 * u), 11.5f, rel == 0 ? T.accentText : T.inkMute, juce::Justification::centred, rel == 0);
+        }
+    }
+    // ---- 808
+    const std::string code = activeCode(); int kpc = 0; bool kmin = false; const bool haveKey = !code.empty() && oa::fromCamelot(code, kpc, kmin);
+    if (haveKey) {
+        t3(u8("Fondamentale du 808"), R(400, 424, 170, 24), 13.f, T.ink);
+        { auto pl = R(566, 420, 138, 34); g.setColour(T.field); g.fillRoundedRectangle(pl, 17 * u); g.setColour(T.fieldEdge); g.drawRoundedRectangle(pl.reduced(.5f), 17 * u, 1.f); t3(note(kpc) + (kmin ? " min" : " maj"), pl, 15.f, T.accentText, juce::Justification::centred, true); }
+        v3::rk::label(g, T.inkMute, u, u8("Gamme \xC2\xB7 notes MIDI"), 400, 466, 250, 11.f);
+        const int* iv = kmin ? oa::kMinor : oa::kMajor; const int r0 = 24 + kpc;
+        for (int i = 0; i < 7; ++i) {
+            const int midi = r0 + iv[i]; auto tl = R(396.f + (float)(i % 4) * 78.f, 490.f + (float)(i / 4) * 92.f, 72, 84); const bool root = i == 0;
+            g.setColour(root ? T.accent.withAlpha(0.14f) : T.field); g.fillRoundedRectangle(tl, 14 * u); g.setColour(root ? T.accent : T.fieldEdge); g.drawRoundedRectangle(tl.reduced(.5f), 14 * u, root ? 1.5f : 1.f);
+            tab(noteOct(midi), tl.withTrimmedTop(8 * u).withHeight(30 * u), 21.f, root ? T.accentText : T.ink, juce::Justification::centred);
+            tab(fr(oa::mtof(midi)) + u8("\xC2\xA0Hz"), tl.withTrimmedTop(40 * u).withHeight(16 * u), 12.f, T.inkMute, juce::Justification::centred, false);
+            g.setColour(root ? T.accentText : T.inkMute); v3::caps(g, root ? "Tonique" : "MIDI " + String(midi), tl.withTrimmedTop(60 * u).withHeight(16 * u), 10.f * u, juce::Justification::centred);
+        }
+    }
+    // ---- roue de Camelot
+    {
+        const auto w = wheelRect(); const float cx = w.getCentreX(), cy = w.getCentreY(), R2 = w.getWidth() / 2 - 4 * u, R1 = R2 * .7f, R0 = R2 * .4f;
+        const auto comp = code.empty() ? std::array<std::string, 4>{} : oa::compatCodes(code);
+        for (int n = 1; n <= 12; ++n) for (int L = 0; L < 2; ++L) {
+            const std::string c = std::to_string(n) + (L ? "B" : "A");
+            const float a = -juce::MathConstants<float>::halfPi + (float)(n % 12) * juce::MathConstants<float>::pi / 6.f, half = juce::MathConstants<float>::pi / 12.f - .012f;
+            const float ri = L ? R1 + 2 * u : R0, ro = L ? R2 : R1 - 2 * u;
+            const bool isSel = c == code, isComp = !isSel && std::find(comp.begin(), comp.end(), c) != comp.end(), hov = c == hover;
+            juce::Path p; p.addPieSegment(cx - ro, cy - ro, ro * 2, ro * 2, a - half + juce::MathConstants<float>::halfPi, a + half + juce::MathConstants<float>::halfPi, ri / ro);
+            const float hue = (float)oa::camelotHue(n) / 360.f, li = T.dark ? .72f : .6f;
+            g.setColour(isSel ? Colour::fromHSL(hue, .7f, li, .95f) : isComp ? Colour::fromHSL(hue, .7f, li, .42f) : Colour::fromHSL(hue, .5f, li, T.dark ? .10f : .16f)); g.fillPath(p);
+            g.setColour(hov ? T.ink : isComp || isSel ? Colour::fromHSL(hue, .7f, li, 1.f) : T.fieldEdge); g.strokePath(p, juce::PathStrokeType(hov || isComp ? 1.6f : 1.f));
+            const float rm = (ri + ro) / 2, x = cx + std::cos(a) * rm, y = cy + std::sin(a) * rm; int kp = 0; bool km = false; oa::fromCamelot(c, kp, km);
+            const auto tc = isSel ? Colour(0xFF101014) : T.ink.withAlpha(isComp ? 1.f : .75f);
+            t3(ou::T(c), juce::Rectangle<float>(x - 22 * u, y - 14 * u, 44 * u, 16 * u), 13.f, tc, juce::Justification::centred, isSel || isComp);
+            t3(ou::T(oa::keyShort(kp, km)), juce::Rectangle<float>(x - 22 * u, y + 2 * u, 44 * u, 14 * u), 11.f, isSel ? Colour(0xFF101014).withAlpha(.8f) : T.inkMute, juce::Justification::centred);
+            if (ok && c == oa::camelot(r.pc, r.minor)) { g.setColour(isSel ? Colour(0xFF101014) : T.out); g.fillEllipse(juce::Rectangle<float>(5 * u, 5 * u).withCentre({x, y + 20 * u})); }
+        }
+        tab(code.empty() ? u8("\xE2\x80\x94") : ou::T(code), juce::Rectangle<float>(cx - R0, cy - 24 * u, R0 * 2, 38 * u), 32.f, T.ink, juce::Justification::centred);
+        v3::caps(g, code.empty() ? "Camelot" : focus.empty() ? u8("D\xC3\xA9tect\xC3\xA9") : u8("Choisie"), juce::Rectangle<float>(cx - R0, cy + 14 * u, R0 * 2, 16 * u), 11.f * u, juce::Justification::centred);
+        int hp = 0; bool hm = false;
+        if (!hover.empty() && oa::fromCamelot(hover, hp, hm)) t3(ou::T(hover) + kDot + ou::T(oa::keyLong(hp, hm)), R(760, 460, 380, 20), 13.f, T.inkMute, juce::Justification::centred);
+    }
+    // ---- compatibles
+    v3::rk::label(g, T.inkMute, u, code.empty() ? String("Compatibles") : "Compatibles avec " + ou::T(code), 760, 508, 380, 11.f);
+    if (!code.empty()) {
+        const auto comp = oa::compatCodes(code); const char* why[4] = {"m\xC3\xAAme tonalit\xC3\xA9", "\xE2\x88\x92" "1 \xC2\xB7 plus calme", "+1 \xC2\xB7 plus d'\xC3\xA9nergie", "relative \xC2\xB7 autre couleur"};
+        for (int i = 0; i < 4; ++i) {
+            int p = 0; bool m = false; oa::fromCamelot(comp[(size_t)i], p, m); const float y = 540.f + (float)i * 50.f;
+            auto chip = R(760, y, 58, 36); g.setColour(camColour(std::atoi(comp[(size_t)i].c_str()), 1.f, .7f, T.dark ? .72f : .62f)); g.fillRoundedRectangle(chip, 18 * u);
+            t3(ou::T(comp[(size_t)i]), chip, 16.f, Colour(0xFF101014), juce::Justification::centred, true);
+            t3(ou::T(oa::keyLong(p, m)), R(832, y - 1, 310, 20), 15.f, T.ink, juce::Justification::centredLeft, true);
+            t3(u8(why[i]), R(832, y + 19, 310, 16), 12.f, T.inkMute);
         }
     }
 }

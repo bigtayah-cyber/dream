@@ -36,7 +36,7 @@ public:
     void clearNotes();
     const atn::Telemetry& tel() const { return engine.tel; }
     bool flatsPref() const { return raw("accid") > 0.5f; }
-    bool orbeOn() const { return raw("algo") > 0.5f; }
+    bool orbeOn() const { return raw("algo") > 0.5f || juce::roundToInt(raw("rendu")) == 0; }   // Satin passe par le moteur Orbe
 
     // ---- édition note par note (fil de l'interface uniquement)
     ned::Capture capture;
@@ -60,7 +60,7 @@ private:
     void setPlain(const char* id, float v);
     void publishEdits();
     void initRaw();
-    enum RawId { rSpeed, rTol, rAmt, rTrans, rForm, rFormPres, rVd, rVr, rHarm, rHv, rDbl, rMix, rLat, rKey, rScale, rAlgo, rExpr, rNum };
+    enum RawId { rSpeed, rTol, rAmt, rTrans, rForm, rFormPres, rVd, rVr, rHarm, rHv, rDbl, rMix, rLat, rKey, rScale, rAlgo, rExpr, rRender, rGlide, rNum };
     std::atomic<float>* rp[rNum] = {};
     std::atomic<float>* rx[12] = {};
     atn::Engine engine;

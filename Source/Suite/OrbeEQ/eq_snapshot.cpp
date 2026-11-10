@@ -21,10 +21,12 @@ int main(int argc, char** argv) {
     if (v.size() < 48000 * 2) { v = snap::noise(48000 * 2, -30.f, 3); float lp = 0; for (auto& s : v) { lp += 0.08f * (s - lp); s = lp * 5.f; } }
     v.resize(48000 * 2);
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
-    ed->setSize(900, 500);
+    const bool classic = kit::v3::rk::envMode() == kit::v3::Mode::Classic;
+    if (auto* ee = dynamic_cast<EqEditor*>(ed.get())) { ee->setThemeMode(kit::v3::rk::envMode(), false); ee->setUiScale(kit::v3::rk::envScale()); }
     snap::feed(proc, v); snap::settle(300); snap::feed(proc, v); snap::settle(200);
 
     // Interaction : glisser le point de la bande 5 (cloche 3,2 kHz), molette, double-clic, clic sur une pastille
+    if (!classic) { const bool ok3 = snap::savePng(*ed, argv[1]); return ok3 ? 0 : 1; }
     auto* graph = ed->getChildComponent(0);
     const float u = (float)graph->getWidth() / 836.f;
     const auto plot = graph->getLocalBounds().toFloat().withTrimmedLeft(36 * u).withTrimmedRight(12 * u).withTrimmedTop(12 * u).withTrimmedBottom(22 * u);

@@ -1,7 +1,9 @@
 // Rend l'éditeur d'Orbe 808 dans un PNG (sans DAW). Usage : orbe808_snapshot sortie.png [largeur] [note]
 #include "Orbe808Processor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    kit::v3::snapshotTheme("orbe808");
     Orbe808Processor proc;
     proc.prepareToPlay(48000, 512);
     if (argc > 3) {  // joue une note pour voir les voyants

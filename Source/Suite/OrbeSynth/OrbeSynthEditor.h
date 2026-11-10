@@ -1,6 +1,7 @@
 #pragma once
 #include "../../Kit/Widgets.h"
 #include "OrbeSynthProcessor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 
 namespace osui {
 using APVTS = juce::AudioProcessorValueTreeState;
@@ -25,7 +26,11 @@ public:
     Seg(juce::RangedAudioParameter&, juce::StringArray labels, bool waveIcons, const kit::Palette&);
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
+    const kit::v3::Theme* T = nullptr;   // nul ou Classique : rendu d'origine
+    void mouseMove(const juce::MouseEvent& e) override { const int h = juce::jlimit(0, labels_.size() - 1, (int)(e.position.x / ((float)getWidth() / (float)labels_.size()))); if (h != hover) { hover = h; repaint(); } }
+    void mouseExit(const juce::MouseEvent&) override { hover = -1; repaint(); }
 private:
+    int hover = -1;
     juce::StringArray labels_;
     bool icons;
     kit::Palette P;
@@ -38,6 +43,7 @@ public:
     PresetBar(OrbeSynthProcessor&, const kit::Palette&);
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
+    const kit::v3::Theme* T = nullptr;
 private:
     void pick(int);
     OrbeSynthProcessor& proc;
@@ -46,6 +52,8 @@ private:
 
 // Affichages : courbes recalculées à chaque réglage.
 class CurveView : public juce::Component {
+public:
+    const kit::v3::Theme* T = nullptr;
 protected:
     CurveView(OrbeSynthProcessor&, const kit::Palette&, std::initializer_list<const char*> ids);
     OrbeSynthProcessor& proc;
@@ -72,7 +80,9 @@ public:
     void mouseDown(const juce::MouseEvent& e) override { press(e); }
     void mouseDrag(const juce::MouseEvent& e) override { press(e); }
     void mouseUp(const juce::MouseEvent&) override { release(); }
+    const kit::v3::Theme* T = nullptr;
 private:
+    void paint3(juce::Graphics&);
     int noteAt(juce::Point<float>, float& vel) const;
     void press(const juce::MouseEvent&);
     void release();
@@ -90,6 +100,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override { drag(e); }
     void mouseUp(const juce::MouseEvent&) override { if (spring) val = 0.f; repaint(); }
     void mouseDoubleClick(const juce::MouseEvent&) override { val = 0.f; repaint(); }
+    const kit::v3::Theme* T = nullptr;
 private:
     void drag(const juce::MouseEvent&);
     std::atomic<float>& val;
@@ -118,7 +129,10 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    kit::w::HelpKey help;
+    kit::v3::bridge::HelpKey help;
+    kit::v3::Skin skin{"orbesynth", kit::v3::accents::lilac};
+    juce::OwnedArray<kit::v3::Knob3> k3;
+    void resized3(); void paint3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
     float u_ = 1.f;
 
     osui::PresetBar presetBar;

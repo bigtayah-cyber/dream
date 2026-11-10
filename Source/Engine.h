@@ -58,9 +58,9 @@ struct Delay {
         float p = (float)(w - 1) - d;
         if (p < 0.f) p += (float)n;
         int i0 = (int)p;
+        const float f = std::min(1.f, std::max(0.f, p - (float)i0));   // fraction prise AVANT le repli : si p arrondi vaut n, f = 0 (et non n : pic x n)
         if (i0 >= n) i0 -= n;
         if (i0 < 0) i0 = 0;
-        const float f = p - (float)i0;
         int i1 = i0 + 1;
         if (i1 >= n) i1 = 0;
         return b[(size_t)i0] + (b[(size_t)i1] - b[(size_t)i0]) * f;

@@ -30,3 +30,6 @@ target_sources(orbeautotune_snapshot PRIVATE ${_atudir}/autotune_snapshot.cpp ${
 set_target_properties(orbeautotune_snapshot PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_compile_definitions(orbeautotune_snapshot PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1)
 target_link_libraries(orbeautotune_snapshot PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+# Rendu « Satin » : modulation parasite, justesse, peigne Mix < 100 % : cmake --build . --target satin_test
+add_executable(satin_test EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/tests/satin_test.cpp)
+target_compile_options(satin_test PRIVATE -O2)

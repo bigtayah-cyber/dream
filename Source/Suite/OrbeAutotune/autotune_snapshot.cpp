@@ -12,16 +12,19 @@ int main(int argc, char** argv) {
     if (argc > 1 && juce::String(argv[1]) == "etat") {   // contrôle de l'état : ancien projet sans « algo » -> Classique ; notes éditées sauvegardées
         juce::MemoryBlock mb; proc.getStateInformation(mb);
         auto xml = juce::AudioProcessor::getXmlFromBinary(mb.getData(), (int)mb.getSize());
-        for (auto* c = xml->getFirstChildElement(); c != nullptr;) { auto* nx = c->getNextElement(); const auto id = c->getStringAttribute("id"); if (id == "algo" || id == "expr" || id == "accid") xml->removeChildElement(c, true); c = nx; }
+        for (auto* c = xml->getFirstChildElement(); c != nullptr;) { auto* nx = c->getNextElement(); const auto id = c->getStringAttribute("id"); if (id == "algo" || id == "expr" || id == "accid" || id == "rendu" || id == "glide") xml->removeChildElement(c, true); c = nx; }
         juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary(*xml, old);
         AutotuneProcessor p2; p2.setStateInformation(old.getData(), (int)old.getSize());
         std::printf("ancien projet : algo = %s (attendu Classique)\n", p2.orbeOn() ? "Orbe" : "Classique");
+        const int r2 = juce::roundToInt(p2.raw("rendu")), r1 = juce::roundToInt(proc.raw("rendu"));
+        std::printf("rendu : ancien projet = %d (attendu 1 Precis), nouvelle instance = %d (attendu 0 Satin), doublage neuf = %.2f\n", r2, r1, proc.raw("dbl"));
+        const bool rOk = r2 == 1 && r1 == 0 && proc.raw("dbl") < 0.001f;
         std::vector<ned::Note> n(2); n[0].start = 1000; n[0].end = 9000; n[0].center = 60.2f; n[0].shift = 80.f; n[0].edited = 1; n[1].start = 9000; n[1].end = 20000; n[1].center = 64.f;
         proc.setNotes(n, true); juce::MemoryBlock m2; proc.getStateInformation(m2);
         AutotuneProcessor p3; p3.setStateInformation(m2.getData(), (int)m2.getSize());
         const bool ok = p3.notes().size() == 2 && p3.notes()[0].shift == 80.f && p3.notes()[0].edited == 1 && p3.orbeOn();
         std::printf("notes editees rechargees : %s\n", ok ? "oui" : "NON");
-        return (!p2.orbeOn() && ok) ? 0 : 1;
+        return (!p2.orbeOn() && ok && rOk) ? 0 : 1;
     }
     const double sr = 48000.0;
     proc.prepareToPlay(sr, 512);

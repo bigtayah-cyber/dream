@@ -1,8 +1,10 @@
 // Rend l'éditeur d'Orbe Synth dans un PNG (sans DAW). Usage : orbesynth_snapshot sortie.png [largeur] [preset 0-9]
 #include "OrbeSynthProcessor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 #include "OrbeSynthEditor.h"
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    kit::v3::snapshotTheme("orbesynth");
     OrbeSynthProcessor proc;
     proc.prepareToPlay(48000, 512);
     if (argc > 3) proc.setCurrentProgram(juce::String(argv[3]).getIntValue());

@@ -163,6 +163,9 @@ AutotuneEditor::AutotuneEditor(AutotuneProcessor& p) : AudioProcessorEditor(&p),
     accSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "accid", juce::StringArray{"#", u8("\xE2\x99\xAD")},
         u8("\xC3\x89" "criture des notes : di\xC3\xA8ses ou b\xC3\xA9mols. Quand la tonalit\xC3\xA9 est connue, l'armure d\xC3\xA9" "cide (F majeur : Bb, G majeur : F#)."), pal);
     addAndMakeVisible(*accSeg);
+    renduSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "rendu", juce::StringArray{"Satin", u8("Pr\xC3\xA9" "cis"), "Robot"},
+        u8("Rendu. Satin : corrige le centre des notes et garde ton vibrato, glissement doux entre les notes, aucun effet de modulation (Mix dose alors la correction). Pr\xC3\xA9" "cis : comportement d'origine, suit chaque micro-variation. Robot : correction instantan\xC3\xA9" "e."), pal);
+    addAndMakeVisible(*renduSeg);
     editKey.setButtonText(u8("\xC3\x89" "DITION"));
     editKey.setClickingTogglesState(true);
     editKey.setTooltip(u8("Moteur Orbe : \xC3\xA9" "dition note par note d'un passage captur\xC3\xA9 pendant la lecture (ARMER, puis lance la lecture)."));
@@ -216,7 +219,7 @@ void AutotuneEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto* p : pots) p->setVisible(!n3);
     for (auto* k : k3) { k->setVisible(n3); k->setup(&T, &art); }
     const v3::Theme* tp = n3 ? &T : nullptr;
-    for (auto* sg : {latSeg.get(), algoSeg.get(), accSeg.get()}) { sg->T = tp; sg->repaint(); }
+    for (auto* sg : {latSeg.get(), algoSeg.get(), accSeg.get(), renduSeg.get()}) { sg->T = tp; sg->repaint(); }
     editKey.T = resetNotes.T = tp; power.T = tp; help.T = tp; keys.T = tp; roll->setTheme(tp);
     themeBtn.T = &T; themeBtn.current = m;
     if (persist) v3::Prefs::setTheme("autotune", m);
@@ -256,6 +259,7 @@ void AutotuneEditor::resizedClassic() {
     formToggle.setBounds(Si(320, 420, 142, 20));
     latSeg->setBounds(Si(718, 9, 130, 32));
     algoSeg->setBounds(Si(238, 9, 124, 32));
+    renduSeg->setBounds(Si(770, 228, 206, 26));
     editKey.setBounds(Si(24, 338, 90, 52));
     roll->u = u_; roll->setBounds(Si(24, 62, 726, 268)); roll->resized();
     keys.setBounds(Si(122, 338, 628, 52)); resetNotes.setBounds(Si(770, 356, 206, 32));
@@ -290,6 +294,7 @@ void AutotuneEditor::resized3() {
     editKey.setBounds(Si(20, 407, 92, 59));
     keys.setBounds(Si(126, 407, 657, 59));
     resetNotes.setBounds(Si(800, 427, 280, 40));
+    renduSeg->setBounds(Si(800, 397, 280, 26)); renduSeg->px = 10.f * u_;
     const float kh = v3::Knob3::boxHeight(v3::KnobSize::M, false);
     for (int i = 0; i < k3.size(); ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(potX(i) - kSlot * 0.5f, 556, kSlot, kh)); }
     formToggle.setBounds(Si(kSecX[1] + 12, 525, 170, 22));
@@ -574,7 +579,7 @@ void AutotuneEditor::paint(juce::Graphics& g) {
 
     if (!roll->isVisible()) paintScreen(g, S(24, 62, 726, 268));
     paintReadout(g, S(770, 160, 206, 62));
-    paintGauge(g, S(770, 230, 206, 100));
+    paintGauge(g, S(770, 262, 206, 68));
     engraved(g, pal, u8("Masque de notes"), S(770, 340, 206, 12), juce::Justification::centredLeft, 8.f * u, 1.6f * u, true);
 
     module(g, "Correction", 24, 282, 398);

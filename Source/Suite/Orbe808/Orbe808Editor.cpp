@@ -5,6 +5,7 @@ using juce::Colour, juce::Justification, juce::Rectangle, juce::String;
 namespace Colours = juce::Colours;
 using suiteui::kPeach, suiteui::kLilac, suiteui::kIce;
 
+namespace v3 = kit::v3;
 namespace {
 struct KnobDef { const char* id; const char* label; const char* tip; };
 const KnobDef kDefs[9] = {
@@ -44,6 +45,7 @@ void Orbe808Keys::press(int note) {
 }
 
 void Orbe808Keys::paint(juce::Graphics& g) {
+    if (v3::bridge::v3(T)) { paint3(g); return; }
     static const int ws[7] = {0, 2, 4, 5, 7, 9, 11};
     static const char* nm[7] = {"C", "D", "E", "F", "G", "A", "B"};
     const float u = (float)getWidth() / 952.f, kw = (float)getWidth() / (float)kWhite, H = (float)getHeight(), bh = H * 0.62f, bw = kw * 0.58f;
@@ -95,9 +97,9 @@ Orbe808Editor::Orbe808Editor(Orbe808Processor& p)
     }
     juce::StringArray pl;
     for (int i = 0; i <= o808::kNumPresets; ++i) pl.add(Orbe808Processor::presetLabel(i));
-    presetSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("preset"), pl, pal, 2);
-    satSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("sat"), juce::StringArray{u8("Douce"), u8("Écrêtée"), u8("Repliée")}, pal);
-    bendSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("bend"), juce::StringArray{u8("±1"), u8("±2"), u8("±5"), u8("±12")}, pal);
+    presetSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("preset"), pl, pal, 2);
+    satSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("sat"), juce::StringArray{u8("Douce"), u8("Écrêtée"), u8("Repliée")}, pal);
+    bendSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("bend"), juce::StringArray{u8("±1"), u8("±2"), u8("±5"), u8("±12")}, pal);
     for (auto* c : {(juce::Component*)presetSeg.get(), (juce::Component*)satSeg.get(), (juce::Component*)bendSeg.get(), (juce::Component*)&keysUi}) addAndMakeVisible(c);
     presetSeg->setTooltip(u8("Six sons de départ ; toucher un réglage passe en « Perso »"));
     satSeg->setTooltip(u8("Courbe de saturation : douce (tanh), écrêtée ou repliée")); bendSeg->setTooltip(u8("Amplitude de la molette de pitch bend, en demi-tons"));
@@ -108,19 +110,37 @@ Orbe808Editor::Orbe808Editor(Orbe808Processor& p)
         u8("- Longueur : résonance ; Punch et Vitesse : chute de hauteur à l'attaque ; Saturation et Courbe : grain ; Glissé : durée du legato entre notes liées."),
         u8("- Pitch bend : amplitude de la molette, en demi-tons. Double-clic sur un potard : valeur d'origine.")});
     pkMin.assign(kCols, 0.f); pkMax.assign(kCols, 0.f);
+    for (int i = 0; i < kKnobs; ++i) {   // v3 : potards haut de gamme sur les mêmes paramètres
+        auto* k = k3.add(new v3::Knob3(ap, kDefs[i].id, u8(kDefs[i].label), u8(kDefs[i].tip), v3::KnobSize::S));
+        k->setLabelPx(10.f);
+        if (i == 5) k->setFormatter([](double v) { const double f = 120.0 * std::pow(100.0, v); return v > 0.98 ? String(u8("ouvert")) : v3::fmt::hz(f); });
+        addChildComponent(k);
+    }
+    addAndMakeVisible(skin.themeBtn);
+    skin.onMode = [this] {
+        const bool n3 = skin.on();
+        for (auto& s : knobs) s.setVisible(!n3);
+        for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
+        for (auto* s : {presetSeg.get(), satSeg.get(), bendSeg.get()}) { s->T = skin.tp(); s->px = 11.f; s->repaint(); }
+        help.T = skin.tp(); keysUi.T = skin.tp();
+    };
     setResizable(true, true);
     setResizeLimits(800, 506, 1700, 1074);
     getConstrainer()->setFixedAspectRatio(1000.0 / 632.0);
     setSize(1000, 632);
+    skin.init(*this, look, 1000.f, 632.f);
     refreshShot();
     startTimerHz(30);
 }
 
-Orbe808Editor::~Orbe808Editor() { stopTimer(); setLookAndFeel(nullptr); }
+Orbe808Editor::~Orbe808Editor() { stopTimer(); skin.shutdown(); }
 
 void Orbe808Editor::resized() {
     u_ = (float)getWidth() / 1000.f;
+    skin.scale = u_;
+    if (skin.on()) { resized3(); return; }
     help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
+    skin.themeBtn.setBounds(help.getBounds().translated(-help.getWidth() - juce::roundToInt(6.f * u_), 0));
     const float pitch = 952.f / (float)kKnobs;
     for (int i = 0; i < kKnobs; ++i) knobs[i].setBounds(Si(24.f + pitch * ((float)i + 0.5f) - 48.f, 364, 96, 96));
     presetSeg->setBounds(Si(700, 108, 276, 120));
@@ -166,6 +186,7 @@ void Orbe808Editor::timerCallback() {
     refreshShot();
     const float m = proc.meter.load();
     meterShown = juce::jmax(m, meterShown * 0.88f);
+    if (skin.on()) for (auto* k : k3) k->tickMod(1.f / 30.f);
     repaint();
 }
 
@@ -220,6 +241,7 @@ void Orbe808Editor::paintScope(juce::Graphics& g, float u) {
 }
 
 void Orbe808Editor::paint(juce::Graphics& g) {
+    if (skin.on()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe 808", kit::w::serial::b808});
     suiteui::rule(g, u, 352, 964, 18); suiteui::rule(g, u, 506, 964, 18);
@@ -236,4 +258,103 @@ void Orbe808Editor::paint(juce::Graphics& g) {
         g.drawText(valueText(i), S(cx - pitch * 0.5f, 482, pitch, 14).toNearestInt(), juce::Justification::centred);
     }
     g.setColour(pal.line); g.fillRect(S(24.f + pitch * 8.f, 372, 1.f, 100));  // le niveau est séparé des réglages de son
+}
+
+// ============================================================ v3 « hybride v2 » (mêmes coordonnées de conception 1000 x 632)
+void Orbe808Keys::paint3(juce::Graphics& g) {
+    static const int ws[7] = {0, 2, 4, 5, 7, 9, 11};
+    static const char* nm[7] = {"C", "D", "E", "F", "G", "A", "B"};
+    const float u = (float)getWidth() / 952.f, kw = (float)getWidth() / (float)kWhite, H = (float)getHeight(), bh = H * 0.62f, bw = kw * 0.58f;
+    const int snd = proc.sounding.load();
+    auto lit = [&](int n) { return n == cur || n == snd || proc.keys.isNoteOn(1, n); };
+    const auto& t = *T;
+    for (int w = 0; w < kWhite; ++w) {
+        const int n = kBase + ws[w % 7] + 12 * (w / 7);
+        auto r = Rectangle<float>(kw * (float)w + 1.5f * u, 1.f, kw - 3.f * u, H - 4.f);
+        const bool on = lit(n);
+        g.setColour(t.shadow.withMultipliedAlpha(0.5f)); g.fillRoundedRectangle(r.translated(0, 1.5f), 7.f * u);
+        g.setColour(on ? t.accent : (t.dark ? Colour(0xFFD9DCE4) : Colour(0xFFFFFFFF))); g.fillRoundedRectangle(r, 7.f * u);
+        g.setColour(t.dark ? Colour(0x33FFFFFF) : t.fieldEdge); g.drawRoundedRectangle(r.reduced(0.5f), 7.f * u, 1.f);
+        g.setColour(on ? Colour(0xFF1B1E26) : Colour(0xFF5A5F6B)); g.setFont(v3::font(11.f * u, true));
+        g.drawText(String(nm[w % 7]) + (w % 7 == 0 ? String(n / 12 - 1) : String()), r.withTop(r.getBottom() - 22 * u), Justification::centred, false);
+    }
+    for (int w = 0; w < kWhite - 1; ++w) {
+        const int d = w % 7;
+        if (d == 2 || d == 6) continue;
+        const int n = kBase + ws[d] + 12 * (w / 7) + 1;
+        auto r = Rectangle<float>(kw * (float)(w + 1) - bw * 0.5f, 0.f, bw, bh);
+        g.setColour(Colours::black.withAlpha(0.28f)); g.fillRoundedRectangle(r.translated(0, 2.f * u), 5.f * u);
+        g.setColour(lit(n) ? t.accent.darker(0.15f) : Colour(0xFF20232C)); g.fillRoundedRectangle(r, 5.f * u);
+        g.setColour(Colours::white.withAlpha(0.10f)); g.fillRoundedRectangle(r.reduced(2.f * u, 1.f).withHeight(3.f * u), 1.5f * u);
+    }
+}
+
+void Orbe808Editor::resized3() {
+    help.layout(Si(954, 24, 28, 28), getLocalBounds());
+    skin.themeBtn.setBounds(Si(918, 24, 28, 28));
+    const float pitch = 952.f / (float)kKnobs;
+    for (int i = 0; i < kKnobs; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(24.f + pitch * ((float)i + 0.5f) - 52.f, 364, 104, 112)); }
+    presetSeg->setBounds(Si(706, 118, 264, 104));
+    satSeg->setBounds(Si(706, 250, 264, 30));
+    bendSeg->setBounds(Si(706, 304, 264, 30));
+    keysUi.setBounds(Si(24, 524, 952, 88));
+    repaint();
+}
+
+void Orbe808Editor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
+    const float u = b.getWidth() / 1000.f;
+    auto R = [u](float x, float y, float w, float h) { return Rectangle<float>(x * u, y * u, w * u, h * u); };
+    const auto& T = skin.T;
+    v3::background(g, T, b);
+    v3::brand(g, T, u, "Orbe", "808");
+    v3::hero(g, T, R(24, 92, 652, 246), 20.f * u);
+    v3::card(g, T, R(690, 92, 296, 246), 18.f * u);
+    v3::card(g, T, R(24, 352, 952, 156), 18.f * u);
+    v3::label(g, T, "Presets", R(706, 100, 200, 14), 11.f * u);
+    v3::label(g, T, u8("Courbe de saturation"), R(706, 232, 260, 14), 11.f * u);
+    v3::label(g, T, u8("Pitch bend · demi-tons"), R(706, 286, 260, 14), 11.f * u);
+    const float pitch = 952.f / 9.f;
+    g.setColour(T.dark ? Colours::white.withAlpha(0.07f) : Colour(0x14101828)); g.fillRect(R(24.f + pitch * 8.f, 368, 1, 124));
+}
+
+void Orbe808Editor::paintScope3(juce::Graphics& g) {
+    const float u = u_;
+    const auto& T = skin.T;
+    auto box = S(24, 92, 652, 246);
+    auto a = box.reduced(18 * u, 38 * u).withTrimmedBottom(14 * u);
+    const float cy = a.getCentreY(), amp = a.getHeight() * 0.5f * 0.92f;
+    g.setFont(v3::font(11.f * u));
+    for (float t = 0.f; t < shotSeconds; t += 0.5f) {
+        const float x = a.getX() + a.getWidth() * t / shotSeconds;
+        g.setColour(Colours::white.withAlpha(t == 0.f ? 0.16f : 0.06f)); g.fillRect(x, a.getY(), 1.f, a.getHeight());
+        g.setColour(T.scrMute); g.drawText(t == 0.f ? "0" : v3::fmt::withUnit(v3::fmt::num(t, 1), "s"), Rectangle<float>(x + 3 * u, a.getBottom() + 1 * u, 50 * u, 13 * u), Justification::centredLeft, false);
+    }
+    g.setColour(Colours::white.withAlpha(0.12f)); g.fillRect(a.getX(), cy, a.getWidth(), 1.f);
+    {
+        juce::Graphics::ScopedSaveState st(g);
+        g.reduceClipRegion(a.expanded(4 * u).toNearestInt());
+        auto X = [&](float i) { return a.getX() + a.getWidth() * i / (float)(kCols - 1); };
+        const v3::Trace::Opts o{kCols, 1.2f, 1e9f, -2.f, 0};
+        trMax.build(pkMax.data(), kCols, X, [&](float v) { return cy - v * amp; }, cy, o);
+        trMin.build(pkMin.data(), kCols, X, [&](float v) { return cy - v * amp; }, cy, o);
+        trMax.draw(g, T.accent, 1.8f * u, 1.f, 0.30f, cy - amp * 0.0f);
+        trMin.draw(g, T.accent, 1.8f * u, 1.f, 0.0f, 0.f);
+    }
+    // note, fréquence, niveau
+    const int n = proc.sounding.load() >= 0 ? proc.sounding.load() : proc.lastNote.load();
+    const float hz = 440.f * std::pow(2.f, ((float)n - 69.f) / 12.f);
+    const auto big = v3::font(34.f * u, true);
+    g.setColour(T.scrInk); g.setFont(big); g.drawText(suiteui::noteName(n), Rectangle<float>(box.getX() + 20 * u, box.getY() + 12 * u, 90 * u, 40 * u), Justification::centredLeft, false);
+    g.setColour(T.scrMute); v3::tabular(g, v3::fmt::hz(hz), Rectangle<float>(box.getX() + 100 * u, box.getY() + 22 * u, 110 * u, 22 * u), v3::font(15.f * u), Justification::centredLeft);
+    const int idx = (int)proc.apvts.getRawParameterValue("preset")->load();
+    g.setColour(T.out); v3::caps(g, Orbe808Processor::presetLabel(idx), Rectangle<float>(box.getX() + 230 * u, box.getY() + 22 * u, 190 * u, 22 * u), 12.f * u, Justification::centredLeft);
+    const float db = 20.f * std::log10(juce::jmax(1e-4f, meterShown));
+    g.setColour(T.scrMute); v3::caps(g, "Sortie", Rectangle<float>(box.getRight() - 230 * u, box.getY() + 14 * u, 60 * u, 16 * u), 10.5f * u, Justification::centredRight);
+    v3::meterBar(g, T, Rectangle<float>(box.getRight() - 160 * u, box.getY() + 19 * u, 130 * u, 6 * u), (db + 42.f) / 42.f, T.out);
+    g.setColour(T.scrInk); v3::tabular(g, v3::fmt::db(db, 0), Rectangle<float>(box.getRight() - 160 * u, box.getY() + 28 * u, 130 * u, 16 * u), v3::font(12.f * u), Justification::centredRight);
+}
+
+void Orbe808Editor::paint3(juce::Graphics& g) {
+    skin.art.draw(g, String("bd|") + v3::modeKey(skin.mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) { paintBackdrop3(ig, b); });
+    paintScope3(g);
 }

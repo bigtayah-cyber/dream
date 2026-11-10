@@ -3,6 +3,7 @@
 using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
 
+namespace v3 = kit::v3;
 namespace {
 constexpr float kW = 400.f, kH = 760.f;
 using kit::w::kLilac, kit::w::kIce, kit::w::kPeach;
@@ -49,6 +50,8 @@ CabineEditor::CabineEditor(CabineProcessor& p)
     prev.onClick = [this] { step(-1); }; next.onClick = [this] { step(1); };
     prev.setTooltip(u8("Preset pr\xC3\xA9" "c\xC3\xA9" "dent")); next.setTooltip("Preset suivant");
     addAndMakeVisible(prev); addAndMakeVisible(next);
+    cPrev.onClick = prev.onClick; cNext.onClick = next.onClick; cPrev.setTooltip(prev.getTooltip()); cNext.setTooltip(next.getTooltip());
+    addChildComponent(cPrev); addChildComponent(cNext);
     addAndMakeVisible(power);
     power.setTooltip(u8("Effet en service. Bascule pour le couper (la latence reste compens\xC3\xA9" "e)."));
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
@@ -57,16 +60,54 @@ CabineEditor::CabineEditor(CabineProcessor& p)
         u8("- Double-clic sur un potard : retour \xC3\xA0 la valeur du preset."),
         u8("- VU : niveau de sortie (0 VU = -18 dBFS efficace). \xC3\x80 droite : r\xC3\xA9" "duction du compresseur (dB) et cr\xC3\xAAte de sortie (dBFS)."),
         u8("- Passe-bas tout \xC3\xA0 droite : coup\xC3\xA9. Seuil 0 dB et ratio 1 : compresseur inactif. Delay synchronis\xC3\xA9 au tempo de l'h\xC3\xB4te.")});
+    // --- v3 : potards haut de gamme (mêmes paramètres), sélecteur de thème
+    for (auto& d : kPots) {
+        const juce::String id(d.id);
+        auto* k = k3.add(new v3::rk::RefKnob(proc.apvts, id, u8(d.label), u8(d.tip), v3::KnobSize::S));
+        k->resetTo = [this, id] { return (double)CabineProcessor::presetValue(id, proc.currentPreset()); };
+        k->setBipolar(v3::rk::bipolarOf(proc.apvts, id)); k->setLabelPx(11.f);
+        addChildComponent(k);
+    }
+    addAndMakeVisible(skin.btn);
+    skin.btn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
+    skin.btn.onScale = [this](float s) { setUiScale(s); };
     setResizable(true, true);
-    setResizeLimits(300, 570, 800, 1520);
-    getConstrainer()->setFixedAspectRatio((double)kW / kH);
-    setSize((int)kW, (int)kH);
+    scale_ = v3::Prefs::scale("cabine", 1.f);
+    setThemeMode(v3::Prefs::theme("cabine", v3::Mode::Light), false);
     startTimerHz(30);
 }
-CabineEditor::~CabineEditor() { stopTimer(); setLookAndFeel(nullptr); }
+CabineEditor::~CabineEditor() { stopTimer(); v3::Prefs::setScale("cabine", scale_); setLookAndFeel(nullptr); }
+
+void CabineEditor::setThemeMode(v3::Mode m, bool persist) {
+    skin.set(m);
+    const bool n3 = isV3();
+    setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&skin.look3) : static_cast<juce::LookAndFeel*>(&look));
+    for (auto* p : pots) p->setVisible(!n3);
+    for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
+    prev.setVisible(!n3); next.setVisible(!n3);
+    const v3::Theme* tp = skin.tp();
+    cPrev.T = cNext.T = tp; cPrev.setVisible(n3); cNext.setVisible(n3);
+    power.T = tp; help.T = tp;
+    if (persist) v3::Prefs::setTheme("cabine", m);
+    if (v3::rk::fit(*this, n3, {kW3, kH3}, {kW, kH}, 0.75f, 2.f, scale_)) resized();
+    sendLookAndFeelChange();
+    repaint();
+}
+
+void CabineEditor::setUiScale(float s) {
+    const bool n3 = isV3();
+    scale_ = juce::jlimit(n3 ? 0.75f : 0.75f, n3 ? 1.5f : 2.f, s);
+    setSize(juce::roundToInt((n3 ? kW3 : kW) * scale_), juce::roundToInt((n3 ? kH3 : kH) * scale_));
+    v3::Prefs::setScale("cabine", scale_);
+}
 
 void CabineEditor::resized() {
-    u_ = (float)getWidth() / kW;
+    if (isV3()) resized3(); else resizedClassic();
+    skin.btn.scale = scale_;
+}
+
+void CabineEditor::resizedClassic() {
+    u_ = (float)getWidth() / kW; scale_ = u_;
     const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
     power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
     help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
@@ -84,16 +125,18 @@ void CabineEditor::timerCallback() {
     pkDisp = juce::jmax(20.f * std::log10(juce::jmax(1e-5f, pk)), pkDisp - 1.2f);
     grDisp = juce::jmax(gr, grDisp - 0.5f);
     modified = !proc.matchesPreset();
+    if (isV3()) { repaint(S(20, 84, 680, 200).toNearestInt()); return; }
     repaint(S(18, 54, 364, 190).toNearestInt());
 }
 
 void CabineEditor::mouseUp(const juce::MouseEvent& e) {
-    if (S(46, 58, 308, 44).contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showMenu();
+    if (presetArea().contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showMenu();
 }
+juce::Rectangle<float> CabineEditor::presetArea() const { return isV3() ? S(66, 96, 320, 70) : S(46, 58, 308, 44); }
 void CabineEditor::showMenu() {
     juce::PopupMenu m;
     for (int i = 0; i < cab::kPresets; ++i) m.addItem(i + 1, CabineProcessor::presetName(i), true, i == proc.currentPreset());
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(46, 58, 308, 44))).withMinimumWidth(juce::roundToInt(308 * u_)),
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(presetArea().toNearestInt())).withMinimumWidth(juce::roundToInt(presetArea().getWidth())),
                     [this](int r) { if (r > 0) proc.applyPreset(r - 1); });
 }
 
@@ -122,6 +165,7 @@ void CabineEditor::paintLadder(juce::Graphics& g, Rectangle<float> r, const char
 }
 
 void CabineEditor::paint(juce::Graphics& g) {
+    if (isV3()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Cabine", kit::w::serial::cabine});
 
@@ -146,4 +190,75 @@ void CabineEditor::paint(juce::Graphics& g) {
     paintLadder(g, lw.reduced(4 * u, 0).withTrimmedTop(68 * u), "Cr\xC3\xAAte dBFS", pkT, pkL, pkDisp, pal.ledRed);
 
     for (int i = 0; i < 3; ++i) module(g, i, kModY[i]);
+}
+
+// ============================================================ v3 « hybride v2 » : coordonnées de conception 720 x 836
+namespace {
+constexpr float kCardY[3] = {300.f, 472.f, 644.f}, kCardH = 160.f;
+const char* kLadderTitle[2] = {"R\xC3\xA9" "duction dB", "Cr\xC3\xAAte dBFS"};
+}
+
+void CabineEditor::resized3() {
+    u_ = (float)getWidth() / kW3; scale_ = u_;
+    help.layout(Si(608, 34, 30, 30), getLocalBounds());
+    skin.btn.setBounds(Si(574, 35, 28, 28));
+    power.setBounds(Si(644, 36, 70, 26));
+    cPrev.setBounds(Si(30, 108, 32, 44)); cNext.setBounds(Si(390, 108, 32, 44));
+    int cnt[3] = {0, 0, 0};
+    for (int i = 0; i < k3.size(); ++i) {
+        const int sec = kPots[i].section, n = sec == 2 ? 3 : 6, idx = cnt[sec]++;
+        const float pitch = 640.f / (float)n, cx = 40.f + pitch * ((float)idx + 0.5f), w = 100.f;
+        k3[i]->setScale(u_);
+        k3[i]->setBounds(Si(cx - w * 0.5f, kCardY[sec] + 34.f, w, v3::Knob3::boxHeight(v3::KnobSize::S, false)));
+    }
+}
+
+void CabineEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
+    const float u = b.getWidth() / kW3;
+    const auto& T = skin.T;
+    auto R = [u](float x, float y, float w, float h) { return Rectangle<float>(x * u, y * u, w * u, h * u); };
+    v3::background(g, T, b);
+    v3::rk::brand(g, T, u, "Orbe", "Cabine");
+    v3::hero(g, T, R(20, 84, 680, 200), 20.f * u);
+    g.setColour(juce::Colours::white.withAlpha(0.08f)); g.fillRect(R(424, 102, 1, 164));
+    g.setColour(T.scrMute);
+    v3::caps(g, u8(kLadderTitle[0]), R(40, 186, 120, 16), 11.f * u, juce::Justification::centredLeft);
+    v3::caps(g, u8(kLadderTitle[1]), R(40, 236, 120, 16), 11.f * u, juce::Justification::centredLeft);
+    for (int i = 0; i < 3; ++i) {
+        v3::card(g, T, R(20, kCardY[i], 680, kCardH), 18.f * u);
+        v3::rk::label(g, T.inkMute, u, u8(kSecName[i]).replace(u8("\xC2\xB7"), u8("\xC2\xB7")), 40, kCardY[i] + 14, 500);
+    }
+}
+
+void CabineEditor::paintLadder3(juce::Graphics& g, Rectangle<float> r, const char* /*title*/, const float* thr, const char* const* lab, float value) {
+    const float u = u_;
+    const auto& T = skin.T;
+    for (int i = 0; i < 8; ++i) {
+        auto p = Rectangle<float>(r.getX() + (float)i * 32.f * u, r.getY(), 28.f * u, 12.f * u);
+        const bool lit = value >= thr[i];
+        const auto c = i >= 6 ? Colour(0xFFFF6A5A) : T.accent;
+        if (lit) { g.setColour(c.withAlpha(0.25f)); g.fillRoundedRectangle(p.expanded(2.f * u), 8.f * u); }
+        g.setColour(lit ? c : juce::Colours::white.withAlpha(0.09f)); g.fillRoundedRectangle(p, 6.f * u);
+        g.setColour(T.scrMute); g.setFont(v3::font(10.f * u));
+        g.drawText(String(lab[i]).replace("-", v3::fmt::minus()), p.withY(p.getBottom() + 3.f * u).withHeight(13.f * u).expanded(4.f * u, 0), juce::Justification::centred, false);
+    }
+}
+
+void CabineEditor::paint3(juce::Graphics& g) {
+    const float u = u_;
+    const auto& T = skin.T;
+    skin.art.draw(g, String("bd|") + v3::modeKey(skin.mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) { paintBackdrop3(ig, b); });
+    const int pi = proc.currentPreset();
+    g.setColour(T.scrMute);
+    v3::caps(g, u8("Preset ") + String(pi + 1).paddedLeft('0', 2) + "/" + String(cab::kPresets), S(68, 96, 160, 16), 11.f * u, juce::Justification::centredLeft);
+    g.setColour(modified ? T.out : T.scrMute);
+    v3::caps(g, modified ? u8("\xE2\x97\x8F Modifi\xC3\xA9") : u8("\xE2\x97\x8F D'origine"), S(240, 96, 144, 16), 11.f * u, juce::Justification::centredRight);
+    g.setColour(T.scrInk); g.setFont(v3::font(30.f * u, true));
+    g.drawFittedText(CabineProcessor::presetName(pi), S(66, 118, 316, 44).toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    static const float grT[8] = {0.5f, 1.5f, 2.5f, 3.5f, 5.f, 7.f, 10.f, 14.f}, pkT[8] = {-40.f, -30.f, -20.f, -12.f, -8.f, -4.f, -1.5f, -0.2f};
+    static const char* grL[8] = {"1", "2", "3", "4", "6", "8", "10", "14"};
+    static const char* pkL[8] = {"-40", "-30", "-20", "-12", "-8", "-4", "-1", "0"};
+    paintLadder3(g, S(160, 184, 260, 16), nullptr, grT, grL, grDisp);
+    paintLadder3(g, S(160, 234, 260, 16), nullptr, pkT, pkL, pkDisp);
+    v3::vu(g, T, S(444, 104, 240, 160), (float)vu.vu(), pkDisp > -0.5f, 10.f * u);
 }

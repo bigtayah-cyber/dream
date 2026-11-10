@@ -230,7 +230,7 @@ static double bandMean(const double* arr, double lo, double hi, int n, double fs
 void MixMeter::prepare(double sr) {
     fs = sr; seg = (int)jsRound(fs * .1);
     hi.init(); hs.init();
-    rm.assign(4096, 0.0); rs.assign(4096, 0.0); pm.assign(2048, 0.0); ps.assign(2048, 0.0); win = hann(4096); re.assign(4096, 0.0); im.assign(4096, 0.0); tmp.assign(2048, 0.0); sa.assign(2048, 0.0); sb.assign(2048, 0.0); live.assign(kCurveN, 0.f);
+    rm.assign(4096, 0.0); rs.assign(4096, 0.0); pm.assign(2048, 0.0); ps.assign(2048, 0.0); if (win.size() != 4096) win = hann(4096); re.assign(4096, 0.0); im.assign(4096, 0.0); tmp.assign(2048, 0.0); sa.assign(2048, 0.0); sb.assign(2048, 0.0); live.assign(kCurveN, 0.f);
     // pondération K (BS.1770) : étage haut-shelf puis passe-haut
     double f0 = 1681.974450955533, G = 3.999843853973347, Q = 0.7071752369554196, K = std::tan(kPi * f0 / fs);
     const double Vh = std::pow(10, G / 20), Vb = std::pow(Vh, 0.4996667741545416), a0 = 1 + K / Q + K * K;
@@ -250,6 +250,7 @@ void MixMeter::reset() {
 }
 
 static void histAdd(std::vector<double>& sum, std::vector<uint32_t>& cnt, double p) {
+    if (!std::isfinite(p)) return;   // (int) d'un infini : comportement indéfini
     const double lk = -0.691 + db10(p); if (lk <= -70) return;
     const int b = std::max(0, std::min(8000, (int)std::floor((lk + 70) * 100))); sum[(size_t)b] += p; cnt[(size_t)b]++;
 }
@@ -257,8 +258,11 @@ static void histAdd(std::vector<double>& sum, std::vector<uint32_t>& cnt, double
 void MixMeter::process(const float* L, const float* R, int n) {
     mono = L == R;
     const double al = std::exp(-1.0 / (0.5 * fs));
+    // Entrée assainie pour la mesure seulement (l'audio n'est jamais touché) : un NaN ou un infini venu de l'amont
+    // empoisonnerait pour toujours les filtres K et les sommes ; on borne aussi à ±1000 (+60 dBFS) pour que les carrés restent finis.
+    auto clean = [](float v) { return std::isfinite(v) ? std::max(-1000.0, std::min(1000.0, (double)v)) : 0.0; };
     for (int i = 0; i < n; ++i) {
-        const double l = L[i], r = R[i], m = std::max(std::abs(l), std::abs(r));
+        const double l = clean(L[i]), r = clean(R[i]), m = std::max(std::abs(l), std::abs(r));
         peakLin = std::max(peakLin, m); sL += l; sR += r; LL += l * l; RR += r * r; LR += l * r;
         cl = cl * al + l * l * (1 - al); cr = cr * al + r * r * (1 - al); clr = clr * al + l * r * (1 - al);
         if (m >= .9995) { if (++run == 3) ++clips; } else run = 0;

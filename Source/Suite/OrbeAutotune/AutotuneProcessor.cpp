@@ -25,7 +25,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutotuneProcessor::makeLayou
     flt("vr", "Vitesse du vibrato", 3.f, 8.f, 0.1f, d.vr, [](float v) { return String(v, 1) + " Hz"; });
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"harm", 1}, "Harmonie", StringArray{u8("Aucune"), u8("Tierce au-dessus"), "Quinte", u8("Tierce en dessous"), u8("Octave au-dessus"), u8("Octave en dessous")}, d.harm));
     flt("hv", "Volume d'harmonie", 0.f, 1.f, 0.01f, d.hv, pct);
-    flt("dbl", "Doublage", 0.f, 1.f, 0.01f, d.dbl, [](float v) { return v < 0.005f ? String("off") : String(roundToInt(v * 100.f)) + " %"; });
+    flt("dbl", "Doublage", 0.f, 1.f, 0.01f, 0.f, [](float v) { return v < 0.005f ? String("off") : String(roundToInt(v * 100.f)) + " %"; });
     flt("mix", "Mix", 0.f, 1.f, 0.01f, d.mix, pct);
     StringArray keys{"Auto"}; for (int i = 0; i < 12; ++i) keys.add(atn::noteNames()[i]);
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"key", 1}, u8("Tonalité"), keys, 0));
@@ -38,6 +38,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutotuneProcessor::makeLayou
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"algo", 1}, u8("Moteur"), StringArray{"Classique", "Orbe"}, 1));
     flt("expr", "Expression", 0.f, 1.f, 0.01f, d.expr, pct);
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"accid", 1}, u8("Altérations"), StringArray{u8("Dièses (#)"), u8("Bémols (b)")}, 0));
+    // ---- rendu (ajouté en fin) : Satin par défaut pour une nouvelle instance ; un état sans « rendu » est rechargé en Précis (son d'origine)
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"rendu", 1}, u8("Rendu"), StringArray{"Satin", u8("Précis"), "Robot"}, 0));
+    flt("glide", "Glissement", 20.f, 60.f, 1.f, d.glide, [](float v) { return String(roundToInt(v)) + " ms"; });
     return l;
 }
 
@@ -51,7 +54,7 @@ AutotuneProcessor::AutotuneProcessor()
 
 // G4 : pointeurs de paramètres préchargés (aucune chaîne construite dans le fil audio).
 void AutotuneProcessor::initRaw() {
-    static const char* ids[rNum] = {"speed", "tol", "amt", "trans", "form", "formPres", "vd", "vr", "harm", "hv", "dbl", "mix", "latmode", "key", "scale", "algo", "expr"};
+    static const char* ids[rNum] = {"speed", "tol", "amt", "trans", "form", "formPres", "vd", "vr", "harm", "hv", "dbl", "mix", "latmode", "key", "scale", "algo", "expr", "rendu", "glide"};
     for (int i = 0; i < rNum; ++i) rp[i] = apvts.getRawParameterValue(ids[i]);
     for (int i = 0; i < 12; ++i) rx[i] = apvts.getRawParameterValue("x" + String(i));
 }
@@ -70,6 +73,7 @@ atn::Params AutotuneProcessor::readParams() const {
     p.lowLat = juce::roundToInt(v(rLat)) == 0;
     p.key = juce::roundToInt(v(rKey)) - 1; p.scale = juce::roundToInt(v(rScale));
     p.orbe = v(rAlgo) > 0.5f; p.expr = v(rExpr);
+    p.render = juce::jlimit(0, 2, juce::roundToInt(v(rRender))); p.glide = v(rGlide);
     for (int i = 0; i < 12; ++i) if (rx[i]->load(std::memory_order_relaxed) > 0.5f) p.flips |= 1 << i;
     return p;
 }
@@ -82,12 +86,14 @@ void AutotuneProcessor::setCurrentProgram(int i) {
     const auto& q = atn::presets()[prog];
     setPlain("speed", q.speed); setPlain("tol", q.tol); setPlain("amt", q.amt); setPlain("trans", q.trans); setPlain("form", q.form);
     setPlain("vd", q.vd); setPlain("vr", q.vr); setPlain("harm", (float)q.harm); setPlain("hv", q.hv); setPlain("dbl", q.dbl);
+    if (q.render >= 0) { setPlain("rendu", (float)q.render); setPlain("glide", q.glide); }
 }
 bool AutotuneProcessor::presetMatches(int i) const {
     const auto& q = atn::presets()[juce::jlimit(0, atn::kPresets - 1, i)];
     auto eq = [](float a, float b) { return std::fabs(a - b) < 0.011f * juce::jmax(1.f, std::fabs(b)); };
     return eq(raw("speed"), q.speed) && eq(raw("tol"), q.tol) && eq(raw("amt"), q.amt) && eq(raw("trans"), q.trans) && eq(raw("form"), q.form) && eq(raw("vd"), q.vd) &&
-           eq(raw("vr"), q.vr) && juce::roundToInt(raw("harm")) == q.harm && eq(raw("hv"), q.hv) && eq(raw("dbl"), q.dbl);
+           eq(raw("vr"), q.vr) && juce::roundToInt(raw("harm")) == q.harm && eq(raw("hv"), q.hv) && eq(raw("dbl"), q.dbl) &&
+           (q.render < 0 || (juce::roundToInt(raw("rendu")) == q.render && eq(raw("glide"), q.glide)));
 }
 void AutotuneProcessor::toggleNote(int pc) {
     if (auto* p = apvts.getParameter("x" + String(pc))) { p->beginChangeGesture(); p->setValueNotifyingHost(p->getValue() > 0.5f ? 0.f : 1.f); p->endChangeGesture(); }
@@ -173,10 +179,11 @@ void AutotuneProcessor::setStateInformation(const void* data, int size) {
                 if (mc.fromBase64Encoding(ed.getProperty("curve").toString())) ned::unpackCurve((const uint8_t*)mc.getData(), mc.getSize(), curveUi);
                 st.removeChild(ed, nullptr);
             }
-            bool hasAlgo = false;
-            for (const auto& c : st) if (c.getProperty("id").toString() == "algo") hasAlgo = true;
+            bool hasAlgo = false, hasRender = false;
+            for (const auto& c : st) { const auto id = c.getProperty("id").toString(); if (id == "algo") hasAlgo = true; if (id == "rendu") hasRender = true; }
             apvts.replaceState(st);
             if (!hasAlgo) setPlain("algo", 0.f);   // projet d'avant le moteur Orbe : son identique (Classique)
+            if (!hasRender) setPlain("rendu", 1.f);   // projet d'avant le rendu Satin : Précis (son identique)
             hist.clear(); hist.push_back({}); histPos = 0;
             setNotes(std::move(nv), false);
         }

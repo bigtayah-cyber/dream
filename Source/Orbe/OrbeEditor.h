@@ -1,6 +1,7 @@
 #pragma once
 #include "../Kit/Kit.h"
 #include "OrbeProcessor.h"
+#include "../Kit/v3/InstrumentSkin.h"
 
 // Sélecteur segmenté relié à un paramètre « choix ».
 class Segmented : public juce::Component {
@@ -9,6 +10,7 @@ public:
         : labels_(std::move(labels)), P(pal), att(p, [this](float v) { idx = juce::roundToInt(v); repaint(); }) { att.sendInitialUpdate(); }
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
+    const kit::v3::Theme* T = nullptr;   // nul ou Classique : rendu d'origine
 private:
     juce::StringArray labels_;
     kit::Palette P;
@@ -21,6 +23,7 @@ class MidiHandle : public juce::Component {
 public:
     MidiHandle(OrbeProcessor& p, const kit::Palette& pal) : proc(p), P(pal) { setMouseCursor(juce::MouseCursor::DraggingHandCursor); }
     bool chord = true, lead = true, bass = true, drums = true;
+    const kit::v3::Theme* T = nullptr;
     void paint(juce::Graphics& g) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent&) override { dragging = false; repaint(); }
@@ -53,6 +56,8 @@ private:
     void paintCards(juce::Graphics&, float u);
     void paintRoll(juce::Graphics&, float u);
     void paintToolbar(juce::Graphics&, float u);
+    void resized3(); void paint3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
+    void paintHeader3(juce::Graphics&, float u); void paintCards3(juce::Graphics&, float u); void paintToolbar3(juce::Graphics&, float u);
     // piano roll éditable : la piste choisie occupe la grande zone (hauteurs ou 7 lignes de batterie)
     struct Geo { juce::Rectangle<float> a; int lo = 0, hi = 0; float stepW = 1, rowH = 1; };
     Geo geo() const;
@@ -71,6 +76,8 @@ private:
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
     juce::Image plate;
+    kit::v3::Skin skin{"orbe", kit::v3::accents::orange};
+    juce::OwnedArray<kit::v3::Knob3> k3;
     float u_ = 1.f;
     int editTrack = 1, tool = 0;  // piste éditée ; outil 0 crayon, 1 gomme
     struct Drag { int mode = 0, idx = -1; float grab = 0; bool moved = false, pushed = false, added = false; } drag;  // mode 1 déplacer, 2 durée, 3 gomme

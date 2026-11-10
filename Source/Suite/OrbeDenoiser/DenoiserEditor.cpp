@@ -2,6 +2,7 @@
 
 using namespace of;
 using kit::u8;
+namespace v3 = kit::v3;
 
 // Afficheur : spectre d'entrée (fond), sortie, courbe du bruit appris ou estimé.
 class DnScope : public juce::Component {
@@ -18,9 +19,58 @@ public:
             sm(inS[(size_t)k], i, 0.5f, 0.12f); sm(outS[(size_t)k], o, 0.5f, 0.12f); sm(noiseS[(size_t)k], n, 0.2f, 0.2f);
         }
         learnP = e.learnProgress(); learning = e.learning(); known = e.profileKnown();
+        {   // réduction moyenne réellement appliquée (bins où il y a du signal)
+            float s = 0.f; int c = 0;
+            for (int k = 2; k < dn::kBins; ++k) if (inS[(size_t)k] > -90.f) { s += juce::jmax(0.f, inS[(size_t)k] - outS[(size_t)k]); ++c; }
+            red = c > 0 ? s / (float)c : 0.f;
+        }
         repaint();
     }
+    const v3::Theme* T = nullptr;   // nul ou Classique : rendu d'origine
+    float red = 0.f;
+    bool isLearning() const { return learning; }
+    bool isKnown() const { return known; }
+    float progress() const { return learnP; }
+    void paint3(juce::Graphics& g) {
+        const float u = (float)getWidth() / 700.f; const auto& t = *T;
+        auto r = getLocalBounds().toFloat().withTrimmedLeft(30 * u).withTrimmedBottom(20 * u).withTrimmedTop(26 * u).withTrimmedRight(6 * u);
+        constexpr float top = -10.f, bot = -110.f;
+        g.setColour(t.scrMute); v3::caps(g, u8("Spectre · bruit"), {4 * u, 0, 200 * u, 18 * u}, 11.f * u, juce::Justification::centredLeft);
+        const Colour inC = t.scrMute.withAlpha(0.9f);
+        const struct { const char* t; Colour c; } leg[] = {{"entrée", inC}, {"sortie", t.sung}, {"bruit appris / estimé", t.out}};
+        float lx = 250.f * u;
+        for (auto& l : leg) {
+            g.setColour(l.c); g.fillRoundedRectangle(lx, 7.5f * u, 12 * u, 3 * u, 1.5f * u);
+            g.setColour(t.scrInk.withAlpha(0.85f)); g.setFont(v3::font(12.f * u)); g.drawText(u8(l.t), Rectangle<float>(lx + 17 * u, 0, 150 * u, 18 * u), juce::Justification::centredLeft, false);
+            lx += (l.t[0] == 'b' ? 170.f : 82.f) * u;
+        }
+        for (float d = bot + 20.f; d <= top + 0.1f; d += 20.f) {
+            const float y = gfx::yOfDb(d, r, top, bot);
+            g.setColour(juce::Colours::white.withAlpha(0.06f)); for (float x = r.getX(); x < r.getRight(); x += 6.f * u) g.fillRect(x, y - 0.5f, 2.f * u, 1.f);
+            g.setColour(t.scrMute); g.setFont(v3::font(10.5f * u)); g.drawText(v3::fmt::num(d, 0), Rectangle<float>(0, y - 7 * u, 26 * u, 14 * u), juce::Justification::centredRight, false);
+        }
+        for (float f : {20.f, 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f, 20000.f}) {
+            g.setColour(t.scrMute); g.setFont(v3::font(10.5f * u));
+            g.drawText(f >= 1000.f ? v3::fmt::num(f / 1000.f, 0) + "k" : v3::fmt::num(f, 0), Rectangle<float>(gfx::xOf(f, r) - 16 * u, r.getBottom() + 3 * u, 32 * u, 14 * u), juce::Justification::centred, false);
+        }
+        juce::Graphics::ScopedSaveState st(g);
+        g.reduceClipRegion(r.toNearestInt());
+        auto pin = gfx::specPath(inS.data(), dn::kBins, sr, r, top, bot, true);
+        g.setGradientFill(juce::ColourGradient(inC.withAlpha(0.30f), 0, r.getY(), inC.withAlpha(0.03f), 0, r.getBottom(), false)); g.fillPath(pin);
+        if (known || proc.engine.latency() > 0) {
+            juce::Path pn = gfx::specPath(noiseS.data(), dn::kBins, sr, r, top, bot, false);
+            juce::Path dashed; const float dl[] = {6.f * u, 4.f * u};
+            juce::PathStrokeType(1.8f * u).createDashedStroke(dashed, pn, dl, 2);
+            g.setColour(t.out.withAlpha(0.18f)); g.strokePath(pn, juce::PathStrokeType(6.f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour(t.out); g.fillPath(dashed);
+        }
+        const auto pout = gfx::specPath(outS.data(), dn::kBins, sr, r, top, bot, false);
+        g.setColour(t.sung.withAlpha(0.08f)); g.strokePath(pout, juce::PathStrokeType(10.f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(t.sung.withAlpha(0.18f)); g.strokePath(pout, juce::PathStrokeType(5.f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(t.sung); g.strokePath(pout, juce::PathStrokeType(1.8f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
     void paint(juce::Graphics& g) override {
+        if (v3::bridge::v3(T)) { paint3(g); return; }
         const float u = (float)getWidth() / 744.f;
         auto well = getLocalBounds().toFloat();
         kit::screenWell(g, pal, well, kit::Display::VFD);
@@ -77,7 +127,7 @@ DenoiserEditor::DenoiserEditor(DenoiserProcessor& p)
         {"smooth", "Lissage", "Lissage temps/fr\xC3\xA9quence du gain : plus haut, moins de \xC2\xAB bruit musical \xC2\xBB mais attaques plus douces."},
         {"air", "Aigus", "Pr\xC3\xA9servation des aigus et du souffle d'air : limite la r\xC3\xA9" "duction au-dessus de 4 kHz."}};
     for (auto& d : defs) { auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Fluted); addAndMakeVisible(pt); }
-    humSeg = std::make_unique<Seg>(proc.apvts, "hum", juce::StringArray{u8("Coup\xC3\xA9"), "50 Hz", "60 Hz"}, u8("Filtre anti-ronflement du secteur (fondamentale et 3 harmoniques)."), pal);
+    humSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "hum", juce::StringArray{u8("Coup\xC3\xA9"), "50 Hz", "60 Hz"}, u8("Filtre anti-ronflement du secteur (fondamentale et 3 harmoniques)."), pal);
     addAndMakeVisible(*humSeg);
     for (auto* k : {&learnKey, &adaptKey, &listenKey}) addAndMakeVisible(*k);
     learnKey.setClickingTogglesState(false);
@@ -87,29 +137,89 @@ DenoiserEditor::DenoiserEditor(DenoiserProcessor& p)
     listenKey.setTooltip(u8("N'\xC3\xA9" "coute que ce qui est retir\xC3\xA9 : r\xC3\xA8gle le seuil jusqu'\xC3\xA0 n'entendre aucune voix."));
     addAndMakeVisible(power);
     power.setTooltip(u8("Effet en service. Bascule pour le couper (la latence reste compens\xC3\xA9" "e)."));
+    // --- v3 : potards haut de gamme et touches (mêmes paramètres, attachements propres), thème
+    const char* ids3[4] = {"red", "sens", "smooth", "air"};
+    for (int i = 0; i < 4; ++i) addChildComponent(k3.add(new v3::Knob3(proc.apvts, ids3[i], u8(defs[i].lab), u8(defs[i].tip), v3::KnobSize::M)));
+    learn3.setButtonText("Learn"); adapt3.setButtonText("Adapt"); listen3.setButtonText("Listen");
+    learn3.setTooltip(learnKey.getTooltip()); adapt3.setTooltip(adaptKey.getTooltip()); listen3.setTooltip(listenKey.getTooltip());
+    adapt3.setClickingTogglesState(true); listen3.setClickingTogglesState(true);
+    learn3.onClick = [this] { proc.learn(); };
+    for (auto* k : {&learn3, &adapt3, &listen3}) addChildComponent(*k);
+    adapt3Att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "adapt", adapt3);
+    listen3Att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "listen", listen3);
+    addAndMakeVisible(themeBtn);
+    themeBtn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
+    themeBtn.onScale = [this](float s) { setUiScale(s); };
     help.install(*this, "Orbe Denoiser", {u8("R\xC3\xA9" "duit le bruit de fond et le souffle d'une voix (soustraction spectrale de Wiener liss\xC3\xA9" "e)."),
         u8("- LEARN : joue 1 \xC3\xA0 3 s de bruit seul (sans voix) ; le profil est m\xC3\xA9moris\xC3\xA9 en 2 s environ et enregistr\xC3\xA9 avec la session."),
         u8("- ADAPT : suit le plancher de bruit en continu, sans apprentissage. Un son tenu et tr\xC3\xA8s stable peut \xC3\xAAtre pris pour du bruit."),
         u8("- LISTEN : n'\xC3\xA9" "coute que ce qui est retir\xC3\xA9 ; monte le Seuil jusqu'\xC3\xA0 ce qu'aucune voix n'y passe."),
         u8("- R\xC3\xA9" "duction : att\xC3\xA9nuation maximale ; Lissage : moins de \xC2\xAB bruit musical \xC2\xBB ; Aigus : pr\xC3\xA9serve l'air au-dessus de 4 kHz."),
         u8("- Anti-ronflement : filtre le secteur \xC3\xA0 50 ou 60 Hz (et 3 harmoniques)."),
-        u8("- Latence ") + String(dn::kLatency) + u8(" \xC3\xA9" "chantillons (FFT 2048, saut 512), d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te.")});
+        u8("- Latence ") + String(dn::kLatency) + u8(" \xC3\xA9" "chantillons (FFT 2048, saut 512), d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te."),
+        u8("- Bouton demi-disque : thème Clair, Sombre ou Classique et taille de la fenêtre (mémorisés).")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     adaptAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "adapt", adaptKey);
     listenAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "listen", listenKey);
     setResizable(true, true);
-    setResizeLimits(404, (int)(404 * kH / kW), 1616, (int)(1616 * kH / kW));
-    getConstrainer()->setFixedAspectRatio((double)kW / kH);
-    setSize((int)kW, (int)kH);
+    scale_ = v3::Prefs::scale("denoiser", 1.f);
+    setThemeMode(v3::Prefs::theme("denoiser", v3::Mode::Light), false);
     startTimerHz(30);
 }
-DenoiserEditor::~DenoiserEditor() { stopTimer(); setLookAndFeel(nullptr); }
+DenoiserEditor::~DenoiserEditor() { stopTimer(); v3::Prefs::setScale("denoiser", scale_); setLookAndFeel(nullptr); }
+
+void DenoiserEditor::setThemeMode(v3::Mode m, bool persist) {
+    mode = m;
+    T = v3::make(m == v3::Mode::Classic ? v3::Mode::Light : m, v3::accents::ice);
+    T.mode = m;
+    look3.setTheme(T);
+    art.clear();
+    const bool n3 = isV3();
+    setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&look3) : static_cast<juce::LookAndFeel*>(&look));
+    for (auto* p : pots) p->setVisible(!n3);
+    for (auto* k : k3) { k->setVisible(n3); k->setup(&T, &art); }
+    for (auto* k : {&learnKey, &adaptKey, &listenKey}) k->setVisible(!n3);
+    for (auto* k : {&learn3, &adapt3, &listen3}) { k->setVisible(n3); k->T = &T; }
+    scope->T = &T; scope->setOpaque(!n3);
+    humSeg->T = &T; humSeg->px = 12.f;
+    power.T = &T; help.T = &T; themeBtn.T = &T; themeBtn.current = m;
+    if (persist) v3::Prefs::setTheme("denoiser", m);
+    const float bw = n3 ? kW3 : kW, bh = n3 ? kH3 : kH, lo = n3 ? 0.75f : 0.5f, hi = n3 ? 1.5f : 2.f;
+    setResizeLimits(juce::roundToInt(bw * lo), juce::roundToInt(bh * lo), juce::roundToInt(bw * hi), juce::roundToInt(bh * hi));
+    getConstrainer()->setFixedAspectRatio((double)bw / bh);
+    scale_ = juce::jlimit(lo, hi, scale_);
+    const int w = juce::roundToInt(bw * scale_), h = juce::roundToInt(bh * scale_);
+    if (getWidth() == w && getHeight() == h) resized(); else setSize(w, h);
+    sendLookAndFeelChange();
+    repaint();
+}
+
+void DenoiserEditor::setUiScale(float s) {
+    const bool n3 = isV3();
+    scale_ = juce::jlimit(n3 ? 0.75f : 0.5f, n3 ? 1.5f : 2.f, s);
+    setSize(juce::roundToInt((n3 ? kW3 : kW) * scale_), juce::roundToInt((n3 ? kH3 : kH) * scale_));
+    v3::Prefs::setScale("denoiser", scale_);
+}
 
 void DenoiserEditor::resized() {
+    if (isV3()) {
+        u_ = (float)getWidth() / kW3; scale_ = u_; themeBtn.scale = scale_;
+        themeBtn.setBounds(Si(800, 21, 28, 28));
+        help.layout(Si(838, 20, 30, 30), getLocalBounds());
+        power.setBounds(Si(884, 22, 96, 26));
+        scope->setBounds(Si(34, 90, 700, 232));
+        learn3.setBounds(Si(38, 392, 98, 44)); adapt3.setBounds(Si(146, 392, 98, 44)); listen3.setBounds(Si(254, 392, 98, 44));
+        humSeg->setBounds(Si(38, 500, 314, 40));
+        const float kh = v3::Knob3::boxHeight(v3::KnobSize::M, false);
+        for (int i = 0; i < 4; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(448.f + 152.f * (float)i - 70.f, 410, 140, kh)); }
+        return;
+    }
     u_ = (float)getWidth() / kW;
+    scale_ = u_; themeBtn.scale = u_;
     const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
     power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
     help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
+    themeBtn.setBounds(help.getBounds().translated(-help.getWidth() - juce::roundToInt(6.f * u_), 0));
     scope->setBounds(Si(32, 64, 744, 206));
     for (int i = 0; i < pots.size(); ++i) pots[i]->setBounds(Si(331.f + 111.f * (float)i, 312, 111, 78));
     learnKey.setBounds(Si(32, 314, 90, 40)); adaptKey.setBounds(Si(127, 314, 90, 40)); listenKey.setBounds(Si(222, 314, 90, 40));
@@ -123,9 +233,55 @@ void DenoiserEditor::timerCallback() {
     learnKey.fill = l ? proc.engine.learnProgress() : 0.f;
     learnKey.setButtonText(l ? String(juce::roundToInt(proc.engine.learnProgress() * 100.f)) + " %" : u8("Learn"));
     learnKey.repaint();
+    if (isV3()) {
+        learn3.lit = l;
+        learn3.setButtonText(l ? v3::fmt::pct(proc.engine.learnProgress()) : String("Learn"));
+        learn3.repaint();
+        redSm += (scope->red - redSm) * 0.25f;
+        for (auto* k : k3) k->tickMod(1.f / 30.f);
+        repaint(Si(740, 86, 236, 240));
+    }
+}
+
+void DenoiserEditor::paintBackdrop3(juce::Graphics& g, juce::Rectangle<float> b) {
+    const float u = b.getWidth() / kW3;
+    auto R = [u](float x, float y, float w, float h) { return juce::Rectangle<float>(x * u, y * u, w * u, h * u); };
+    v3::background(g, T, b);
+    g.setColour(T.inkMute); v3::caps(g, u8("dreamaws · orbe"), R(27, 14, 200, 16), 12.f * u, juce::Justification::centredLeft);
+    g.setColour(T.accentText); kit::tracked(g, "Denoiser", R(26, 28, 260, 32), juce::Justification::centredLeft, 2.f * u, v3::font(34.f * u, true));
+    g.setColour(T.accent); g.fillRoundedRectangle(R(28, 61, 30, 3), 1.5f * u);
+    v3::hero(g, T, R(20, 74, 960, 262), 20.f * u);
+    g.setColour(juce::Colours::white.withAlpha(0.10f)); g.fillRect(R(746, 90, 1, 230));
+    v3::card(g, T, R(20, 350, 350, 230), 16.f * u);
+    v3::card(g, T, R(382, 350, 598, 230), 16.f * u);
+    g.setColour(T.ink);
+    v3::caps(g, u8("Analyse du bruit"), R(38, 364, 300, 18), 12.f * u, juce::Justification::centredLeft);
+    v3::caps(g, u8("Réduction · spectre Wiener lissé"), R(400, 364, 500, 18), 12.f * u, juce::Justification::centredLeft);
+    g.setColour(T.inkMute); v3::caps(g, "Anti-ronflement", R(38, 474, 300, 18), 11.f * u, juce::Justification::centredLeft);
 }
 
 void DenoiserEditor::paint(juce::Graphics& g) {
+    if (isV3()) {
+        const float u = u_;
+        auto S = [u](float x, float y, float w, float h) { return juce::Rectangle<float>(x * u, y * u, w * u, h * u); };
+        art.draw(g, juce::String("bd|") + v3::modeKey(mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, juce::Rectangle<float> b) { paintBackdrop3(ig, b); });
+        // colonne héros : réduction moyenne appliquée, état du profil
+        g.setColour(T.scrMute); v3::caps(g, u8("Réduction moyenne"), S(762, 90, 210, 18), 11.f * u, juce::Justification::centredLeft);
+        const auto big = v3::font(60.f * u, true);
+        const String n = v3::fmt::num(redSm > 0.05f ? -(double)redSm : 0.0, 1);
+        g.setColour(T.scrInk); v3::tabular(g, n, S(762, 112, 210, 72), big, juce::Justification::centredLeft);
+        g.setColour(T.scrMute); g.setFont(v3::font(17.f * u)); g.drawText("dB", S(766, 0, 0, 0).withX(S(762, 0, 0, 0).getX() + v3::tabularWidth(n, big) + 6.f * u).withY(154.f * u).withSize(40.f * u, 22.f * u), juce::Justification::centredLeft, false);
+        g.setColour(T.scrMute); v3::caps(g, "Profil", S(762, 214, 210, 18), 11.f * u, juce::Justification::centredLeft);
+        const bool l = scope->isLearning(), k = scope->isKnown();
+        g.setColour(l ? T.out : T.scrInk); g.setFont(v3::font(19.f * u, true));
+        g.drawText(l ? u8("Apprentissage…") : k ? u8("Bruit appris") : u8("Adaptatif"), S(762, 234, 210, 26), juce::Justification::centredLeft, false);
+        if (l) {
+            auto bar = S(762, 270, 196, 6);
+            g.setColour(juce::Colours::white.withAlpha(0.12f)); g.fillRoundedRectangle(bar, 3.f * u);
+            g.setColour(T.out); g.fillRoundedRectangle(bar.withWidth(bar.getWidth() * juce::jlimit(0.f, 1.f, scope->progress())), 3.f * u);
+        }
+        return;
+    }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Denoiser", kit::w::serial::denoiser});
     section(g, pal, u, u8("Analyse du bruit"), 32, 290, 280);

@@ -226,6 +226,41 @@ int main(int argc, char** argv) {
         std::printf("bypass %s : latence %d, erreur %.1f dB, saut au basculement %.1f dBFS (signal seul : %.1f)\n", "OrbeChain (Looks, Atelier)", c.latency(), m.exactDb, m.jumpDb, m.plainDb);
         CHECK(m.exactDb < -120.0, "bypass non exact : %.1f dB", m.exactDb); CHECK(m.jumpDb < -60.0, "clic au basculement : %.1f dBFS", m.jumpDb);
     }
+    { // Delay::read : retard fractionnaire juste au-dessus d'un entier (pré-délai de reverb 20 ms = 960,00004 éch.) -> jamais de pic.
+        // Avant : p arrondi à n au repli donnait f = n, soit un pic ×7 700 une fois par tour de tampon (« claques » dans la reverb).
+        voile::Delay d; d.init((int)(0.16 * 48000) + 4); float mx = 0.f;
+        const float ds = std::clamp(20.f, 0.f, 150.f) * 1e-3f * 48000.f;
+        for (int i = 0; i < 40000; ++i) { d.push(0.5f * std::sin(0.01f * (float)i)); mx = std::max(mx, std::fabs(d.read(ds))); }
+        std::printf("Delay::read au repli : crête %.3f (entrée 0,5)\n", mx);
+        CHECK(mx <= 0.501f, "pic de lecture au repli du tampon : %.2f", mx);
+    }
+    { // « claques » : voix rap (plosives après silence, sibilantes, voyelles) à -6 dBFS crête, limiteur coupé.
+      // Aucun look ne doit dépasser le plafond de plus de 3 dB (avant correctifs : +13 dB, écrêté) ni rejouer d'attaque en octave.
+        const float sr = 48000.f; std::mt19937 rng(3); std::normal_distribution<float> N(0.f, 1.f);
+        std::vector<float> x;
+        for (int ph = 0; ph < 4; ++ph) {
+            x.insert(x.end(), (size_t)(0.5f * sr), 0.f);
+            for (int k = 0; k < 6; ++k) {
+                onek::Biquad h; h.highpass(sr, 1500.f); h.reset();
+                for (int i = 0; i < (int)(0.012f * sr); ++i) x.push_back(0.5f * h.process((i < 150 ? 1.f : 0.3f) * N(rng)));
+                double p = 0; const float f0 = 140.f + 10.f * (float)k;
+                for (int i = 0; i < (int)(0.14f * sr); ++i) { p += f0 / sr; const float e = std::min(1.f, std::min((float)i / (0.004f * sr), (0.14f * sr - (float)i) / (0.02f * sr)));
+                    x.push_back(0.4f * e * (float)(2.0 * (p - std::floor(p)) - 1.0)); }
+            }
+        }
+        x.insert(x.end(), (size_t)(0.5f * sr), 0.f);
+        float pk = 0.f; for (float v : x) pk = std::max(pk, std::fabs(v)); for (auto& v : x) v *= 0.5f / pk;
+        float worst = -99.f; const char* wn = "";
+        for (int k = 0; k < oc::numLooks(); ++k) {
+            oc::S s = oc::lookDefaults(k); s.out = 0; s.lmOn = 0; const float ceilLin = std::pow(10.f, -1.f / 20.f);
+            oc::Chain c; c.prepare(sr); c.setAutoLevel(true); c.set(s); std::vector<float> oL, oR; run(c, x, x, oL, oR);
+            float m = 0.f; for (size_t i = 0; i < oL.size(); ++i) m = std::max(m, std::max(std::fabs(oL[i]), std::fabs(oR[i])));
+            const float over = 20.f * std::log10(m / ceilLin + 1e-9f);
+            if (over > worst) { worst = over; wn = oc::looks()[(size_t)k].name; }
+            CHECK(over <= 3.f, "claque : %s dépasse le plafond de %.1f dB sans limiteur", oc::looks()[(size_t)k].name, over);
+        }
+        std::printf("claques (voix rap -6 dBFS, limiteur coupé) : pire dépassement du plafond %+.1f dB (%s)\n", worst, wn);
+    }
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;
 }

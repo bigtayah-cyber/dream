@@ -1,6 +1,7 @@
 // Test console du moteur Orbe Denoiser (sans JUCE). Cible : orbedenoiser_test (EXCLUDE_FROM_ALL).
 #include <cstdio>
 #include <random>
+#include <limits>
 #include "../../Kit/BypassFadeTest.h"
 #include <cstdlib>
 #include <new>
@@ -103,6 +104,38 @@ int main() {
         for (int pass = 0; pass < 4; ++pass) { p.hum = pass % 3; p.listen = pass == 2; p.adaptive = pass != 1; e.set(p); if (pass == 2) e.startLearn(); for (int s = 0; s + 480 <= 48000; s += 480) e.process(x.data() + s, x.data() + s, y.data() + s, z.data() + s, 480); }
         g_count = false;
         std::printf("allocations dans set/process du Denoiser (apprentissage, hum, écoute) : %ld\n", g_allocs); CHECK(g_allocs == 0, "%ld allocation(s) dans le chemin temps réel", g_allocs);
+    }
+    { // audit 3 : un NaN isolé en entrée ne doit pas rendre la sortie NaN pour toujours (avant : 100 % NaN après le glitch)
+        dn::Engine e; e.prepare(sr); e.set(prm);
+        auto x = noise((size_t)(sr * 3)); for (size_t i = 0; i < x.size(); ++i) x[i] += 0.1f * std::sin(2 * (float)odsp::kPi * 440.f * (float)i / sr);
+        x[5000] = std::numeric_limits<float>::quiet_NaN(); x[5001] = std::numeric_limits<float>::infinity(); std::vector<float> y; run(e, x, y);
+        int bad = 0; for (size_t i = (size_t)sr; i < y.size(); ++i) bad += !std::isfinite(y[i]);
+        std::printf("NaN isolé en entrée : %d échantillon(s) non fini(s) après 1 s\n", bad); CHECK(bad == 0, "sortie NaN après un NaN d'entrée (%d)", bad);
+    }
+    { // audit 3 (M4) : l'apprentissage moyenne les deux voies (gauche muette, bruit à droite => profil non nul)
+        dn::Engine e; e.prepare(sr); e.set(prm);
+        const size_t n = (size_t)(sr * 3); std::vector<float> l(n, 0.f), r = noise(n), ol(n), orr(n);
+        e.startLearn(); for (size_t p = 0; p < n; p += 480) e.process(l.data() + p, r.data() + p, ol.data() + p, orr.data() + p, (int)std::min<size_t>(480, n - p));
+        std::vector<float> prof; e.getProfile(prof); double m = 0; for (float v : prof) m += v; m /= (double)prof.size();
+        std::printf("apprentissage stéréo (gauche muette) : profil moyen %.3g\n", m); CHECK(e.profileKnown() && m > 0.0, "profil appris sur la seule voie gauche");
+    }
+    { // B2 (non-régression demandée par 09-validation) : La 440 Hz -20 dBFS tenu 8 s dans un bruit -50 dBFS, réglages d'usine
+        dn::Engine e; e.prepare(sr); e.set(prm);
+        const size_t n = (size_t)(sr * 8); std::vector<float> x(n), y; for (size_t i = 0; i < n; ++i) x[i] = 0.1f * std::sin(2 * (float)odsp::kPi * 440.f * (float)i / sr) + 0.1f * nAmp * nd(rng);
+        run(e, x, y); std::vector<float> yy(y.begin() + dn::kLatency, y.end());
+        const double d = db(tone(yy, (size_t)(sr * 6.5), (size_t)(sr * 7.5), 440)) - db(tone(x, (size_t)(sr * 6.5), (size_t)(sr * 7.5), 440));
+        std::printf("note tenue 7 s : %.2f dB\n", d); CHECK(std::fabs(d) < 1.0, "note tenue avalée (%.1f dB)", d);
+    }
+    { // audit 3 : bruit de pièce grave (brownien, passe-bas 400 Hz) : la garde de tonalité ne doit pas sous-estimer le bruit en pente
+        // (avant : -3,2 dB de réduction mesurée de 80 Hz à 16 kHz ; sans garde : -17,8 dB)
+        dn::Engine e; e.prepare(sr); e.set(prm);
+        const size_t n = (size_t)(sr * 8); std::vector<float> x(n), y; double br = 0; odsp::Bq lp; lp.c = odsp::design(odsp::Kind::HighCut, sr, 400, 0, 0.6);
+        for (auto& v : x) { br = 0.995 * br + 0.05 * nd(rng); v = 0.01f * (lp.process((float)br) * 3.f + 0.3f * nd(rng)); }
+        run(e, x, y);
+        auto hp80 = [&](std::vector<float> v) { odsp::Bq a, b; a.c = b.c = odsp::design(odsp::Kind::LowCut, sr, 80, 0, 0.7071); for (auto& s : v) s = b.process(a.process(s)); return v; };
+        const auto xb = hp80(x), yb = hp80(y);
+        const double r = db(rms(xb, (size_t)(sr * 4), (size_t)(sr * 7.9))) - db(rms(yb, (size_t)(sr * 4) + dn::kLatency, (size_t)(sr * 7.9) + dn::kLatency));
+        std::printf("bruit de pièce grave (adaptatif, 80 Hz-16 kHz) : %.1f dB de réduction\n", r); CHECK(r >= 12.0, "bruit grave mal estimé : %.1f dB", r);
     }
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;

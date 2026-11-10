@@ -1,7 +1,9 @@
 // Rend l'éditeur d'Orbe Pads dans un PNG (sans DAW). Usage : orbe_pads_snapshot sortie.png [largeur] [pad_selectionne]
 #include "PadsEditor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    kit::v3::snapshotTheme("orbepads");
     PadsProcessor proc;
     proc.prepareToPlay(48000, 512);
     if (argc > 1 && juce::String(argv[1]) == "--etat") {  // aller-retour de l'état : l'audio embarqué doit revenir à l'identique

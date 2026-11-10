@@ -29,7 +29,8 @@ public:
         const float aG = std::exp(-1.f / (std::max(0.05f, p.atk) * 1e-3f * sr)), rG = std::exp(-1.f / (std::max(1.f, p.rel) * 1e-3f * sr));
         const float knee = p.sharp ? 0.5f : 8.f, ratio = p.sharp ? 20.f : 4.f;
         for (int i = 0; i < n; ++i) {
-            const float x0 = inL[i], x1 = inR ? inR[i] : x0;
+            // NaN/inf d'un plugin précédent remplacés par 0 : sinon filtres, enveloppe et lookahead restent NaN pour toujours (G2)
+            const float x0 = kit::finiteBits(inL[i]) ? inL[i] : 0.f, x1 = inR ? (kit::finiteBits(inR[i]) ? inR[i] : 0.f) : x0;
             const float b0 = det[0].process(x0), b1 = det[1].process(x1);
             const float a = std::max(std::fabs(b0), std::fabs(b1));
             env = a > env ? aEnv * env + (1 - aEnv) * a : rEnv * env + (1 - rEnv) * a;

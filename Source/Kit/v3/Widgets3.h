@@ -483,6 +483,13 @@ public:
     void setKnobSize(KnobSize s) { size = s; repaint(); }
     void tickMod(float dt) { trail.update((float)valueToProportionOfLength(getValue()), isMouseButtonDown() || entry != nullptr, dt); if (trail.alpha > 0.f) repaint(); }
     void resetMod() { trail.reset((float)valueToProportionOfLength(getValue())); }
+    // Rattache le potard à un autre paramètre (pads : un jeu de réglages par pad).
+    void rebind(juce::AudioProcessorValueTreeState& a, const String& id) {
+        att.reset(); par = a.getParameter(id);
+        att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(a, id, *this);
+        if (par != nullptr) setDoubleClickReturnValue(true, par->convertFrom0to1(par->getDefaultValue()));
+        disp = (float)valueToProportionOfLength(getValue()); trail.reset(disp); repaint();
+    }
     String valueText() const { return formatter ? formatter(getValue()) : fmt::param(par); }
     // hauteur totale conseillée pour une taille donnée (unités)
     static float boxHeight(KnobSize s, bool withSub) { return knobRadius(s) * 2.f * 1.30f + 46.f + (withSub ? 18.f : 0.f); }

@@ -42,6 +42,7 @@ private:
     oa::SeqPub<oa::MixSnap> pub;
     std::atomic<bool> resetReq{false};
     std::atomic<int> epoch{0};
+    juce::SpinLock prepLock;   // prepareToPlay (fil de l'hôte) contre processBlock (fil audio) : jamais d'attente côté audio
     double sr = 48000.0;
     int sincePub = 0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixProcessor)

@@ -1,5 +1,6 @@
 #pragma once
 #include "SampleProcessor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 
 class SampleEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer {
 public:
@@ -28,14 +29,17 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    kit::w::HelpKey help;
+    kit::v3::bridge::HelpKey help;
+    kit::v3::Skin skin{"orbesample", kit::v3::accents::lilac};
+    juce::OwnedArray<kit::v3::Knob3> k3;
+    void resized3(); void paint3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
     osamp::WaveView srcWave, resWave;
-    osamp::Seg modeSeg, chopSeg;
+    kit::v3::GridSeg modeSeg, chopSeg;
     std::unique_ptr<osamp::Knob> k[9];
     std::unique_ptr<Chip> chip[9];
     juce::ToggleButton revB, tapeB, loopB, syncB, followB;
     std::unique_ptr<ButtonAtt> aRev, aTape, aLoop, aSync, aFollow;
-    kit::w::PushKey importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, playB{kit::u8("Lecture")};
+    kit::v3::bridge::PushKey importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, playB{kit::u8("Lecture")};
     std::unique_ptr<juce::FileChooser> chooser;
     std::shared_ptr<const osamp::Rendered> res;
     const osamp::Rendered* resRaw = nullptr;

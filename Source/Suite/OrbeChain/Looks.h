@@ -43,7 +43,7 @@ inline const std::vector<Look>& looks() {
              qTune(s, 0.3f + 0.3f * i, lerp(80, 25, i)); qEq(s, 110, 150, 0, 250, -2, 1, 3000, 1, 1, 11000, 7 * c);
              qComp(s, -22, 2.5f, 25, 160, 2, 0.8f + 0.2f * i); qSat(s, 0.08f + 0.2f * m, 0.1f, 0); qDs(s, 7500, 0.5f);
              qDbl(s, 0.3f + 0.4f * i, 0.2f, -0.2f, 1); qDly(s, 250, 3, 0.3f + 0.2f * e, 0.1f + 0.3f * e, 0.7f); qRev(s, 1.4f + 2.4f * e, 30, 0.35f, 0.15f + 0.35f * e); }},
-        {"Verre Pilé", "Hauteur nette, couches hautes, grain", "ECSTD2YR", {0.6f, 0.35f, 0.5f, 0.6f}, -9.5f, 2.9f,
+        {"Verre Pilé", "Hauteur nette, couches hautes, grain", "ECSTD2YR", {0.6f, 0.35f, 0.5f, 0.6f}, -6.5f, 2.9f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 1, lerp(4, 1, i)); qEq(s, 120, 200, -2, 800, -1, 1, 5000, 2, 1, 10000, 3 + 6 * c); qComp(s, -26, 6, 3, 60, 4, 1);
              qSat(s, 0.3f + 0.5f * m, 0.2f, 0.1f + 0.5f * m); qDs(s, 8000, 0.5f); qDbl(s, 0.2f + 0.4f * i, 12, 7, 0.9f);
@@ -62,7 +62,7 @@ inline const std::vector<Look>& looks() {
              qEq(s, 100, 150, 0, 220, -2, 1, 4000, 1.5f + 3 * (c - 0.5f), 1, 12000, 1 + 4 * c); qComp(s, -28, 4, 12, 140, 5, 1);
              qSat(s, 0.1f + 0.2f * m, 0, 0); qDs(s, 7000, 0.6f + 0.3f * i); qDbl(s, 0.15f + 0.3f * i, 0.08f, -0.08f, 0.5f);
              qDly(s, 70, 0, 0, 0.06f + 0.14f * e, 0.5f); qRev(s, 0.4f + 0.9f * e, 20, 0.5f, 0.04f + 0.16f * e); }},
-        {"Braise", "Saturée, mélodique, trouble", "ECSTD2YR", {0.6f, 0.4f, 0.55f, 0.5f}, -13.7f, 1.6f,
+        {"Braise", "Saturée, mélodique, trouble", "ECSTD2YR", {0.6f, 0.4f, 0.55f, 0.5f}, -9.6f, 1.6f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 0.6f + 0.4f * i, lerp(25, 5, i)); qEq(s, 110, 150, 0, 500, -2, 1, 2500, 3, 1.2f, 8000, -1 + 4 * c); qComp(s, -24, 4, 20, 70, 3, 1);
              qSat(s, 0.45f + 0.5f * m, 0.3f, 0.1f + 0.35f * m); qDs(s, 6500, 0.5f); qDbl(s, 0.3f + 0.4f * i, 0.3f, -0.3f, 1);
@@ -77,12 +77,12 @@ inline const std::vector<Look>& looks() {
              qSat(s, 0.08f + 0.2f * m, 0.05f, 0); qDs(s, 6500, 0.5f); qDbl(s, 0.35f + 0.35f * i, 0.07f, -0.07f, 0.9f);
              qDly(s, 250, 3, 0.2f, 0.12f * e, 0.7f); qRev(s, 0.6f + 1.2f * e, 25, 0.5f, 0.02f + 0.2f * e); }},
         // ---- Rap ----
-        {"Obsidienne", "Trap sombre, graves pleins, écho de noire", "ECSTD2YR", {0.55f, 0.45f, 0.35f, 0.35f}, -9.9f, 1.4f,
+        {"Obsidienne", "Trap sombre, graves pleins, écho de noire", "ECSTD2YR", {0.55f, 0.45f, 0.35f, 0.35f}, -6.9f, 1.4f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 0.4f + 0.3f * i, lerp(30, 12, i)); qEq(s, 85, 120, 2.5f, 400, -2.5f, 1, 3000, 1.5f, 1, 8000, -3 + 6 * c);
              qComp(s, -22, 4 + 2 * i, 10, 80, 3, 1); qSat(s, 0.15f + 0.3f * m, 0.15f, 0); qDs(s, 6500, 0.4f); qDbl(s, 0.1f + 0.25f * i, 0.1f, -0.1f, 0.5f);
              qDly(s, 250, 4, 0.35f + 0.2f * e, 0.06f + 0.22f * e, 0.8f); qRev(s, 1.4f + 2.f * e, 20, 0.75f, 0.06f + 0.22f * e); }, "Rap"},
-        {"Poussière", "Boom-bap voilé, médiums gras, poussière", "ECSDYR", {0.5f, 0.3f, 0.45f, 0.4f}, -9.9f, 0.5f,
+        {"Poussière", "Boom-bap voilé, médiums gras, poussière", "ECSDYR", {0.5f, 0.3f, 0.45f, 0.4f}, -8.5f, 0.5f,
          [](float i, float e, float m, float c, S& s) {
              (void)i; qEq(s, 80, 150, 2, 800, 1.5f, 0.8f, 3500, -1, 1, 7000, -4 + 5 * c); qComp(s, -20, 3, 25, 130, 2, 1);
              qSat(s, 0.25f + 0.35f * m, 0.2f, 0.05f + 0.25f * m); qDs(s, 6500, 0.3f); qDly(s, 95, 0, 0.1f, 0.04f + 0.12f * e, 0.5f); qRev(s, 0.5f + 1.f * e, 10, 0.7f, 0.05f + 0.16f * e); }, "Rap"},
@@ -90,12 +90,12 @@ inline const std::vector<Look>& looks() {
          [](float i, float e, float m, float c, S& s) {
              qEq(s, 130, 200, -2, 350, -2, 1, 4000, 2.5f, 1.2f, 10000, 1 + 4 * c); qComp(s, -26, 5 + 2 * i, 6, 70, 4, 1);
              qSat(s, 0.12f + 0.25f * m, 0, 0); qDs(s, 7500, 0.5f); qDly(s, 250, 2, 0.15f, 0.03f + 0.15f * e, 0.8f); qRev(s, 0.7f + 1.2f * e, 35, 0.35f, 0.04f + 0.2f * e); }, "Rap"},
-        {"Brume", "Voix flottante dans la brume, large et floue", "ECSTD2YR", {0.5f, 0.6f, 0.3f, 0.35f}, -10.1f, 1.7f,
+        {"Brume", "Voix flottante dans la brume, large et floue", "ECSTD2YR", {0.5f, 0.6f, 0.3f, 0.35f}, -4.6f, 1.7f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 0.35f + 0.3f * i, lerp(60, 20, i)); qEq(s, 100, 150, 0, 250, -1.5f, 1, 3000, -1.5f, 1, 9000, -4 + 6 * c);
              qComp(s, -22, 2.5f, 25, 150, 2, 0.8f); qSat(s, 0.1f + 0.2f * m, 0.1f, 0); qDs(s, 7000, 0.4f); qDbl(s, 0.3f + 0.35f * i, 0.22f, -0.22f, 1);
              qDly(s, 250, 3, 0.35f + 0.2f * e, 0.1f + 0.25f * e, 0.7f); qRev(s, 2.f + 3.f * e, 40, 0.6f, 0.1f + 0.25f * e); }, "Rap"},
-        {"Mirage", "Autotune mélodique lisse et brillant", "ECSTD2YR", {0.6f, 0.45f, 0.35f, 0.55f}, -10.2f, 1.4f,
+        {"Mirage", "Autotune mélodique lisse et brillant", "ECSTD2YR", {0.6f, 0.45f, 0.35f, 0.55f}, -6.1f, 1.4f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 0.7f + 0.3f * i, lerp(18, 4, i)); qEq(s, 100, 150, 0, 400, -2, 1, 3000, 1 + 2 * (c - 0.5f), 1, 9500, 1 + 5 * c);
              qComp(s, -22, 3.5f, 12, 90, 3, 1); qSat(s, 0.1f + 0.25f * m, 0.1f, 0); qDs(s, 6500, 0.45f); qDbl(s, 0.2f + 0.35f * i, 0.12f, -0.12f, 0.9f);
@@ -114,7 +114,7 @@ inline const std::vector<Look>& looks() {
              qSat(s, 0.35f + 0.5f * m, 0.2f, 0); qDs(s, 7000, 0.5f); qDly(s, 80, 0, 0.05f, 0.04f + 0.1f * e, 0.5f); qRev(s, 0.4f + 0.6f * e, 10, 0.6f, 0.02f + 0.1f * e); }, "Rap"},
 
         // ---- Pop électro ----
-        {"Paillettes", "Hyperpop étincelant, octave haute, ultra net", "ECSTD2YR", {0.6f, 0.4f, 0.4f, 0.7f}, -9.9f, 1.3f,
+        {"Paillettes", "Hyperpop étincelant, octave haute, ultra net", "ECSTD2YR", {0.6f, 0.4f, 0.4f, 0.7f}, -6.0f, 1.3f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 1, lerp(5, 1, i)); qEq(s, 130, 200, -2, 600, -1.5f, 1, 5500, 2.5f, 1, 11000, 4 + 6 * c); qComp(s, -26, 5, 4, 60, 4, 1);
              qSat(s, 0.2f + 0.4f * m, 0.1f, 0.05f + 0.3f * m); qDs(s, 8000, 0.5f); qDbl(s, 0.3f + 0.35f * i, 12, 0.2f, 1);
@@ -124,7 +124,7 @@ inline const std::vector<Look>& looks() {
              qTune(s, 0.2f + 0.3f * i, lerp(90, 40, i)); qEq(s, 110, 180, 1, 300, -2, 1, 3500, 0.5f, 1, 10000, 2 + 5 * c);
              qComp(s, -22, 2.2f, 25, 180, 2, 0.8f + 0.2f * i); qSat(s, 0.06f + 0.15f * m, 0.1f, 0); qDs(s, 7500, 0.45f); qDbl(s, 0.35f + 0.4f * i, 0.2f, -0.2f, 1);
              qDly(s, 250, 3, 0.4f + 0.2f * e, 0.1f + 0.22f * e, 0.6f); qRev(s, 2.2f + 3.5f * e, 35, 0.35f, 0.12f + 0.28f * e); }, "Pop électro"},
-        {"Opale", "Synth-pop nacré, voix lustrée et aérienne", "ECSTD2YR", {0.55f, 0.4f, 0.3f, 0.6f}, -8.2f, 1.7f,
+        {"Opale", "Synth-pop nacré, voix lustrée et aérienne", "ECSTD2YR", {0.55f, 0.4f, 0.3f, 0.6f}, -4.5f, 1.7f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 0.5f + 0.3f * i, lerp(35, 12, i)); qEq(s, 120, 160, 0, 280, -1.5f, 1, 4000, 1.5f, 1, 11000, 3 + 5 * c);
              qComp(s, -22, 3, 12, 100, 2.5f, 1); qSat(s, 0.08f + 0.18f * m, 0.1f, 0); qDs(s, 7500, 0.5f); qDbl(s, 0.25f + 0.3f * i, 0.1f, -0.1f, 0.9f);
@@ -163,7 +163,7 @@ inline int numLooks() { return (int)looks().size(); }
 
 // Réglages complets d'un look pour des macros données.
 inline S lookSettings(int idx, float i, float e, float m, float c) {
-    S s; const auto& l = looks()[(size_t)std::clamp(idx, 0, numLooks() - 1)]; l.map(i, e, m, c, s); s.lvBias = l.bias; return s;
+    S s; const auto& l = looks()[(size_t)std::clamp(idx, 0, numLooks() - 1)]; l.map(i, e, m, c, s); s.lvBias = l.bias; s.agInit = l.trimDb + l.bias; return s;
 }
 inline S lookDefaults(int idx) {
     const auto& l = looks()[(size_t)std::clamp(idx, 0, numLooks() - 1)];

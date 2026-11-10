@@ -1,5 +1,6 @@
 // Test console du moteur Orbe DeEsser (sans JUCE). Cible : orbedeesser_test (EXCLUDE_FROM_ALL).
 #include <cstdio>
+#include <limits>
 #include <random>
 #include "../../Kit/BypassFadeTest.h"
 #include "DeEsserDsp.h"
@@ -73,6 +74,14 @@ int main() {
         for (int s = 0; s + 480 <= 48000; s += 480) { p.freq = 4000.f + (float)s * 0.1f; p.width = 1.f + (float)(s % 3); p.listen = (s / 480) % 5 == 0; p.split = (s / 480) % 2 == 0; e.set(p); e.process(x.data() + s, x.data() + s, y.data() + s, z.data() + s, 480); }
         g_count = false;
         std::printf("allocations dans set/process du De-esser : %ld\n", g_allocs); CHECK(g_allocs == 0, "%ld allocation(s) dans le chemin temps réel", g_allocs);
+    }
+    { // audit 3 (G2) : un NaN isolé ne doit pas rendre la sortie NaN pour toujours (avant : 100 % NaN après le glitch)
+        des::Engine e; e.prepare(sr); des::Params p; e.set(p);
+        std::vector<float> x(48000), y(48000), z(48000); for (size_t i = 0; i < x.size(); ++i) x[i] = 0.3f * std::sin(0.37f * (float)i);
+        x[1000] = std::numeric_limits<float>::quiet_NaN(); x[1001] = -std::numeric_limits<float>::infinity();
+        e.process(x.data(), x.data(), y.data(), z.data(), (int)x.size());
+        int bad = 0; for (size_t i = 2000; i < y.size(); ++i) bad += !std::isfinite(y[i]) || !std::isfinite(z[i]);
+        std::printf("NaN isolé en entrée : %d échantillon(s) non fini(s)\n", bad); CHECK(bad == 0, "sortie NaN après un NaN d'entrée (%d)", bad);
     }
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;

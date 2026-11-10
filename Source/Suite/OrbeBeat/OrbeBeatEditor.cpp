@@ -6,6 +6,7 @@ namespace Colours = juce::Colours;
 using suiteui::kLilac, suiteui::kIce, suiteui::kPeach;
 using obeat::kLanes;
 
+namespace v3 = kit::v3;
 namespace {
 Colour laneColour(int i) { return Colour(obeat::lanes()[i].rgb); }
 String letter(int midi) { return suiteui::noteName(midi).removeCharacters("0123456789-"); }
@@ -42,6 +43,7 @@ void OrbeBeatGrid::mouseDown(const juce::MouseEvent& e) { int l, s; if (locate(e
 void OrbeBeatGrid::mouseDrag(const juce::MouseEvent& e) { int l, s; if (tool == Draw && paintMode && locate(e.position, l, s)) apply(l, s, false, false); }
 
 void OrbeBeatGrid::paint(juce::Graphics& g) {
+    if (v3::bridge::v3(T)) { paint3(g); return; }
     const int st = proc.steps(), pat = proc.currentPattern();
     const float u = (float)getHeight() / (OrbeBeatEditor::kRow * kLanes);
     const float rh = (float)getHeight() / (float)kLanes, cw = (float)getWidth() / (float)st;
@@ -89,11 +91,11 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
     kitBox.setTooltip(u8("Kit : sons et tempo conseillé de la boîte à rythmes"));
     keyBox.setTooltip(u8("Tonique de la piste 808"));
 
-    patSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("pat"), juce::StringArray{"A", "B", "C", "D"}, pal);
-    stepsSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("steps"), juce::StringArray{"16", "32"}, pal);
-    chainSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("chain"), juce::StringArray{"Aucun", "A B", "A B C D"}, pal);
-    midiSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("midimap"), juce::StringArray{"GM + 808", u8("Canal 10 = batterie")}, pal);
-    modeSeg = std::make_unique<suiteui::Segmented>(*ap.getParameter("mode"), juce::StringArray{"Mineur", "Majeur"}, pal);
+    patSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("pat"), juce::StringArray{"A", "B", "C", "D"}, pal);
+    stepsSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("steps"), juce::StringArray{"16", "32"}, pal);
+    chainSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("chain"), juce::StringArray{"Aucun", "A B", "A B C D"}, pal);
+    midiSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("midimap"), juce::StringArray{"GM + 808", u8("Canal 10 = batterie")}, pal);
+    modeSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("mode"), juce::StringArray{"Mineur", "Majeur"}, pal);
     patSeg->setTooltip(u8("Pattern à éditer et à jouer (A à D)"));
     chainSeg->setTooltip(u8("Joue les patterns à la suite, un par durée de pattern, en suivant le transport"));
     midiSeg->setTooltip(u8("GM + 808 : les notes de batterie GM déclenchent les pistes, les autres notes jouent l'808. Canal 10 = batterie : seul le canal 10 est de la batterie, le reste joue l'808."));
@@ -141,7 +143,8 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
         soloAtt[i] = std::make_unique<ButtonAtt>(ap, "solo" + String(i), soloB[i]);
     }
 
-    handle = std::make_unique<suiteui::DragHandle>([this] { return proc.writeMidiFile(); }, pal, "Glisser le MIDI", u8("batterie + 808 vers une piste du DAW"));
+    handle = std::make_unique<v3::DragHandle3>([this] { return proc.writeMidiFile(); }, pal, "Glisser le MIDI", u8("batterie + 808 vers une piste du DAW"));
+    handle->title = "Glisser le MIDI"; handle->sub = u8("batterie + 808 vers une piste du DAW");
     addAndMakeVisible(*handle);
     handle->setTooltip(u8("Glisse les patterns (selon l'enchaînement) vers une piste du DAW : batterie sur le canal 10, 808 sur le canal 1"));
 
@@ -154,18 +157,39 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
         u8("- M / S : muet et solo par piste ; le curseur règle le volume."),
         u8("- Entrée MIDI GM : 36 kick, 38 snare, 39 clap, 42 hi-hat, 46 hi-hat ouvert, 37 rim, 47 percu ; les autres notes jouent l'808. « Canal 10 = batterie » : seul le canal 10 joue la batterie."),
         u8("- Export MIDI : glisse les patterns (selon l'enchaînement) vers une piste du DAW (batterie canal 10, 808 canal 1).")});
+    k3.add(new v3::Knob3(ap, "swing", "Swing", u8("Swing : retarde un pas sur deux"), v3::KnobSize::S));
+    k3.add(new v3::Knob3(ap, "master", "Master", u8("Volume général"), v3::KnobSize::S));
+    k3[0]->setFormatter([](double v) { return v3::fmt::withUnit(v3::fmt::num(v * 200.0, 0), "%"); });
+    k3[1]->setFormatter([](double v) { return v3::fmt::pct(v); });
+    for (auto* k : k3) { k->setLabelPx(10.f); addChildComponent(k); }
+    addAndMakeVisible(skin.themeBtn);
+    skin.onMode = [this] {
+        const bool n3 = skin.on();
+        swingK.setVisible(!n3); masterK.setVisible(!n3);
+        for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
+        const auto* tp = skin.tp();
+        for (auto* s : {patSeg.get(), stepsSeg.get(), chainSeg.get(), midiSeg.get(), modeSeg.get()}) { s->T = tp; s->px = 11.5f; s->repaint(); }
+        for (auto* b : {&genB, &varyB, &clearB, &auditionB, &toolB[0], &toolB[1], &toolB[2], &toolB[3]}) b->T = tp;
+        for (int i = 0; i < kLanes; ++i) { muteB[i].T = tp; soloB[i].T = tp; }
+        help.T = tp; handle->T = tp; grid.T = tp; repaint();
+    };
     setResizable(true, true);
     setResizeLimits(880, 512, 1760, 1024);
     getConstrainer()->setFixedAspectRatio((double)kW / (double)kH);
     setSize((int)kW, (int)kH);
+    skin.init(*this, look, kW, kH);
     startTimerHz(30);
 }
 
-OrbeBeatEditor::~OrbeBeatEditor() { stopTimer(); setLookAndFeel(nullptr); }
+OrbeBeatEditor::~OrbeBeatEditor() { stopTimer(); skin.shutdown(); }
 
 void OrbeBeatEditor::resized() {
     u_ = (float)getWidth() / kW;
-    help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
+    skin.scale = u_;
+    if (skin.on()) help.layout(Si(1052, 24, 28, 28), getLocalBounds());
+    else help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
+    skin.themeBtn.setBounds(skin.on() ? Si(1016, 24, 28, 28) : help.getBounds().translated(-help.getWidth() - juce::roundToInt(6.f * u_), 0));
+    if (skin.on()) { resized3(); return; }
     kitBox.setBounds(Si(24, 98, 180, 30));
     patSeg->setBounds(Si(220, 98, 186, 30));
     genB.setBounds(Si(424, 98, 96, 30)); varyB.setBounds(Si(528, 98, 96, 30)); clearB.setBounds(Si(632, 98, 70, 30)); auditionB.setBounds(Si(710, 98, 96, 30));
@@ -188,6 +212,7 @@ void OrbeBeatEditor::resized() {
 
 void OrbeBeatEditor::timerCallback() {
     meterShown = juce::jmax(proc.meter.load(), meterShown * 0.9f);
+    if (skin.on()) for (auto* k : k3) k->tickMod(1.f / 30.f);
     bool any = proc.playStep.load() >= 0.f;
     for (auto& f : proc.flash) { const float v = f.load(); if (v > 0.f) { any = true; f.store(v < 0.05f ? 0.f : v * 0.8f); } }
     if (any || meterShown > 0.001f) { repaint(S(0, 0, kW, 70).toNearestInt()); repaint(S(24, 134, kW - 48, kRow * kLanes + 22).toNearestInt()); }
@@ -209,6 +234,7 @@ void OrbeBeatEditor::paintHeader(juce::Graphics& g, float u) {
 }
 
 void OrbeBeatEditor::paint(juce::Graphics& g) {
+    if (skin.on()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe Beat", kit::w::serial::beat});
     suiteui::rule(g, u, 136, kW - 36, 18); suiteui::rule(g, u, 442, kW - 36, 18);
@@ -253,4 +279,115 @@ void OrbeBeatEditor::paint(juce::Graphics& g) {
     engraved(g, pal, "Export MIDI", S(900, 452, 176, 14), Justification::centredLeft, 10.f * u, 2.f * u);
     g.setColour(pal.line);
     g.fillRect(S(270, 456, 1.f, 150)); g.fillRect(S(640, 456, 1.f, 100)); g.fillRect(S(884, 456, 1.f, 150));
+}
+
+// ============================================================ v3 « hybride v2 » (mêmes coordonnées 1100 x 640)
+void OrbeBeatGrid::paint3(juce::Graphics& g) {
+    const auto& t = *T;
+    const int st = proc.steps(), pat = proc.currentPattern();
+    const float u = (float)getHeight() / (OrbeBeatEditor::kRow * kLanes);
+    const float rh = (float)getHeight() / (float)kLanes, cw = (float)getWidth() / (float)st;
+    const float ps = proc.playStep.load();
+    const int cur = ps >= 0.f && proc.playPat.load() == pat ? (int)ps : -1;
+    for (int li = 0; li < kLanes; ++li) {
+        const Colour col = laneColour(li);
+        const bool aud = proc.audible(li);
+        const float y = rh * (float)li;
+        for (int s = 0; s < st; ++s) {
+            auto r = Rectangle<float>(cw * (float)s + 2.f * u, y + 3.5f * u, cw - 4.f * u, rh - 7.f * u);
+            const float rad = juce::jmin(7.f * u, r.getHeight() * 0.28f);
+            g.setColour((s / 4) % 2 == 0 ? t.field : t.field.interpolatedWith(t.track, 0.55f)); g.fillRoundedRectangle(r, rad);
+            if (s == cur) { g.setColour(t.accent.withAlpha(t.dark ? 0.9f : 0.8f)); g.drawRoundedRectangle(r.reduced(0.5f), rad, 1.6f); }
+            const auto c = proc.cell(pat, li, s);
+            if (!obeat::filled(c)) continue;
+            const float a = (aud ? 0.55f + 0.45f * obeat::velOf(c) : 0.30f);
+            const int rep = obeat::rollOf(c);
+            for (int k = 0; k < rep; ++k) {
+                const float sw = r.getWidth() / (float)rep;
+                auto b = Rectangle<float>(r.getX() + sw * (float)k + (rep > 1 ? 0.5f : 0.f), r.getY(), sw - (rep > 1 ? 1.5f * u : 0.f), r.getHeight());
+                g.setColour(col.withAlpha(juce::jmin(1.f, a))); g.fillRoundedRectangle(b, rad);
+                g.setColour(Colours::white.withAlpha(0.22f * a)); g.fillRoundedRectangle(b.withHeight(b.getHeight() * 0.45f), rad);
+            }
+            g.setColour(Colour(0xFF14161C)); g.setFont(v3::font(juce::jmin(11.f * u, cw * 0.4f), true));
+            const String tx = li == obeat::B ? letter(proc.noteOfDegree(obeat::degOf(c))) : rep > 1 ? (rep == 3 ? String("3") : String(juce::CharPointer_UTF8("\xC3\x97")) + String(rep)) : String();
+            if (tx.isNotEmpty()) g.drawText(tx, r.reduced(4.f * u, 0), Justification::centredLeft, false);
+        }
+    }
+    if (st == 32) { g.setColour(t.ink.withAlpha(0.35f)); g.fillRect(cw * 16.f - 0.5f, 0.f, 1.f, (float)getHeight()); }
+}
+
+void OrbeBeatEditor::resized3() {
+    kitBox.setBounds(Si(24, 98, 180, 30));
+    patSeg->setBounds(Si(220, 98, 186, 30));
+    genB.setBounds(Si(424, 98, 96, 30)); varyB.setBounds(Si(528, 98, 96, 30)); clearB.setBounds(Si(632, 98, 70, 30)); auditionB.setBounds(Si(710, 98, 96, 30));
+    for (int i = 0; i < 4; ++i) toolB[i].setBounds(Si(836.f + (float)i * 60.f, 98, 58, 30));
+    grid.setBounds(Si(kGridX, kGridY, kGridW, kRow * kLanes));
+    for (int i = 0; i < kLanes; ++i) {
+        const float y = kGridY + kRow * (float)i + 4.f;
+        muteB[i].setBounds(Si(166, y, 26, 26)); soloB[i].setBounds(Si(196, y, 26, 26));
+        vol[i].setBounds(Si(228, y, 80, 26));
+    }
+    for (int i = 0; i < 2; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(30.f + 116.f * (float)i, 472, 108, 112)); }
+    stepsSeg->setBounds(Si(300, 474, 96, 30)); chainSeg->setBounds(Si(410, 474, 220, 30));
+    midiSeg->setBounds(Si(300, 540, 330, 30));
+    keyBox.setBounds(Si(660, 474, 96, 30));
+    modeSeg->setBounds(Si(766, 474, 118, 30));
+    seqB.setBounds(Si(660, 540, 200, 24));
+    handle->setBounds(Si(904, 474, 168, 78));
+    repaint();
+}
+
+void OrbeBeatEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
+    const float u = b.getWidth() / kW;
+    auto R = [u](float x, float y, float w, float h) { return Rectangle<float>(x * u, y * u, w * u, h * u); };
+    const auto& T = skin.T;
+    v3::background(g, T, b);
+    v3::brand(g, T, u, "Orbe", "Beat");
+    v3::hero(g, T, R(560, 16, 420, 44), 14.f * u);
+    v3::card(g, T, R(16, 138, 1068, 294), 18.f * u);
+    v3::card(g, T, R(16, 446, 1068, 180), 18.f * u);
+    v3::label(g, T, "Kit", R(26, 80, 180, 14), 11.f * u);
+    v3::label(g, T, "Pattern", R(222, 80, 186, 14), 11.f * u);
+    v3::label(g, T, "Motif", R(426, 80, 280, 14), 11.f * u);
+    v3::label(g, T, "Outil", R(838, 80, 240, 14), 11.f * u);
+    v3::label(g, T, "Groove", R(30, 456, 212, 14), 11.f * u);
+    v3::label(g, T, "Pas", R(302, 456, 96, 14), 11.f * u);
+    v3::label(g, T, u8("Enchaînement"), R(412, 456, 210, 14), 11.f * u);
+    v3::label(g, T, u8("Entrée MIDI"), R(302, 522, 320, 14), 11.f * u);
+    v3::label(g, T, "Tonique 808", R(662, 456, 100, 14), 11.f * u);
+    v3::label(g, T, "Gamme 808", R(768, 456, 110, 14), 11.f * u);
+    v3::label(g, T, "Export MIDI", R(904, 456, 168, 14), 11.f * u);
+    const auto sep = T.dark ? juce::Colours::white.withAlpha(0.07f) : Colour(0x14101828);
+    g.setColour(sep); g.fillRect(R(270, 462, 1, 150)); g.fillRect(R(640, 462, 1, 150)); g.fillRect(R(888, 462, 1, 150));
+}
+
+void OrbeBeatEditor::paint3(juce::Graphics& g) {
+    const float u = u_;
+    const auto& T = skin.T;
+    skin.art.draw(g, String("bd|") + v3::modeKey(skin.mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) { paintBackdrop3(ig, b); });
+    const int kitI = (int)proc.apvts.getRawParameterValue("kit")->load(), pat = proc.currentPattern();
+    const float ps = proc.playStep.load();
+    const bool run = ps >= 0.f;
+    const String where = run ? String::charToString("ABCD"[proc.playPat.load() & 3]) + "  " + String((int)ps + 1).paddedLeft('0', 2) + "/" + String(proc.steps()) : String::charToString("ABCD"[pat & 3]) + "  " + String(proc.steps()) + " " + u8("pas");
+    g.setColour(run ? T.out : T.scrMute); g.fillEllipse(Rectangle<float>(8.f * u, 8.f * u).withCentre({578.f * u, 38.f * u}));
+    g.setColour(T.scrInk); v3::caps(g, String(obeat::kits()[kitI].label), S(594, 20, 150, 36), 14.f * u, Justification::centredLeft);
+    v3::tabular(g, v3::fmt::withUnit(v3::fmt::num(proc.tempo(), 0), "BPM"), S(744, 20, 110, 36), v3::font(17.f * u, true), Justification::centredRight);
+    g.setColour(T.scrMute); v3::caps(g, "Pattern " + where, S(862, 20, 110, 36), 11.f * u, Justification::centredRight);
+    // pas (règle) et pistes
+    const int st = proc.steps();
+    const float cw = kGridW / (float)st;
+    g.setColour(T.inkMute); g.setFont(v3::font(11.f * u));
+    for (int s = 0; s < st; s += 4) g.drawText(String(s / 4 + 1), S(kGridX + cw * (float)s + 4, 141, 30, 13), Justification::centredLeft, false);
+    for (int i = 0; i < kLanes; ++i) {
+        const float y = kGridY + kRow * (float)i;
+        const Colour c = Colour(obeat::lanes()[i].rgb);
+        const bool aud = proc.audible(i);
+        g.setColour(c.withAlpha(aud ? 1.f : 0.4f)); g.fillRoundedRectangle(S(28, y + 8, 4, kRow - 16), 2.f * u);
+        const bool hit = proc.flash[i].load() > 0.08f;
+        g.setColour(hit ? c : T.track); g.fillEllipse(Rectangle<float>(9.f * u, 9.f * u).withCentre({46.f * u, (y + kRow * 0.5f) * u}));
+        g.setColour(aud ? T.ink : T.inkMute); v3::caps(g, u8(obeat::lanes()[i].label), S(58, y, 106, kRow), 11.f * u, Justification::centredLeft);
+    }
+    const float swing = proc.apvts.getRawParameterValue("swing")->load();
+    juce::ignoreUnused(swing);
+    v3::meterBar(g, T, S(32, 596, 212, 6), (20.f * std::log10(juce::jmax(1e-4f, meterShown)) + 42.f) / 42.f, T.accent);
 }

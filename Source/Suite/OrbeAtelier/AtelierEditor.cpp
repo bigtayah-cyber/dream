@@ -3,6 +3,7 @@
 using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
 using oc::ui::kLilac, oc::ui::kIce, oc::ui::kPeach;
+namespace v3 = kit::v3;
 
 namespace {
 // Unités de conception : 1120 de large ; taille par défaut 1400 × 695 (texte ≥ 9 px).
@@ -48,6 +49,7 @@ AtelierEditor::AtelierEditor(AtelierProcessor& p) : AudioProcessorEditor(&p), pr
             const size_t mi = (size_t)(&m - mods.data());
             auto* pot = pots.add(new oc::ui::Pot(proc.apvts, id, u8(d->name), u8(d->tip), [id, this] { return AtelierProcessor::presetValue(id, proc.currentPreset()); }, kR, kModCap[mi]));
             pot->setStyle(kModKnob[mi]); addAndMakeVisible(pot);
+            k3.add(new v3::Knob3(proc.apvts, id, u8(d->name), u8(d->tip), v3::KnobSize::S)); potIds.push_back(id);
         }
         m.nPots = pots.size() - m.firstPot;
     }
@@ -55,7 +57,16 @@ AtelierEditor::AtelierEditor(AtelierProcessor& p) : AudioProcessorEditor(&p), pr
         const String s(id); const auto* d = atl::find(s);
         auto* pot = pots.add(new oc::ui::Pot(proc.apvts, s, u8(d->name), u8(d->tip), [s, this] { return s == "mix" ? 1.0 : AtelierProcessor::presetValue(s, proc.currentPreset()); }, 16.f, kIce));
         pot->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(pot);
+        auto* k = k3.add(new v3::Knob3(proc.apvts, s, u8(d->name), u8(d->tip), v3::KnobSize::S)); potIds.push_back(s);
+        k->setPeach(true);
     }
+    for (auto* k : k3) { k->setLabelPx(10.f); addChildComponent(k); }
+    addChildComponent(prev3); addChildComponent(next3);
+    prev3.onClick = [this] { step(-1); }; next3.onClick = [this] { step(1); };
+    prev3.setTooltip(u8("Preset précédent")); next3.setTooltip("Preset suivant");
+    addAndMakeVisible(themeBtn);
+    themeBtn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
+    themeBtn.onScale = [this](float s) { setUiScale(s); };
     prev.onClick = [this] { step(-1); }; next.onClick = [this] { step(1); };
     prev.setTooltip(u8("Preset précédent")); next.setTooltip("Preset suivant");
     addAndMakeVisible(prev); addAndMakeVisible(next); addAndMakeVisible(power);
@@ -64,21 +75,108 @@ AtelierEditor::AtelierEditor(AtelierProcessor& p) : AudioProcessorEditor(&p), pr
         u8("- Afficheur : clic pour la liste des presets, flèches pour défiler. ● MODIFIÉ : un réglage diffère du preset."),
         u8("- Chaque module a son interrupteur à voyant (allumé : module actif) ; le schéma du bas allume les étages en service."),
         u8("- Double-clic sur un potard : valeur du preset en cours."),
-        u8("- Tune : Tonalité Auto = détection prudente, aucune correction tant qu'elle n'est pas sûre. Delay : division synchronisée au tempo de l'hôte ou temps libre.")});
+        u8("- Tune : Tonalité Auto = détection prudente, aucune correction tant qu'elle n'est pas sûre. Delay : division synchronisée au tempo de l'hôte ou temps libre."),
+        u8("- Bouton demi-disque : thème Clair, Sombre ou Classique et taille de la fenêtre (mémorisés).")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     setResizable(true, true);
-    setResizeLimits((int)kW, (int)kH, 2240, (int)(2240 * kH / kW));
-    getConstrainer()->setFixedAspectRatio((double)kW / kH);
-    setSize((int)kDefaultW, juce::roundToInt(kDefaultW * kH / kW));
+    scale_ = v3::Prefs::scale("atelier", 1.f);
+    setThemeMode(v3::Prefs::theme("atelier", v3::Mode::Light), false);
     startTimerHz(30);
 }
-AtelierEditor::~AtelierEditor() { stopTimer(); setLookAndFeel(nullptr); }
+AtelierEditor::~AtelierEditor() { stopTimer(); if (isV3()) v3::Prefs::setScale("atelier", scale_); setLookAndFeel(nullptr); }
+
+void AtelierEditor::setThemeMode(v3::Mode m, bool persist) {
+    mode = m;
+    T = v3::make(m == v3::Mode::Classic ? v3::Mode::Light : m, v3::accents::ice);
+    T.mode = m;
+    look3.setTheme(T);
+    art.clear();
+    const bool n3 = isV3();
+    setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&look3) : static_cast<juce::LookAndFeel*>(&look));
+    for (auto* p : pots) p->setVisible(!n3);
+    prev.setVisible(!n3); next.setVisible(!n3);
+    for (auto* k : k3) { k->setVisible(n3); k->setup(&T, &art); }
+    prev3.setVisible(n3); next3.setVisible(n3); prev3.T = next3.T = &T;
+    power.T = &T; help.T = &T; themeBtn.T = &T; themeBtn.current = m;
+    lastPreset = -1;
+    if (persist) v3::Prefs::setTheme("atelier", m);
+    // Classique : taille d'origine (1400 de large par défaut, 1120 à 2240) ; v3 : 1200 × 700, 0,75 à 1,5
+    if (n3) {
+        setResizeLimits(juce::roundToInt(kW3 * 0.75f), juce::roundToInt(kH3 * 0.75f), juce::roundToInt(kW3 * 1.5f), juce::roundToInt(kH3 * 1.5f));
+        getConstrainer()->setFixedAspectRatio((double)kW3 / kH3);
+        scale_ = juce::jlimit(0.75f, 1.5f, scale_);
+    } else {
+        setResizeLimits((int)kW, (int)kH, 2240, (int)(2240 * kH / kW));
+        getConstrainer()->setFixedAspectRatio((double)kW / kH);
+        scale_ = juce::jlimit(1.f, 2.f, scale_ <= 1.5f && scale_ >= 0.75f ? kDefaultW / kW : scale_);
+    }
+    const int w = juce::roundToInt((n3 ? kW3 : kW) * scale_), h = juce::roundToInt((n3 ? kH3 : kH) * scale_);
+    if (getWidth() == w && getHeight() == h) resized(); else setSize(w, h);
+    sendLookAndFeelChange();
+    repaint();
+}
+
+void AtelierEditor::setUiScale(float s) {
+    const bool n3 = isV3();
+    scale_ = n3 ? juce::jlimit(0.75f, 1.5f, s) : juce::jlimit(1.f, 2.f, s * kDefaultW / kW);
+    setSize(juce::roundToInt((n3 ? kW3 : kW) * scale_), juce::roundToInt((n3 ? kH3 : kH) * scale_));
+    if (n3) v3::Prefs::setScale("atelier", scale_);
+}
+
+// v3 : rangées de cartes (même découpage que la face d'origine), plus une carte « Sortie » (Mix, Sortie) en bas à droite.
+void AtelierEditor::resized3() {
+    u_ = (float)getWidth() / kW3; scale_ = u_; themeBtn.scale = scale_;
+    help.layout(Si(1034, 20, 30, 30), getLocalBounds());
+    themeBtn.setBounds(Si(994, 21, 28, 28));
+    power.setBounds(Si(1084, 22, 96, 26));
+    prev3.setBounds(Si(406, 17, 36, 36)); next3.setBounds(Si(758, 17, 36, 36));
+    panels3.clear(); labels3.clear();
+    const float rowY[3] = {236, 390, 544}, ph = 142, gap = 10, mx = 20, pad = 6;
+    const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false);
+    int potI = 0, cmbI = 0;
+    for (int row = 0; row < 3; ++row) {
+        auto wOf = [](const String& id) { return id.startsWithChar('@') ? 1.6f : 1.f; };   // listes : cellule plus large
+        float cells = row == 2 ? 2.f : 0.f; int n = row == 2 ? 1 : 0;
+        for (auto& m : mods) if (m.row == row) { for (auto& id : m.ids) cells += wOf(id); ++n; }
+        const float cw = (kW3 - 2 * mx - (float)(n - 1) * gap - 2 * pad * (float)n) / cells;
+        float x = mx;
+        for (auto& m : mods) if (m.row == row) {
+            float mw = 0.f; for (auto& id : m.ids) mw += wOf(id);
+            const float pw = cw * mw + 2 * pad;
+            panels3.push_back({x, rowY[row], pw, ph});
+            const size_t mi = (size_t)(&m - mods.data());
+            toggles[(int)mi]->setBounds(Si(x + 12, rowY[row] + 8, juce::jmin(pw - 20, 150.f), 22));
+            float cx = x + pad;
+            for (auto& id : m.ids) {
+                const float c = cw * wOf(id);
+                if (id == "@tonal") {
+                    labels3.push_back({{cx, rowY[row] + 38, c, 12}, u8("Tonalité")}); labels3.push_back({{cx, rowY[row] + 86, c, 12}, "Mode"});
+                    combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 52, c - 8, 28)); combos[cmbI + 1]->setBounds(Si(cx + 4, rowY[row] + 100, c - 8, 28)); cmbI += 2;
+                } else if (id == "@dyDiv") {
+                    labels3.push_back({{cx, rowY[row] + 60, c, 12}, "Division"});
+                    combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 74, c - 8, 28)); ++cmbI;
+                } else { k3[potI]->setScale(u_); k3[potI]->setBounds(Si(cx, rowY[row] + 36, c, kh)); ++potI; }
+                cx += c;
+            }
+            x += pw + gap;
+        }
+        if (row == 2) {   // carte Sortie
+            const float pw = cw * 2 + 2 * pad;
+            panels3.push_back({x, rowY[row], pw, ph});
+            labels3.push_back({{x + 12, rowY[row] + 12, pw - 20, 14}, "#Sortie"});
+            for (int j = 0; j < 2; ++j) { k3[potI]->setScale(u_); k3[potI]->setBounds(Si(x + pad + cw * (float)j, rowY[row] + 36, cw, kh)); ++potI; }
+        }
+    }
+}
 
 void AtelierEditor::resized() {
+    if (isV3()) { resized3(); return; }
     u_ = (float)getWidth() / kW; look.k = u_;
+    scale_ = u_; themeBtn.scale = u_ * kW / kDefaultW;
     const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
     power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
     help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
+    themeBtn.setBounds(help.getBounds().translated(-help.getWidth() - juce::roundToInt(6.f * u_), 0));
     // placement des modules : chaque rangée se partage la largeur selon le nombre de cellules
     int potI = 0, cmbI = 0;
         for (int row = 0; row < 3; ++row) {
@@ -112,20 +210,99 @@ void AtelierEditor::timerCallback() {
     outDb = juce::jmax(20.f * std::log10(juce::jmax(1e-5f, proc.host.peak.load())), outDb - 1.0f);
     grDisp = juce::jmax(proc.host.reduction.load(), grDisp - 0.5f);
     modified = !proc.matchesPreset();
+    if (isV3()) {
+        if (proc.currentPreset() != lastPreset) {   // double-clic : valeur du preset en cours
+            lastPreset = proc.currentPreset();
+            for (int i = 0; i < k3.size(); ++i) {
+                const auto& id = potIds[(size_t)i];
+                k3[i]->setDoubleClickReturnValue(true, id == "mix" ? 1.0 : AtelierProcessor::presetValue(id, lastPreset));
+                k3[i]->resetMod();
+            }
+        }
+        for (auto* k : k3) k->tickMod(1.f / 30.f);
+        repaint(S(0, 0, kW3, 228).toNearestInt());
+        return;
+    }
     repaint(S(250, 54, 600, 76).toNearestInt()); repaint(S(0, kFlowY - 4, kW, 40).toNearestInt());
 }
 
 void AtelierEditor::mouseUp(const juce::MouseEvent& e) {
-    if (S(284, 58, 344, 66).contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showMenu();
+    if (menuArea().contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showMenu();
 }
 void AtelierEditor::showMenu() {
     juce::PopupMenu m;
     for (int i = 0; i < atl::numPresets(); ++i) m.addItem(i + 1, atl::presetName(i) + u8("  ·  ") + atl::presetTag(i), true, i == proc.currentPreset());
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(284, 58, 344, 66))).withMinimumWidth(juce::roundToInt(344 * u_)),
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(menuArea().toNearestInt())).withMinimumWidth(juce::roundToInt(344 * u_)),
                     [this](int r) { if (r > 0) proc.applyPreset(r - 1); });
 }
 
+// ============================================================ v3 « hybride v2 » (Clair / Sombre) : 1200 × 700
+void AtelierEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
+    const float u = b.getWidth() / kW3;
+    auto R = [u](float x, float y, float w, float h) { return Rectangle<float>(x * u, y * u, w * u, h * u); };
+    v3::background(g, T, b);
+    g.setColour(T.inkMute); v3::caps(g, u8("dreamaws · orbe"), R(27, 14, 200, 16), 12.f * u, juce::Justification::centredLeft);
+    g.setColour(T.accentText); tracked(g, "Atelier", R(26, 28, 240, 32), juce::Justification::centredLeft, 3.f * u, v3::font(36.f * u, true));
+    g.setColour(T.accent); g.fillRoundedRectangle(R(28, 61, 30, 3), 1.5f * u);
+    v3::card(g, T, R(398, 12, 404, 46), 23.f * u);
+    v3::hero(g, T, R(20, 74, 1160, 148), 20.f * u);
+    for (auto& p : panels3) v3::card(g, T, R(p.getX(), p.getY(), p.getWidth(), p.getHeight()), 14.f * u);
+    for (auto& l : labels3) {
+        const bool title = l.second.startsWithChar('#');
+        g.setColour(title ? T.ink : T.inkMute);
+        v3::caps(g, title ? l.second.substring(1) : l.second, R(l.first.getX(), l.first.getY(), l.first.getWidth(), l.first.getHeight()), (title ? 12.f : 10.5f) * u,
+                 title ? juce::Justification::centredLeft : juce::Justification::centred, title);
+    }
+    g.setColour(T.scrMute);
+    v3::caps(g, u8("Trajet du signal"), R(38, 88, 300, 18), 12.f * u, juce::Justification::centredLeft);
+    v3::caps(g, "Sortie", R(900, 88, 120, 18), 12.f * u, juce::Justification::centredLeft);
+    v3::caps(g, u8("Réduction"), R(1040, 88, 130, 18), 12.f * u, juce::Justification::centredLeft);
+    g.setColour(juce::Colours::white.withAlpha(0.10f)); g.fillRect(R(884, 90, 1, 118));
+}
+
+void AtelierEditor::paint3(juce::Graphics& g) {
+    const float u = u_;
+    art.draw(g, String("bd|") + v3::modeKey(mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) { paintBackdrop3(ig, b); });
+    const int pi = proc.currentPreset();
+    g.setColour(T.inkMute);
+    v3::tabular(g, String(pi).paddedLeft('0', 2) + "/" + String(atl::numPresets() - 1).paddedLeft('0', 2), S(442, 17, 50, 36), v3::font(13.f * u), juce::Justification::centredLeft);
+    g.setColour(T.ink); g.setFont(v3::font(19.f * u, true));
+    g.drawText(atl::presetName(pi), S(492, 17, 216, 36), juce::Justification::centred, true);
+    if (modified) { g.setColour(T.accentText); g.setFont(v3::font(11.f * u)); g.drawText(u8("● modifié"), S(676, 40, 76, 14), juce::Justification::centredRight, false); }
+    // écran : description du preset, trajet du signal (pilules lumineuses), niveaux
+    g.setColour(T.scrInk.withAlpha(0.9f)); g.setFont(v3::font(13.f * u));
+    g.drawText(atl::presetTag(pi), S(220, 88, 640, 18), juce::Justification::centredLeft, true);
+    const int nf = (int)(sizeof(kFlow) / sizeof(kFlow[0]));
+    const float fw = 840.f / (float)nf;
+    for (int i = 0; i < nf; ++i) {
+        const bool on = kFlowOn[i][0] == 0 || proc.flag(kFlowOn[i]) > 0.5f;
+        auto c = S(38.f + fw * (float)i, 128, fw - 12.f, 30);
+        if (on) { g.setColour(T.accent.withAlpha(0.14f)); g.fillRoundedRectangle(c.expanded(3.f * u), (c.getHeight() + 6.f * u) * 0.5f); }
+        g.setColour(on ? T.accent.withAlpha(0.22f) : juce::Colours::white.withAlpha(0.04f)); g.fillRoundedRectangle(c, c.getHeight() * 0.5f);
+        g.setColour(on ? T.accent.brighter(0.3f) : juce::Colours::white.withAlpha(0.10f)); g.drawRoundedRectangle(c.reduced(0.5f), c.getHeight() * 0.5f, 1.f);
+        g.setColour(on ? T.scrInk : T.scrMute.withAlpha(0.55f)); g.setFont(v3::font(12.f * u, on));
+        g.drawText(u8(kFlow[i]), c, juce::Justification::centred, true);
+        if (i < nf - 1) { g.setColour(T.scrMute.withAlpha(0.6f)); g.fillEllipse(Rectangle<float>(3.f * u, 3.f * u).withCentre({c.getRight() + 6.f * u, c.getCentreY()})); }
+    }
+    g.setColour(T.scrMute); g.setFont(v3::font(12.f * u));
+    g.drawText(u8("Voyant allumé : étage en service. Double-clic sur un potard : valeur du preset."), S(38, 174, 840, 18), juce::Justification::centredLeft, true);
+    const auto big = v3::font(40.f * u, true);
+    g.setColour(T.scrInk);
+    v3::tabular(g, outDb <= -59.f ? String(v3::fmt::minus()) + u8("∞") : v3::fmt::num(outDb, 1), S(900, 112, 130, 50), big, juce::Justification::centredLeft);
+    v3::tabular(g, v3::fmt::num(grDisp > 0.05f ? -(double)grDisp : 0.0, 1), S(1040, 112, 130, 50), big, juce::Justification::centredLeft);
+    g.setColour(T.scrMute); g.setFont(v3::font(14.f * u));
+    g.drawText("dB", S(900, 162, 60, 18), juce::Justification::centredLeft, false); g.drawText("dB", S(1040, 162, 60, 18), juce::Justification::centredLeft, false);
+    // barres fines (crête de sortie, réduction)
+    auto bar = [&](Rectangle<float> r, float t, juce::Colour c) {
+        g.setColour(juce::Colours::white.withAlpha(0.10f)); g.fillRoundedRectangle(r, r.getHeight() * 0.5f);
+        g.setColour(c); g.fillRoundedRectangle(r.withWidth(r.getWidth() * juce::jlimit(0.f, 1.f, t)), r.getHeight() * 0.5f);
+    };
+    bar(S(900, 188, 124, 4), (outDb + 48.f) / 48.f, T.sung);
+    bar(S(1040, 188, 124, 4), grDisp / 12.f, T.out);
+}
+
 void AtelierEditor::paint(juce::Graphics& g) {
+    if (isV3()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Atelier", kit::w::serial::atelier});
     // preset (VFD)

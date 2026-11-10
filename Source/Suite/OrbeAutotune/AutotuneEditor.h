@@ -118,7 +118,7 @@ private:
     juce::ComboBox keyBox, scaleBox, harmBox, presetBox;
     juce::ToggleButton formToggle;
     std::unique_ptr<kit::v3::bridge::Seg> latSeg;   // Latence : Direct / Qualité
-    std::unique_ptr<kit::v3::bridge::Seg> algoSeg, accSeg;   // Moteur : Classique / Orbe ; écriture # / b
+    std::unique_ptr<kit::v3::bridge::Seg> algoSeg, accSeg, renduSeg;   // renduSeg : Satin / Précis / Robot   // Moteur : Classique / Orbe ; écriture # / b
     kit::v3::bridge::PushKey editKey;
     std::unique_ptr<NoteRoll> roll;
     int lastAcc = -1, lastAlgo = -1;

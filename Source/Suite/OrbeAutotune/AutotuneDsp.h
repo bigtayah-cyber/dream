@@ -23,7 +23,7 @@ inline float cl(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi 
 inline int pcOf(int n) { return ((n % 12) + 12) % 12; }
 
 // ---------------------------------------------------------------- gammes, presets
-constexpr int kScales = 9, kPresets = 7;
+constexpr int kScales = 9, kPresets = 10;
 struct ScaleDef { const char* name; const char* tag; int n; int iv[12]; bool minorLike; };
 inline const ScaleDef* scales() {
     static const ScaleDef s[kScales] = {
@@ -50,7 +50,7 @@ inline int scaleMask(int key, int scale) {
     return m;
 }
 // Valeurs de autotune.html (PRE).
-struct Preset { const char* name; float speed, tol, amt, trans, form, vd, vr; int harm; float hv, dbl; };
+struct Preset { const char* name; float speed, tol, amt, trans, form, vd, vr; int harm; float hv, dbl; int render = -1; float glide = 40.f; };   // render -1 : le preset ne touche pas au rendu
 inline const Preset* presets() {
     static const Preset p[kPresets] = {
         {"Naturel", 120, 25, 1, 0, 0, 0, 5.5f, 0, .5f, 0},
@@ -59,7 +59,11 @@ inline const Preset* presets() {
         {"Robot", 0, 0, 1, 0, 0, 0, 5.5f, 0, .5f, 0},
         {"Hyperpop", 0, 0, 1, 0, 3, 0, 5.5f, 4, .3f, .45f},
         {"Grosse voix", 25, 5, 1, 0, -3, 0, 5.5f, 0, .5f, .2f},
-        {"Harmonie", 20, 5, 1, 0, 0, 12, 5.2f, 1, .55f, .25f}};
+        {"Harmonie", 20, 5, 1, 0, 0, 12, 5.2f, 1, .55f, .25f},
+        // rendu Satin : correction du centre de note, vibrato chanté gardé, glissement doux, aucune voix ajoutée
+        {"Satin voix rap", 25, 0, 1, 0, 0, 0, 5.5f, 0, .5f, 0, 0, 25.f},
+        {"Satin voix chant\xC3\xA9" "e", 40, 5, 1, 0, 0, 0, 5.5f, 0, .5f, 0, 0, 45.f},
+        {"Satin voix douce", 80, 12, .85f, 0, 0, 0, 5.5f, 0, .5f, 0, 0, 60.f}};
     return p;
 }
 
@@ -73,6 +77,8 @@ struct Params {
     bool lowLat = false;   // mode Direct : latence <= 256 échantillons, sans décalage de formants
     bool orbe = false;     // algorithme « Orbe » (TuneCore.h) : mêmes latences déclarées que l'ancien moteur
     float expr = 1.f;      // Orbe : expression (vibrato) conservée quand la vitesse est naturelle
+    int render = 1;        // rendu : 0 Satin, 1 Précis (comportement historique), 2 Robot (vitesse 0, tolérance 0)
+    float glide = 40.f;    // Satin : glissement entre notes (ms)
 };
 
 // ---------------------------------------------------------------- FFT et décaleur de formants
@@ -351,7 +357,10 @@ public:
     int latency() const { return lat; }
     int latencyQuality() const { return latQ; }   // retard déclaré en mode Qualité (formants)
     int latencyDirect() const { return latD; }    // retard déclaré en mode Direct (<= 256)
-    void set(const Params& p) {
+    void set(const Params& in) {
+        Params p = in;
+        if (p.render == 2) { p.speed = 0.f; p.tol = 0.f; }   // Robot : correction instantanée
+        if (p.render == 0) p.orbe = true;                    // Satin s'appuie sur le moteur Orbe
         if (p.lowLat != lowLat) setLowLatency(p.lowLat);
         if (p.orbe != orbeOn) {   // changement d'algorithme : mémoires repartent à zéro (sans allocation)
             orbeOn = p.orbe; core.setQuality(!lowLat); core.reset(); setLowLatency(lowLat);
@@ -465,7 +474,7 @@ private:
                 float x[2] = {io[0][j], io[1][j]};
                 const float mid = 0.5f * (x[0] + x[1]);
                 curMain += stepMain; curH += stepH;
-                mixS += (P.mix - mixS) * 0.002f;
+                mixS += ((P.render == 0 ? 1.f : P.mix) - mixS) * 0.002f;   // Satin : Mix dose la correction (pas de somme sec + corrigé)
                 const bool hAct = hvS > 0.002f, dAct = dblS > 0.002f;
                 wake(hAct, dAct);
                 const float rH = hAct ? std::exp2(curH * (1.f / 1200.f)) : 1.f;
@@ -515,9 +524,12 @@ private:
         tc::Params q;
         q.speedMs = P.speed; q.tolCents = P.tol; q.amount = P.amt; q.expr = P.expr; q.formants = P.formPres;
         q.mask = orbeMask; q.offsetCents = orbeOff;
+        q.satin = P.render == 0; q.glideMs = P.glide;
+        const float dose = q.satin ? cl(P.mix, 0.f, 1.f) : 1.f;
+        q.amount *= dose;
         if (tlPlay && edits) {
             const double pos = tlPos + endInBlock - core.latency();   // instant de timeline de l'audio analysé pour cette trame
-            if (const ned::Note* nt = edits->at(pos)) { q.editTarget = nt->target(); q.editAmount = nt->amount; q.editExpr = nt->expr; q.editSpeedMs = nt->speedMs; }
+            if (const ned::Note* nt = edits->at(pos)) { q.editTarget = nt->target(); q.editAmount = nt->amount * dose; q.editExpr = nt->expr; q.editSpeedMs = nt->speedMs; }
         }
         core.setParams(q);
     }

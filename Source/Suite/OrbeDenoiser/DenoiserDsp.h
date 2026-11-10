@@ -57,12 +57,12 @@ private:
     struct Chan {
         std::vector<float> in, ola, raw, sm, subMin, hist, aPrev, gPrev, re, im, gain;
         odsp::Bq notch[4];
-        int pos = 0, count = 0, subCount = 0, histPos = 0, filled = 0;
+        int pos = 0, hopPos = 0, frames = 0, subCount = 0, histPos = 0, filled = 0;   // hopPos modulo kHop, frames saturé : pas de débordement int (M5)
         void reset() {
             in.assign(kN, 0.f); ola.assign(kN, 0.f); raw.assign(kN, 0.f); sm.assign(kBins, 0.f); subMin.assign(kBins, 1e30f);
             hist.assign((size_t)kHist * kBins, 1e30f); aPrev.assign(kBins, 0.f); gPrev.assign(kBins, 1.f);
             re.assign(kN, 0.f); im.assign(kN, 0.f); gain.assign(kBins, 1.f);
-            pos = count = subCount = histPos = filled = 0;
+            pos = hopPos = frames = subCount = histPos = filled = 0;
             for (auto& b : notch) b.reset();
         }
     };
@@ -77,6 +77,7 @@ private:
     }
 
     float tick(Chan& c, float x, int index) {
+        if (!kit::finiteBits(x)) x = 0.f;   // NaN/inf d'un plugin précédent : sinon P, sm, aPrev et gPrev restent NaN pour toujours
         const float rawDelayed = c.raw[(size_t)c.pos];
         c.raw[(size_t)c.pos] = x;
         float xh = x;
@@ -86,8 +87,18 @@ private:
         c.ola[(size_t)c.pos] = 0.f;
         const int start = (c.pos + 1) & (kN - 1);
         c.pos = (c.pos + 1) & (kN - 1);
-        if (++c.count % kHop == 0) frame(c, start, index);
+        if (++c.hopPos == kHop) { c.hopPos = 0; frame(c, start, index); if (c.frames < 2) ++c.frames; }
         return p.listen ? rawDelayed - processed : processed;
+    }
+
+    // premier quart de c.sm sur [a, b] borné au spectre ; 0 si l'intervalle est vide (bord du spectre : l'autre côté décide)
+    float sideQuartile(const Chan& c, int a, int b) {
+        a = std::max(a, 0); b = std::min(b, kBins - 1);
+        if (b < a) return 0.f;
+        const int m = b - a + 1;
+        for (int j = 0; j < m; ++j) med[(size_t)j] = c.sm[(size_t)(a + j)];
+        std::nth_element(med.begin(), med.begin() + m / 4, med.begin() + m);
+        return med[(size_t)(m / 4)];
     }
 
     void frame(Chan& c, int start, int index) {
@@ -103,15 +114,16 @@ private:
 
         // minima statistiques (suivi du plancher de bruit), avec garde de tonalité : un partiel stable (note tenue, pad, 808)
         // dure souvent plus que la fenêtre des minima et deviendrait son propre plancher. Le suivi ne voit donc chaque bin
-        // qu'au plus à kTonal × le premier quart de ses voisins (±kNb bins, lissés) : sur du bruit seul (bin ≈ voisins) rien ne
-        // change ; sur un pic tonal, le plancher reste celui du bruit qui l'entoure.
+        // qu'au plus à kTonal × le premier quart de ses voisins, pris de CHAQUE côté (k-kNb..k-2 et k+2..k+kNb, lissés), et on garde
+        // le côté le plus fort : sur du bruit seul rien ne change ; sur un pic tonal (les deux côtés plus bas), le plancher reste celui
+        // du bruit qui l'entoure ; sur une pente forte (bruit de pièce, grondement < 300 Hz), le côté haut tient le plancher.
+        // Audit 3 : la fenêtre unique (±kNb) prenait le quart bas d'une pente de 15 dB et sous-estimait le bruit grave
+        // (bruit de pièce 80 Hz-16 kHz : -3,2 dB au lieu de -17 dB de réduction).
         for (int k = 0; k < kBins; ++k)
-            c.sm[(size_t)k] = c.count <= kHop ? P[(size_t)k] : 0.85f * c.sm[(size_t)k] + 0.15f * P[(size_t)k];
+            c.sm[(size_t)k] = c.frames == 0 ? P[(size_t)k] : 0.85f * c.sm[(size_t)k] + 0.15f * P[(size_t)k];
         for (int k = 0; k < kBins; ++k) {
-            const int lo = std::max(0, k - kNb), hi = std::min(kBins - 1, k + kNb), m = hi - lo + 1;
-            for (int j = 0; j < m; ++j) med[(size_t)j] = c.sm[(size_t)(lo + j)];
-            std::nth_element(med.begin(), med.begin() + m / 4, med.begin() + m);
-            const float q = std::min(c.sm[(size_t)k], kTonal * med[(size_t)(m / 4)]);
+            const float ref = std::max(sideQuartile(c, k - kNb, k - 2), sideQuartile(c, k + 2, k + kNb));
+            const float q = std::min(c.sm[(size_t)k], kTonal * ref);
             c.subMin[(size_t)k] = std::min(c.subMin[(size_t)k], q);
         }
         if (++c.subCount >= subLen) {
@@ -121,10 +133,10 @@ private:
         }
         const bool learnt = hasProfile.load();
         const bool learningNow = learnLeft.load() > 0;
-        if (learningNow && index == 0) {
+        if (learningNow) {   // les deux voies sont moyennées (M4) ; la voie 0 décompte les trames
             for (int k = 0; k < kBins; ++k) learnAcc[(size_t)k] += P[(size_t)k];
             ++learnN;
-            if (learnLeft.fetch_sub(1) == 1) { for (int k = 0; k < kBins; ++k) profile[(size_t)k] = learnAcc[(size_t)k] / (float)learnN; hasProfile.store(true); }
+            if (index == 0 && learnLeft.fetch_sub(1) == 1) { for (int k = 0; k < kBins; ++k) profile[(size_t)k] = learnAcc[(size_t)k] / (float)learnN; hasProfile.store(true); }
         }
         const bool haveNoise = learnt || p.adaptive;
         const float red = p.reduction, alpha = 1.f + 2.f * p.sens, beta = 0.90f + 0.09f * p.smooth, aRel = 0.6f - 0.45f * p.smooth;

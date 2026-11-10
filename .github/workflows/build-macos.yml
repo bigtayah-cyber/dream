@@ -1,5 +1,7 @@
 name: build-macos
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: write
@@ -39,7 +41,7 @@ jobs:
             mv "dist/$N.vst3" "dist/$N.component" dist-instruments/ 2>/dev/null || true
           done
           mkdir -p dist-studio
-          for N in "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix"; do
+          for N in "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix" "Orbe Galet" "Orbe Accroc"; do
             mv "dist/$N.vst3" "dist/$N.component" dist-studio/ 2>/dev/null || true
           done
           for D in dist dist-studio dist-instruments; do
@@ -50,18 +52,46 @@ jobs:
           ditto -c -k dist-studio dreamaws-studio-macOS.zip
           ditto -c -k dist-instruments dreamaws-instruments-macOS.zip
 
+      - name: Vérifier les 26 plugins (VST3 et AU)
+        run: |
+          # Un plugin absent fait échouer le job (la liste est explicite : 26 plugins).
+          MISSING=0
+          for N in "Voile" "Grain Nord" "Gorge" "Poupee" "Patine" \
+                   "Orbe Looks" "Orbe Atelier" "Orbe Autotune" "Orbe Denoiser" "Orbe DeEsser" "Orbe Relance" \
+                   "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" \
+                   "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix" "Orbe Galet" "Orbe Accroc"; do
+            for EXT in vst3 component; do
+              F=$(ls -d dist/"$N.$EXT" dist-studio/"$N.$EXT" dist-instruments/"$N.$EXT" 2>/dev/null | head -1)
+              if [ -z "$F" ] || [ ! -f "$F/Contents/MacOS/$N" ]; then
+                echo "::error::Plugin manquant : $N.$EXT"; MISSING=$((MISSING+1))
+              fi
+            done
+          done
+          echo "Plugins manquants : $MISSING"
+          [ "$MISSING" -eq 0 ]
+
       - name: Valider (pluginval niveau 10, VST3 et AU)
         continue-on-error: true
         run: |
           curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pv.zip
-          for V in dist/*.vst3 dist-studio/*.vst3 dist-instruments/*.vst3 dist/*.component dist-studio/*.component dist-instruments/*.component; do
+          mkdir -p pv-logs
+          # Un AU n'est trouvé par macOS (AudioComponentFindNext) que s'il est installé dans un
+          # dossier Components : validé depuis dist/, pluginval échoue au scan (« 1 test failed,
+          # out of a total of 1 ») sans rien tester. On installe donc les .component avant.
+          AUDIR="$HOME/Library/Audio/Plug-Ins/Components"
+          mkdir -p "$AUDIR"
+          cp -R dist/*.component dist-studio/*.component dist-instruments/*.component "$AUDIR"/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 2
+          auval -a 2>&1 | grep -i drmw | tee -a validation.txt || true
+          for V in dist/*.vst3 dist-studio/*.vst3 dist-instruments/*.vst3 "$AUDIR"/*.component; do
             [ -e "$V" ] || continue
             P=$(basename "$V")
-            { echo "--- pluginval $P ---"
-              ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --timeout-ms 120000 --validate "$V" 2>&1 | tail -4
-            } >> validation.txt 2>&1
+            ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --timeout-ms 120000 --validate "$V" > "pv-logs/$P.txt" 2>&1
+            { echo "--- pluginval $P ---"; tail -4 "pv-logs/$P.txt"; } >> validation.txt
           done
+          ditto -c -k pv-logs pluginval-logs-macOS.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -71,6 +101,7 @@ jobs:
             dreamaws-studio-macOS.zip
             dreamaws-instruments-macOS.zip
             validation.txt
+            pluginval-logs-macOS.zip
 
       - name: Publier sur la branche builds
         env:

@@ -27,6 +27,7 @@ struct S {
     float rvOn = 0, rvSize = 1.2f, rvPre = 15, rvDamp = 0.45f, rvMix = 0.2f;
     float lmOn = 1, lmCeil = -1;
     float mix = 1, out = 0, lvBias = 0;  // lvBias : décalage du niveau automatique (dB), interne
+    float agInit = 0;                     // gain de départ du niveau automatique (dB, = trim statique du look) : pas de 1re phrase trop forte
 };
 
 // Contournement : l'entrée exactement retardée de la latence déclarée.
@@ -78,8 +79,11 @@ public:
         const float c = 1.f - std::exp(-1.f / (0.02f * sr));
         for (auto* s : {&eqE, &cpE, &saE, &dsE, &dbS, &dyS, &rvS, &mixS, &outS, &drvS, &crS, &saMS, &cpMS}) s->c = c;
         ratioC = 1.f - std::exp(-1.f / (0.003f * sr)); agC = 1.f - std::exp(-1.f / (0.6f * sr)); agD = 1.f - std::exp(-1.f / (0.1f * sr)); rmsC = 1.f - std::exp(-1.f / (0.15f * sr));
-        for (auto* b : {&hpF, &lsF, &b1F, &b2F, &hsF, &apHp}) b->reset();
+        for (auto* b : {&hpF, &lsF, &b1F, &b2F, &hsF, &apHp, &dyLp, &dyHp, &rvLp}) b->reset();
         apHp.highpass(sr, 60.f);
+        // envois d'effets filtrés (comme leurs retours) : plosives et sibilantes ne reviennent plus en « claques » aiguës dans les échos
+        dyLp.lowpass(sr, std::min(5000.f, 0.45f * sr)); dyHp.highpass(sr, 200.f); rvLp.lowpass(sr, std::min(7000.f, 0.45f * sr));
+        cpHold = 0.f; gateC = 1.f - std::exp(-1.f / (2.0f * sr));
         ds.prepare(sr); comp.prepare(sr);
         for (auto* s : {&eqE, &cpE, &saE, &dsE, &dbS, &dyS, &rvS, &drvS, &crS}) s->v = 0.f;
         saMS.v = cpMS.v = 1.f; mixS.v = 1.f; outS.v = 1.f;
@@ -87,6 +91,7 @@ public:
         for (auto& v : hist) v = 0.f;
         wgt = 0.f; keyTick = 0; haveKey = false; effKey = 0; effScale = 1;
         held = dcX = dcY = 0.f; inMs = 1e-6f; outMs = 1e-6f; ag = 1.f; lvl = 0.f; peak = 0.f; meanSq = 0.f;
+        agPrimed = false; voiced = false; agK.v = 1.f; agK.c = c; vGate.v = 0.f; vGate.c = 1.f - std::exp(-1.f / (0.008f * sr));
         last = {}; lastValid = false; set(P);
     }
     void set(const S& s) {
@@ -101,6 +106,9 @@ public:
         if (!lastValid || s.dsF != last.dsF) ds.hp.highpass(sr, std::min(s.dsF, 0.45f * sr), 0.8f);
         ds.thr = std::pow(10.f, s.dsThr / 20.f); ds.amt = s.dsAmt * 1.5f;
         if (!lastValid || s.rvSize != last.rvSize) { rev.setDecay(std::max(0.2f, s.rvSize)); lastRt = s.rvSize; }
+        if (!agPrimed) ag = std::pow(10.f, s.agInit / 20.f);   // aucune voix encore entendue : départ au gain calibré du look
+        else if (lastValid && s.agInit != last.agInit) {       // changement de look : saut de gain calibré, fondu sur 20 ms
+            const float r = std::pow(10.f, (s.agInit - last.agInit) / 20.f); ag = std::clamp(ag * r, 0.1f, 3.f); agK.v /= r; }
         last = s; lastValid = true;
     }
     void setBpm(double b) { bpm = (float)(b > 20.0 ? b : 120.0); }
@@ -142,7 +150,10 @@ public:
             if (e > 1e-4f) { const float q = b2F.process(b1F.process(lsF.process(hpF.process(y)))); y += (hsF.process(q) - y) * e; }
             else { hpF.process(y); }
             const float ce = cpE.next(P.cpOn > 0.5f ? 1.f : 0.f), cm = cpMS.next(P.cpMix) * ce;
-            { const float g = comp.gain(y, y); y += (y * g - y) * cm; if (ce < 1e-4f) comp.gr = 0.f; }
+            {   // silence : l'enveloppe du compresseur reste à son niveau de phrase (déclin ~2 s) ; l'attaque suivante est tenue dès
+                // le premier échantillon au lieu de passer plein pot avec le gain de compensation (claque à la reprise).
+                if (lvl > 0.003f) cpHold = comp.env; else { cpHold -= cpHold * gateC; comp.env = std::max(comp.env, cpHold); }
+                const float g = comp.gain(y, y); y += (y * g - y) * cm; if (ce < 1e-4f) comp.gr = 0.f; }
 
             // 4. saturation + crush
             const float se = saE.next(P.saOn > 0.5f ? 1.f : 0.f), sm = saMS.next(P.saMix) * se;
@@ -169,25 +180,29 @@ public:
 
             // 6. doubleur (deux voix décalées en hauteur, ouvertes en stéréo)
             const float m = dbS.next(P.dbOn > 0.5f ? P.dbMix : 0.f) * 0.7f;
-            const float d1 = dbl1.process(y, std::exp2(P.dbA / 12.f)), d2 = dbl2.process(y, std::exp2(P.dbB / 12.f));
+            float d1 = dbl1.process(y, std::exp2(P.dbA / 12.f)), d2 = dbl2.process(y, std::exp2(P.dbB / 12.f));
+            {   // voix décalées de plus de 2 demi-tons (octave, quinte) : coupées hors voisement. Sur plosives et sibilantes, les raccords
+                // à la période rejouent l'attaque à chaque période (« caisse claire » aiguë) ; les doubles fins (< 1 dt) ne changent pas.
+                const float v = vGate.next(voiced ? 1.f : 0.f);
+                d1 *= 1.f - std::clamp(std::fabs(P.dbA) - 1.f, 0.f, 1.f) * (1.f - v); d2 *= 1.f - std::clamp(std::fabs(P.dbB) - 1.f, 0.f, 1.f) * (1.f - v); }
             const float wa = 0.5f + 0.5f * P.dbWide, wb = 1.f - wa;
             float wl = y + m * (wa * d1 + wb * d2), wr = y + m * (wb * d1 + wa * d2);
 
             // 7. delay ping-pong avec ducking sous la voix  8. reverb
             float dL, dR, rL, rR;
-            pp.process(y, std::max(64.f, tgtD), std::clamp(P.dyFb, 0.f, 0.9f), dL, dR);
+            pp.process(dyHp.process(dyLp.process(y)), std::max(64.f, tgtD), std::clamp(P.dyFb, 0.f, 0.9f), dL, dR);
             const float dm = dyS.next(P.dyOn > 0.5f ? P.dyMix : 0.f), duck = 1.f - P.dyDuck * std::min(1.f, lvl * 6.f);
             wl += dm * duck * dL; wr += dm * duck * dR;
-            pre.push(y * 0.6f);
+            pre.push(rvLp.process(y) * 0.6f);
             rev.process(pre.read(preS), std::clamp(P.rvDamp, 0.f, 0.95f), rL, rR);
             const float rm = rvS.next(P.rvOn > 0.5f ? P.rvMix : 0.f);
             wl += rm * rL; wr += rm * rR;
 
             // niveau automatique lent (Orbe Looks) : le traité garde le niveau de la voix d'entrée
             outMs += (0.5f * (wl * wl + wr * wr) - outMs) * rmsC;
-            if (autoLevel && inMs > 1e-4f) { const float t = std::clamp(std::sqrt(inMs / (outMs + 1e-9f)) * std::pow(10.f, P.lvBias / 20.f), 0.1f, 3.f); ag += (t - ag) * (t < ag ? agD : agC); }
+            if (autoLevel && inMs > 1e-4f) { agPrimed = true; const float t = std::clamp(std::sqrt(inMs / (outMs + 1e-9f)) * std::pow(10.f, P.lvBias / 20.f), 0.1f, 3.f); ag += (t - ag) * (t < ag ? agD : agC); }
             if (!autoLevel) ag = 1.f;
-            wl *= ag; wr *= ag;
+            { const float k = ag * agK.next(1.f); wl *= k; wr *= k; }
 
             // 9. mix, sortie, limiteur
             const float mx = mixS.next(P.mix), og = outS.next(std::pow(10.f, P.out / 20.f));
@@ -233,6 +248,7 @@ private:
     void analyzeHop() {
         const bool on = P.tnOn > 0.5f, manual = P.key >= 0.5f;
         const float f0 = yin.analyze();
+        voiced = f0 > 0.f || (voiced && hold < 2);
         if (f0 > 0.f) {
             { const float per = sr / f0; tune.setPeriod(per); dbl1.setPeriod(per); dbl2.setPeriod(per); }   // raccords synchrones à la période
             const float midi = 69.f + 12.f * std::log2(f0 / 440.f);
@@ -258,10 +274,11 @@ private:
     voile::Oversampler sat;
     Delay dryL, dryR, pre;
     voile::Yin yin; voile::PingPong pp; voile::Reverb rev; Limiter lim;
-    Biquad hpF, lsF, b1F, b2F, hsF, apHp;
+    Biquad hpF, lsF, b1F, b2F, hsF, apHp, dyLp, dyHp, rvLp;
     onek::Comp comp; onek::DeEss ds;
     Smooth eqE, cpE, saE, dsE, dbS, dyS, rvS, mixS, outS, drvS, crS, saMS, cpMS;
     float ratio = 1.f, ratioT = 1.f, ratioC = 0.01f, shiftSm = 0.f, shiftT = 0.f, acc = 0.f, held = 0.f, dcX = 0.f, dcY = 0.f;
+    float cpHold = 0.f, gateC = 1e-5f; Smooth agK, vGate; bool agPrimed = false, voiced = false;
     float inMs = 1e-6f, outMs = 1e-6f, ag = 1.f, agC = 1e-4f, agD = 1e-3f, rmsC = 1e-4f, lvl = 0.f, peak = 0.f, meanSq = 0.f;
     int decCount = 0, hopCount = 0, holdCnt = 0, hold = 0, lastTgt = -1;
     float hist[12] = {}, wgt = 0.f; int keyTick = 0, effKey = 0, effScale = 1; bool haveKey = false, autoLevel = false;

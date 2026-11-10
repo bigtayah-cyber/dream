@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
     juce::AudioBuffer<float> b(2, 512); juce::MidiBuffer m;
     for (int blk = 0; blk < 120; ++blk) { for (int i = 0; i < 512; ++i) { const float t = (float)(blk * 512 + i); const float v = 0.3f * std::sin(0.03f * t) * (0.6f + 0.5f * std::sin(0.0007f * t)) + 0.1f * std::sin(0.4f * t); b.setSample(0, i, v); b.setSample(1, i, 0.9f * v); } proc.processBlock(b, m); }
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
-    ed->setSize(1000, 490);
+    if (auto* me = dynamic_cast<MasterEditor*>(ed.get())) { me->setThemeMode(kit::v3::rk::envMode(), false); me->setUiScale(kit::v3::rk::envScale()); }
     for (int i = 0; i < 12; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil(30);
     auto img = ed->createComponentSnapshot(ed->getLocalBounds(), true, 2.0f);
     juce::File f(argv[1]); f.deleteFile();

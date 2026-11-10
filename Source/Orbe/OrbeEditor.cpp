@@ -2,6 +2,7 @@
 
 using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
+namespace v3 = kit::v3;
 
 namespace {
 const Colour kLilac(0xFFCFC6FF), kIce(0xFFA9ECFF), kPeach(0xFFFFC4AB);
@@ -11,6 +12,7 @@ String noteName(int n) { return String(kSharpN[n % 12]) + String(n / 12 - 1); }
 
 // ---------------- Segmented ----------------
 void Segmented::paint(juce::Graphics& g) {
+    if (v3::bridge::v3(T)) { v3::segGrid(g, *T, getLocalBounds().toFloat().reduced(1.f), labels_, idx, -1, labels_.size(), false, 11.5f); return; }
     auto r = getLocalBounds().toFloat().reduced(0.5f);
     g.setColour(juce::Colours::black.withAlpha(0.6f));
     g.fillRoundedRectangle(r, 4.f);
@@ -39,6 +41,21 @@ void Segmented::mouseDown(const juce::MouseEvent& e) {
 
 // ---------------- MidiHandle ----------------
 void MidiHandle::paint(juce::Graphics& g) {
+    if (v3::bridge::v3(T)) {
+        auto r = getLocalBounds().toFloat().reduced(1.f);
+        const float u = (float)getWidth() / 216.f, rad = 12.f * u;
+        g.setColour(T->field); g.fillRoundedRectangle(r, rad);
+        juce::Path pth; pth.addRoundedRectangle(r.reduced(1.f), rad);
+        const float dash[2] = {5.f * u, 4.f * u}; juce::Path d; juce::PathStrokeType(1.2f).createDashedStroke(d, pth, dash, 2);
+        g.setColour(dragging ? T->accent : T->tick); g.fillPath(d);
+        auto ic = Rectangle<float>(r.getX() + 16 * u, r.getCentreY() - 18 * u, 28 * u, 36 * u);
+        juce::Path doc; doc.startNewSubPath(ic.getX(), ic.getY()); doc.lineTo(ic.getRight() - 9 * u, ic.getY()); doc.lineTo(ic.getRight(), ic.getY() + 9 * u); doc.lineTo(ic.getRight(), ic.getBottom()); doc.lineTo(ic.getX(), ic.getBottom()); doc.closeSubPath();
+        g.setColour(T->card); g.fillPath(doc); g.setColour(T->inkMute); g.strokePath(doc, juce::PathStrokeType(1.f));
+        g.setColour(T->accentText); g.setFont(v3::font(10.f * u, true)); g.drawText("MID", ic.withTop(ic.getCentreY() - 6 * u).withHeight(12 * u), juce::Justification::centred, false);
+        g.setColour(T->ink); v3::caps(g, "Glisser le MIDI", Rectangle<float>(r.getX() + 54 * u, r.getCentreY() - 19 * u, r.getWidth() - 58 * u, 16 * u), 11.f * u, juce::Justification::centredLeft);
+        g.setColour(T->inkMute); g.setFont(v3::font(11.5f * u)); g.drawFittedText(u8("vers une piste de ton DAW"), Rectangle<float>(r.getX() + 54 * u, r.getCentreY() + 1 * u, r.getWidth() - 58 * u, 28 * u).toNearestInt(), juce::Justification::topLeft, 2);
+        return;
+    }
     auto r = getLocalBounds().toFloat().reduced(1.f);
     const float u = (float)getWidth() / 216.f;
     g.setColour(juce::Colours::black.withAlpha(0.35f));
@@ -131,6 +148,22 @@ OrbeEditor::OrbeEditor(OrbeProcessor& p) : AudioProcessorEditor(&p), proc(p), pa
     midiOut.setTooltip(u8("Envoie aussi les notes en MIDI (canaux 1, 2, 3 et 10) vers les instruments de ton DAW"));
 
     for (auto* b : {&auditionB, &genAll, &genChords, &genLead}) addAndMakeVisible(b);
+    {   // v3 : potards haut de gamme sur les mêmes paramètres
+        k3.add(new v3::Knob3(ap, "density", u8("Densité"), u8("Densité de la mélodie"), v3::KnobSize::S));
+        k3.add(new v3::Knob3(ap, "human", "Humain", u8("Humanisation : décale légèrement le temps et la vélocité"), v3::KnobSize::S));
+        k3.add(new v3::Knob3(ap, "master", "Master", u8("Volume de l'aperçu sonore"), v3::KnobSize::S));
+        k3[0]->setFormatter([](double v) { return v3::fmt::pct(v); });
+        k3[1]->setFormatter([](double v) { return v3::fmt::pct(v); });
+        k3[2]->setFormatter([](double v) { return v3::fmt::pct(v); });
+        for (auto* k : k3) { k->setLabelPx(10.f); addChildComponent(k); }
+    }
+    addAndMakeVisible(skin.themeBtn);
+    skin.onMode = [this] {
+        const bool n3 = skin.on(); const auto* tp = skin.tp();
+        for (auto* s : {&densityK, &humanK, &masterK}) s->setVisible(!n3);
+        for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
+        barsSeg->T = tp; arpSeg->T = tp; handle->T = tp; repaint();
+    };
     auditionB.setClickingTogglesState(true);
     auditionB.setTooltip(u8("Joue la boucle ici. Dans le DAW, la lecture suit directement le transport."));
     auditionB.onClick = [this] { proc.audition = auditionB.getToggleState(); auditionB.setButtonText(auditionB.getToggleState() ? u8("Stop") : u8("Écouter")); };
@@ -154,15 +187,19 @@ OrbeEditor::OrbeEditor(OrbeProcessor& p) : AudioProcessorEditor(&p), proc(p), pa
     setResizeLimits(800, 512, 1700, 1088);
     getConstrainer()->setFixedAspectRatio(1000.0 / 640.0);
     setSize(1000, 640);
+    skin.init(*this, look, 1000.f, 640.f);
     startTimerHz(30);
 }
 
-OrbeEditor::~OrbeEditor() { stopTimer(); setLookAndFeel(nullptr); }
+OrbeEditor::~OrbeEditor() { stopTimer(); skin.shutdown(); }
 
 void OrbeEditor::resized() {
     u_ = (float)getWidth() / 1000.f;
+    skin.scale = u_;
+    if (skin.on()) { resized3(); return; }
     const int w = getWidth(), h = getHeight();
     plate = brushedPlate(w, h, pal);
+    skin.themeBtn.setBounds(Si(606, 24, 26, 26));
 
     styleBox.setBounds(Si(24, 102, 260, 30));
     keyBox.setBounds(Si(24, 158, 108, 30));
@@ -190,6 +227,7 @@ void OrbeEditor::resized() {
 
 void OrbeEditor::timerCallback() {
     static int tick = 0;
+    if (skin.on()) for (auto* k : k3) k->tickMod(1.f / 30.f);
     if (proc.playStep.load() >= 0.f || (++tick % 6) == 0) repaint(S(300, 84, 690, 410).toNearestInt());
 }
 
@@ -351,6 +389,7 @@ bool OrbeEditor::keyPressed(const juce::KeyPress& k) {
 }
 
 void OrbeEditor::paint(juce::Graphics& g) {
+    if (skin.on()) { paint3(g); return; }
     const float u = u_;
     g.drawImageAt(plate, 0, 0);
     // filets de séparation gravés
@@ -501,6 +540,9 @@ void OrbeEditor::paintToolbar(juce::Graphics& g, float u) {
 }
 
 void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
+    const bool n3 = skin.on();
+    const Colour muteC = n3 ? skin.T.scrMute : muteC;
+    auto fm = [&](float px) { return n3 ? v3::font(px * 1.25f) : mono(px); };
     const auto& song = proc.song();
     const int bars = (int)song.prog.size();
     if (bars == 0) return;
@@ -518,12 +560,12 @@ void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
             if (blk[n % 12]) { g.setColour(juce::Colours::black.withAlpha(0.22f)); g.fillRect(area.getX(), y, area.getWidth(), G.rowH); }
             if (n % 12 == 0) {
                 g.setColour(juce::Colours::white.withAlpha(0.10f)); g.fillRect(area.getX(), y + G.rowH - 1.f, area.getWidth(), 1.f);
-                g.setColour(pal.mute.withAlpha(0.8f)); g.setFont(mono(8.5f * u));
+                g.setColour(muteC.withAlpha(0.8f)); g.setFont(fm(8.5f * u));
                 g.drawText(noteName(n), Rectangle<float>(area.getX() + 2 * u, y - 3 * u, 30 * u, G.rowH + 6 * u), juce::Justification::centredLeft);
             }
         } else {
             g.setColour(juce::Colours::white.withAlpha(r % 2 ? 0.0f : 0.03f)); g.fillRect(area.getX(), y, area.getWidth(), G.rowH);
-            g.setColour(pal.mute.withAlpha(0.8f)); g.setFont(mono(8.5f * u));
+            g.setColour(muteC.withAlpha(0.8f)); g.setFont(fm(8.5f * u));
             g.drawText(kDrumName[r], Rectangle<float>(area.getX() + 2 * u, y, 60 * u, G.rowH), juce::Justification::centredLeft);
         }
     }
@@ -533,7 +575,7 @@ void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
         if (!beat && stepW < 5.f * u) continue;
         g.setColour(juce::Colours::white.withAlpha(bar ? 0.20f : beat ? 0.09f : 0.035f));
         g.fillRect(area.getX() + (float)s * stepW, area.getY(), bar ? 1.4f : 1.f, area.getHeight());
-        if (bar && s < bars * 16) { g.setColour(pal.mute.withAlpha(0.7f)); g.setFont(mono(9.f * u)); g.drawText(String(s / 16 + 1), Rectangle<float>(area.getX() + (float)s * stepW + 3 * u, area.getY() - 12 * u, 24 * u, 11 * u), juce::Justification::centredLeft); }
+        if (bar && s < bars * 16) { g.setColour(muteC.withAlpha(0.7f)); g.setFont(fm(9.f * u)); g.drawText(String(s / 16 + 1), Rectangle<float>(area.getX() + (float)s * stepW + 3 * u, area.getY() - 12 * u, 24 * u, 11 * u), juce::Justification::centredLeft); }
     }
     // accords en fantôme pendant l'édition de la mélodie
     if (editTrack == 1) for (auto& n : song.nChords) if (n.n >= G.lo && n.n <= G.hi) {
@@ -548,7 +590,7 @@ void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
             if (n.gl) { g.setColour(juce::Colours::white.withAlpha(0.8f)); g.fillRect(r.getX(), r.getY(), 2.5f * u, r.getHeight()); }  // glissade 808
         }
     }
-    g.setColour(pal.mute.withAlpha(0.7f)); g.setFont(fnt(8.5f * u));
+    g.setColour(muteC.withAlpha(0.7f)); g.setFont(fm(8.5f * u));
     g.drawText(u8("Clic : ajouter / supprimer  ·  glisser : déplacer  ·  bord droit : durée  ·  clic droit : effacer"), S(420, 481, 548, 9).toNearestInt(), juce::Justification::centredRight);
 
     // vue d'ensemble des 4 pistes
@@ -581,5 +623,156 @@ void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
         g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(0.0f), x - 10 * u, 0, juce::Colours::white.withAlpha(0.18f), x, 0, false));
         g.fillRect(x - 10 * u, y0, 10 * u, hh);
         g.setColour(juce::Colours::white.withAlpha(0.9f)); g.fillRect(x, y0, 1.4f, hh);
+    }
+}
+
+// ============================================================ v3 « hybride v2 » (mêmes coordonnées de conception 1000 x 640)
+void OrbeEditor::resized3() {
+    skin.themeBtn.setBounds(Si(944, 24, 28, 28));
+    styleBox.setBounds(Si(28, 102, 252, 32));
+    keyBox.setBounds(Si(28, 158, 106, 32));
+    scaleBox.setBounds(Si(144, 158, 136, 32));
+    barsSeg->setBounds(Si(28, 214, 76, 32));
+    arpSeg->setBounds(Si(112, 214, 168, 32));
+    b7.setBounds(Si(28, 264, 70, 24)); bAdd9.setBounds(Si(100, 264, 84, 24)); bBorrow.setBounds(Si(180, 264, 104, 24));
+    for (int i = 0; i < 2; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(34.f + 134.f * (float)i, 346, 108, 112)); }
+    auditionB.setBounds(Si(24, 520, 124, 40)); genAll.setBounds(Si(160, 520, 124, 40));
+    genChords.setBounds(Si(24, 570, 124, 36)); genLead.setBounds(Si(160, 570, 124, 36));
+    for (int i = 0; i < 4; ++i) {
+        const float x = 324.f + (float)i * 84.f;
+        fader[i].setBounds(Si(x + 16, 534, 40, 68));
+        mute[i].setBounds(Si(x + 2, 606, 70, 22));
+    }
+    k3[2]->setScale(u_); k3[2]->setBounds(Si(660, 516, 100, 112));
+    handle->setBounds(Si(768, 508, 208, 70));
+    for (int i = 0; i < 4; ++i) chip[i].setBounds(Si(768.f + (float)i * 52.f, 606.f, 48, 20));
+    midiOut.setBounds(Si(768, 582, 170, 22));
+    repaint();
+}
+
+void OrbeEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
+    const float u = b.getWidth() / 1000.f;
+    auto R = [u](float x, float y, float w, float h) { return Rectangle<float>(x * u, y * u, w * u, h * u); };
+    const auto& T = skin.T;
+    v3::background(g, T, b);
+    v3::card(g, T, R(16, 80, 276, 414), 18.f * u);
+    v3::hero(g, T, R(304, 240, 672, 250), 18.f * u);
+    v3::card(g, T, R(16, 504, 960, 128), 18.f * u);
+    v3::hero(g, T, R(590, 14, 340, 44), 14.f * u);
+    v3::label(g, T, "Style", R(28, 84, 200, 14), 11.f * u);
+    v3::label(g, T, "Tonique", R(28, 140, 108, 14), 11.f * u);
+    v3::label(g, T, "Gamme", R(146, 140, 140, 14), 11.f * u);
+    v3::label(g, T, "Mesures", R(28, 196, 76, 14), 11.f * u);
+    v3::label(g, T, "Jeu des accords", R(114, 196, 172, 14), 11.f * u);
+    v3::label(g, T, "Harmonie", R(28, 246, 140, 14), 11.f * u);
+    v3::label(g, T, u8("Mélodie"), R(28, 304, 260, 14), 11.f * u);
+    g.setColour(T.dark ? juce::Colours::white.withAlpha(0.07f) : Colour(0x14101828)); g.fillRect(R(28, 296, 252, 1));
+    const char* tn[4] = {"Accords", "Lead", "Basse", "Batterie"};
+    const Colour tc[4] = {T.accent, T.mod, T.out, T.inkMute};
+    for (int i = 0; i < 4; ++i) {
+        const float x = 324.f + (float)i * 84.f;
+        g.setColour(kTrackCol[i].darker(T.dark ? 0.f : 0.25f)); g.fillRoundedRectangle(R(x + 6, 520, 8, 8), 4.f * u);
+        v3::label(g, T, tn[i], R(x + 18, 516, 70, 16), 10.f * u);
+        juce::ignoreUnused(tc);
+    }
+}
+
+void OrbeEditor::paint3(juce::Graphics& g) {
+    const float u = u_;
+    skin.art.draw(g, String("bd|") + v3::modeKey(skin.mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) { paintBackdrop3(ig, b); });
+    paintHeader3(g, u);
+    paintCards3(g, u);
+    paintToolbar3(g, u);
+    paintRoll(g, u);
+}
+
+void OrbeEditor::paintHeader3(juce::Graphics& g, float u) {
+    const auto& T = skin.T;
+    const float cx = 40 * u, cy = 38 * u, r = 15 * u;   // l'orbe, signature de la marque
+    g.setGradientFill(juce::ColourGradient(T.mod.brighter(0.4f), cx - r * 0.5f, cy - r * 0.6f, Colour(0xFF5A46C8), cx + r, cy + r, true)); g.fillEllipse(cx - r, cy - r, r * 2, r * 2);
+    g.setColour(juce::Colours::white.withAlpha(0.5f)); g.fillEllipse(cx - r * 0.62f, cy - r * 0.78f, r * 0.7f, r * 0.42f);
+    g.setColour(T.accent.withAlpha(0.8f)); g.drawEllipse(cx - r * 1.28f, cy - r * 1.28f, r * 2.56f, r * 2.56f, 1.f * u);
+    v3::brand(g, T, u, "Orbe", "", 72.f);
+    g.setColour(T.inkMute); g.setFont(v3::font(12.f * u)); g.drawText(u8("Accords · mélodie · basse · batterie"), S(250, 28, 320, 20), juce::Justification::centredLeft, false);
+    const auto& st = proc.style(); const auto& ap = proc.apvts;
+    const int key = (int)ap.getRawParameterValue("key")->load(), sc = (int)ap.getRawParameterValue("scale")->load();
+    const float hb = proc.hostBpm.load(); const int bpm = hb > 0.f ? juce::roundToInt(hb) : st.bpm;
+    g.setColour(T.scrInk); g.setFont(v3::font(14.f * u, true));
+    g.drawText(String(st.label), S(606, 14, 150, 44), juce::Justification::centredLeft, true);
+    v3::tabular(g, v3::fmt::withUnit(String(bpm), "BPM"), S(748, 14, 80, 44), v3::font(14.f * u, true), juce::Justification::centredRight);
+    g.setColour(T.out); g.drawText(String(kSharpN[key]) + " " + String(orbe::scales()[(size_t)sc].label), S(836, 14, 90, 44), juce::Justification::centredRight, true);
+}
+
+void OrbeEditor::paintCards3(juce::Graphics& g, float u) {
+    const auto& T = skin.T; const auto& song = proc.song();
+    const int n = (int)song.chords.size();
+    const float step = proc.playStep.load();
+    const int cur = step >= 0.f ? (int)(step / 16.f) : -1;
+    for (int i = 0; i < n; ++i) {
+        const auto& c = song.chords[(size_t)i];
+        const orbe::Chord* c2 = nullptr;
+        for (auto& s : song.slots) if (s.bar == i && s.t > (float)i * 16) c2 = &s;
+        auto r = cardRect(i, n, u);
+        const bool playing = i == cur, locked = proc.isLocked(i);
+        const float rad = 14.f * u;
+        juce::DropShadow(T.shadow.withMultipliedAlpha(0.5f), juce::roundToInt(6 * u), {0, 2}).drawForRectangle(g, r.reduced(2.f).toNearestInt());
+        g.setColour(playing ? (T.dark ? T.card.brighter(0.25f) : T.card) : T.card); g.fillRoundedRectangle(r, rad);
+        g.setColour(playing ? T.accent : T.cardEdge); g.drawRoundedRectangle(r.reduced(0.5f), rad, playing ? 2.f : 1.f);
+        auto one = [&](const orbe::Chord& ch, Rectangle<float> rr, bool half) {
+            g.setColour(T.accentText); g.setFont(v3::font(juce::jmin(12.f * u, rr.getWidth() * 0.18f), true));
+            g.drawText(ch.roman, Rectangle<float>(rr.getX() + 10 * u, rr.getY() + 7 * u, rr.getWidth() - 20 * u, 15 * u), juce::Justification::centredLeft, false);
+            if (ch.borrowed && !half) { g.setColour(T.inkMute); v3::caps(g, "emprunt", Rectangle<float>(rr.getX() + 8 * u, rr.getY() + 7 * u, rr.getWidth() - 16 * u, 15 * u), 9.f * u, juce::Justification::centredRight); }
+            g.setColour(T.ink); g.setFont(v3::font(juce::jmin(26.f * u, rr.getWidth() * 0.32f), true));
+            g.drawFittedText(ch.name, Rectangle<float>(rr.getX() + 2 * u, rr.getY() + 22 * u, rr.getWidth() - 4 * u, 32 * u).toNearestInt(), juce::Justification::centred, 1, 0.5f);
+            String ns; for (size_t k = 0; k < ch.voicing.size(); ++k) ns << (k ? " " : "") << noteName(ch.voicing[k]);
+            g.setColour(T.inkMute); g.setFont(v3::font(juce::jmin(11.5f * u, rr.getWidth() * (half ? 0.17f : 0.09f))));
+            g.drawFittedText(ns, Rectangle<float>(rr.getX() + 4 * u, rr.getY() + 55 * u, rr.getWidth() - 8 * u, 22 * u).toNearestInt(), juce::Justification::centred, 2);
+        };
+        if (c2) {
+            auto left = r.withWidth(r.getWidth() / 2), right = r.withTrimmedLeft(r.getWidth() / 2);
+            one(c, left, true); one(*c2, right, true);
+            g.setColour(T.fieldEdge); g.fillRect(r.getCentreX() - 0.5f, r.getY() + 10 * u, 1.f, 62 * u);
+        } else one(c, r, false);
+        const float s = 22.f * u;
+        auto lk = Rectangle<float>(r.getX() + 8 * u, r.getBottom() - s - 3 * u, s, s);
+        g.setColour(locked ? T.accentText : T.inkMute);
+        juce::Path body; body.addRoundedRectangle(lk.getX() + s * 0.2f, lk.getY() + s * 0.46f, s * 0.6f, s * 0.42f, 2.f);
+        g.fillPath(body);
+        juce::Path sh;
+        if (locked) sh.addCentredArc(lk.getCentreX(), lk.getY() + s * 0.46f, s * 0.2f, s * 0.26f, 0, -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi, true);
+        else sh.addCentredArc(lk.getCentreX() + s * 0.1f, lk.getY() + s * 0.42f, s * 0.2f, s * 0.26f, 0, -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi * 0.6f, true);
+        g.strokePath(sh, juce::PathStrokeType(1.6f * u));
+        auto rl = Rectangle<float>(r.getRight() - s - 8 * u, r.getBottom() - s - 3 * u, s, s);
+        g.setColour(T.inkMute);
+        juce::Path ar; ar.addCentredArc(rl.getCentreX(), rl.getCentreY(), s * 0.3f, s * 0.3f, 0, 0.6f, 5.2f, true);
+        g.strokePath(ar, juce::PathStrokeType(1.6f * u));
+        juce::Path tip; tip.addTriangle(rl.getCentreX() + s * 0.3f, rl.getCentreY() - s * 0.02f, rl.getCentreX() + s * 0.46f, rl.getCentreY() - s * 0.2f, rl.getCentreX() + s * 0.14f, rl.getCentreY() - s * 0.22f);
+        g.fillPath(tip);
+    }
+}
+
+void OrbeEditor::paintToolbar3(juce::Graphics& g, float u) {
+    const auto& T = skin.T;
+    const char* tn[4] = {"Accords", "Lead", "Basse", "Batterie"};
+    const char* tool_[2] = {"Crayon", "Gomme"};
+    for (auto& b : buttons()) {
+        auto r = b.r.reduced(0.5f);
+        const bool sel = (b.kind == 0 && editTrack == b.idx) || (b.kind == 2 && tool == b.idx);
+        const bool dis = (b.kind == 3 && !proc.canUndo()) || (b.kind == 4 && !proc.canRedo());
+        const float rad = r.getHeight() * 0.5f;
+        g.setColour(sel ? (T.dark ? T.card.brighter(0.25f) : T.card) : T.field); g.fillRoundedRectangle(r, rad);
+        g.setColour(sel ? T.accent : T.fieldEdge); g.drawRoundedRectangle(r.reduced(0.5f), rad, sel ? 1.5f : 1.f);
+        if (b.kind == 1) {
+            const bool lk = proc.trackLocked(b.idx);
+            const float s = r.getHeight() * 0.8f;
+            auto m = Rectangle<float>(r.getCentreX() - s * 0.3f, r.getCentreY() - s * 0.02f, s * 0.6f, s * 0.42f);
+            g.setColour(lk ? T.accentText : T.inkMute); g.fillRoundedRectangle(m, 1.5f * u);
+            juce::Path sh; sh.addCentredArc(m.getCentreX() + (lk ? 0.f : s * 0.14f), m.getY(), s * 0.17f, s * 0.24f, 0, -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi, true);
+            g.strokePath(sh, juce::PathStrokeType(1.5f * u));
+            continue;
+        }
+        String txt = b.kind == 0 ? String(tn[b.idx]) + (proc.trackEdited(b.idx) ? " *" : "") : b.kind == 2 ? String(tool_[b.idx]) : b.kind == 3 ? String(u8("Annuler")) : String(u8("Rétablir"));
+        g.setColour(dis ? T.inkMute.withAlpha(0.5f) : sel ? T.ink : T.inkMute);
+        v3::caps(g, txt, r, 10.f * u, juce::Justification::centred, sel);
     }
 }

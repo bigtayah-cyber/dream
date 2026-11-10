@@ -1,7 +1,9 @@
 // Rend l'éditeur d'Orbe Beat dans un PNG (sans DAW). Usage : orbebeat_snapshot sortie.png [largeur] [kit] [32]
 #include "OrbeBeatProcessor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    kit::v3::snapshotTheme("orbebeat");
     OrbeBeatProcessor proc;
     proc.prepareToPlay(48000, 512);
     auto setP = [&](const char* id, float v) { if (auto* p = proc.apvts.getParameter(id)) p->setValueNotifyingHost(p->convertTo0to1(v)); };

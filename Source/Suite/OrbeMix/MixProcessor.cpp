@@ -23,6 +23,8 @@ bool MixProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
 }
 
 void MixProcessor::prepareToPlay(double rate, int) {
+    if (!(rate > 0.0)) rate = 48000.0;
+    const juce::SpinLock::ScopedLockType sl(prepLock);   // certains hôtes rappellent prepare pendant que le fil audio tourne
     sr = rate; meter.prepare(rate); sincePub = 0;
     oa::MixSnap s; meter.fill(s); pub.write(s);
 }
@@ -32,11 +34,13 @@ void MixProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBuffer&
     const int n = buf.getNumSamples(), nch = buf.getNumChannels();
     if (nch < 1 || n < 1) return;
     if (bypass != nullptr && bypass->get()) return;   // contourné : l'audio passe tel quel (latence nulle), plus de mesure
+    const juce::SpinLock::ScopedTryLockType tl(prepLock);
+    if (!tl.isLocked()) return;                        // préparation en cours : on saute la mesure de ce bloc
     if (resetReq.exchange(false)) { meter.reset(); oa::MixSnap s; meter.fill(s); pub.write(s); epoch.fetch_add(1); sincePub = 0; }
     const float* L = buf.getReadPointer(0);
     meter.process(L, nch > 1 ? buf.getReadPointer(1) : L, n);   // l'audio n'est jamais modifié
     sincePub += n;
-    if (sincePub >= (int)(sr / 15.0)) { oa::MixSnap s; meter.fill(s); pub.write(s); sincePub = 0; }
+    if (sincePub >= juce::jmax(1, (int)(sr / 15.0))) { oa::MixSnap s; meter.fill(s); pub.write(s); sincePub = 0; }
 }
 
 void MixProcessor::getStateInformation(juce::MemoryBlock& dest) { if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, dest); }

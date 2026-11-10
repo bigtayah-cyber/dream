@@ -1,4 +1,4 @@
-// Rend la face d'Orbe Denoiser dans un PNG. Usage : orbedenoiser_snapshot sortie.png [voix.wav]
+// Rend la face d'Orbe Denoiser dans un PNG. Usage : orbedenoiser_snapshot sortie.png [voix.wav|-] [clair|sombre|classique]
 #include "DenoiserProcessor.h"
 #include "DenoiserEditor.h"
 #include "../OrbeDsp/snapshot_util.h"
@@ -12,7 +12,10 @@ int main(int argc, char** argv) {
     v.resize(48000 * 4); auto n = snap::noise(v.size(), -50.f, 2);
     for (size_t i = 0; i < v.size(); ++i) { v[i] += n[i] + 0.002f * std::sin(2 * 3.14159f * 50.f * (float)i / 48000.f); }
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
-    ed->setSize(808, 428);
+    const juce::String th = argc > 3 ? argv[3] : "classique";   // sans argument : rendu d'origine
+    auto* de = dynamic_cast<DenoiserEditor*>(ed.get());
+    de->setThemeMode(th == "sombre" ? kit::v3::Mode::Dark : th == "clair" ? kit::v3::Mode::Light : kit::v3::Mode::Classic, false);
+    if (th == "classique") ed->setSize(808, 428); else de->setUiScale(1.f);
     const size_t half = v.size() / 2;
     snap::feed(proc, std::vector<float>(v.begin(), v.begin() + (long)half)); snap::settle(300);
     snap::feed(proc, std::vector<float>(v.begin() + (long)half, v.end())); snap::settle(200);

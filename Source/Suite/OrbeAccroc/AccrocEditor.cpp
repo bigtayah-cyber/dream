@@ -2,6 +2,7 @@
 
 using namespace of;
 using kit::u8;
+namespace v3 = kit::v3;
 
 namespace {
 const Colour kAcid(0xFFCFF56A);   // accroc : vert acide de signal
@@ -39,7 +40,43 @@ public:
         setTooltip(u8("TYPE : clic = peindre avec le pinceau choisi dessous, clic droit = effacer. INTENS. et PROBA : cliquer-glisser. "
                       "DUR\xC3\x89" "E : clic +1 pas, clic droit -1 (ou molette)."));
     }
+    const v3::Theme* T = nullptr;   // nul : rendu Classique
+    void setTheme(const v3::Theme* t) { T = t; setOpaque(t == nullptr); repaint(); }
+    void paint3(juce::Graphics& g) {
+        const auto& t = *T; const float u = (float)getWidth() / 688.f;
+        const auto& q = proc.seq(); const int now = proc.stepNow();
+        const char* rows[4] = {"Type", "Intens.", "Proba", nullptr};
+        const float ry[4] = {kTypeY, kIntY, kProbY, kLenY}, rh[4] = {kTypeH, kBarH, kBarH, kLenH};
+        for (int k = 0; k < 4; ++k) { g.setColour(t.scrMute); v3::caps(g, k < 3 ? String(rows[k]) : u8("Dur\xC3\xA9" "e"), Rectangle<float>(14 * u, ry[k] * u, 56 * u, rh[k] * u), 11.f * u, juce::Justification::centredLeft); }
+        for (int i = 0; i < 16; ++i) {
+            const auto c = col(i, u); const auto& s = q.s[(size_t)i];
+            const bool play = i == now, beat = i % 4 == 0;
+            if (play) { g.setColour(t.accent.withAlpha(0.14f)); g.fillRoundedRectangle(c.getX() - 1 * u, 4 * u, c.getWidth() + 2 * u, (kLenY + kLenH) * u, 6 * u); }
+            g.setColour(play ? t.accent.brighter(0.5f) : beat ? t.scrInk : t.scrMute); g.setFont(v3::font(12.f * u, play || beat));
+            g.drawText(String(i + 1), Rectangle<float>(c.getX(), 5 * u, c.getWidth(), 14 * u), juce::Justification::centred, false);
+            auto tile = Rectangle<float>(c.getX() + 2 * u, kTypeY * u, c.getWidth() - 4 * u, kTypeH * u);
+            if (s.type >= 0) {
+                const Colour tc = kTypeCol[s.type];
+                g.setColour(tc.withAlpha(0.25f + 0.65f * s.prob)); g.fillRoundedRectangle(tile, 8 * u);
+                g.setColour(Colour(0xFF0B0C14)); g.setFont(v3::font(11.5f * u, true));
+                g.drawText(u8(acr::kTypeShort[s.type]), tile, juce::Justification::centred, false);
+                const int end = juce::jmin(16, i + s.len); const float x1 = col(end - 1, u).getRight() - 2 * u;
+                g.setColour(tc.withAlpha(0.85f)); g.fillRoundedRectangle(tile.getX(), (kTypeY + kTypeH + 3) * u, x1 - tile.getX(), 3 * u, 1.5f * u);
+            } else { g.setColour(juce::Colours::white.withAlpha(beat ? 0.12f : 0.07f)); g.drawRoundedRectangle(tile, 8 * u, 1.f); }
+            auto bar = [&](float y, float v, Colour cc) {
+                auto r = Rectangle<float>(c.getX() + 6 * u, y * u, c.getWidth() - 12 * u, kBarH * u);
+                g.setColour(juce::Colours::white.withAlpha(0.06f)); g.fillRoundedRectangle(r, 4 * u);
+                if (s.type < 0 || v <= 0.f) return;
+                g.setColour(cc); g.fillRoundedRectangle(r.withTop(juce::jmin(r.getBottom() - 4 * u, r.getBottom() - r.getHeight() * v)), 4 * u);
+            };
+            const Colour tc = s.type >= 0 ? kTypeCol[s.type] : t.scrMute;
+            bar(kIntY, s.inten, tc.withAlpha(0.9f)); bar(kProbY, s.prob, t.scrInk.withAlpha(0.55f));
+            g.setColour(s.type >= 0 ? t.scrInk : t.scrMute.withAlpha(0.6f)); g.setFont(v3::font(12.f * u, true));
+            g.drawText(String(s.len), Rectangle<float>(c.getX(), kLenY * u, c.getWidth(), kLenH * u), juce::Justification::centred, false);
+        }
+    }
     void paint(juce::Graphics& g) override {
+        if (T != nullptr) { paint3(g); return; }
         const float u = (float)getWidth() / 688.f; const auto pal = of::palette(kAcid);
         kit::screenWell(g, pal, getLocalBounds().toFloat(), kit::Display::OLED);
         const auto& q = proc.seq(); const int now = proc.stepNow();
@@ -123,7 +160,27 @@ private:
 class StatusView : public juce::Component {
 public:
     explicit StatusView(AccrocProcessor& p) : proc(p) { setOpaque(true); }
+    const v3::Theme* T = nullptr;
+    void setTheme(const v3::Theme* t) { T = t; setOpaque(t == nullptr); repaint(); }
+    void paint3(juce::Graphics& g) {
+        const auto& t = *T; const float u = (float)getWidth() / 336.f;
+        g.setColour(t.scrMute); v3::caps(g, "En cours", Rectangle<float>(14 * u, 6 * u, 100 * u, 14 * u), 10.5f * u, juce::Justification::centredLeft);
+        const int st = proc.stepNow();
+        g.setColour(t.accent.brighter(0.4f));
+        v3::tabular(g, (st >= 0 ? "Pas " + String(st + 1).paddedLeft('0', 2) + "/16" : String("Pas --/16")) + u8("  \xC2\xB7  ") + v3::fmt::withUnit(v3::fmt::num(proc.bpmNow(), 1), "BPM"), Rectangle<float>(110 * u, 4 * u, 214 * u, 18 * u), v3::font(12.5f * u, true), juce::Justification::centredRight);
+        for (int k = 0; k < acr::kNumTypes; ++k) {
+            const float x = 14 * u + (float)(k % 4) * 78 * u, y = 30 * u + (float)(k / 4) * 32 * u;
+            const float a = juce::jlimit(0.f, 1.f, proc.activity(k));
+            if (a > 0.01f) { g.setColour(kTypeCol[k].withAlpha(0.28f * a)); g.fillEllipse(Rectangle<float>(13 * u, 13 * u).withCentre({x + 5 * u, y + 7 * u})); }
+            g.setColour(a > 0.01f ? kTypeCol[k] : t.scrMute.withAlpha(0.5f)); g.fillEllipse(Rectangle<float>(6 * u, 6 * u).withCentre({x + 5 * u, y + 7 * u}));
+            g.setColour(a > 0.01f ? t.scrInk : t.scrMute); g.setFont(v3::font(11.f * u, a > 0.01f));
+            g.drawText(u8(acr::kTypeShort[k]), Rectangle<float>(x + 14 * u, y, 56 * u, 14 * u), juce::Justification::centredLeft, false);
+            g.setColour(juce::Colours::white.withAlpha(0.08f)); g.fillRoundedRectangle(x + 14 * u, y + 17 * u, 56 * u, 4 * u, 2 * u);
+            g.setColour(kTypeCol[k]); g.fillRoundedRectangle(x + 14 * u, y + 17 * u, juce::jmax(0.f, 56 * u * a), 4 * u, 2 * u);
+        }
+    }
     void paint(juce::Graphics& g) override {
+        if (T != nullptr) { paint3(g); return; }
         const float u = (float)getWidth() / 336.f; const auto pal = of::palette(kAcid);
         kit::screenWell(g, pal, getLocalBounds().toFloat(), kit::Display::OLED);
         g.setFont(kit::mono(9.6f * u));
@@ -147,9 +204,29 @@ private:
 };
 
 // ------------------------------------------------------------------ pad jouable à la souris : accident tant qu'on appuie
-class PadKey : public kit::w::PushKey {
+// Touche poussoir à pastille de la couleur du type d'accident (pinceaux et pads) ; Classique : rendu d'origine.
+class TypeKey : public v3::bridge::PushKey {
 public:
-    PadKey(AccrocProcessor& p, int t, const kit::Palette& pal) : PushKey(u8(acr::kTypeNames[t]), pal, kTypeCol[t]), proc(p), type(t) {}
+    TypeKey(const String& text, const kit::Palette& pal, Colour c) : v3::bridge::PushKey(text, pal, c), tc(c) {}
+    void paintButton(juce::Graphics& g, bool hover, bool down) override {
+        if (!v3::bridge::v3(T)) { v3::bridge::PushKey::paintButton(g, hover, down); return; }
+        auto r = getLocalBounds().toFloat().reduced(1.f); const bool on = getToggleState() || lit; const float rad = juce::jmin(r.getHeight() * 0.5f, 16.f);
+        juce::Graphics::ScopedSaveState st(g); if (!isEnabled()) g.setOpacity(0.5f);
+        juce::DropShadow(T->shadow, juce::roundToInt(rad * 0.8f), {0, 2}).drawForRectangle(g, r.reduced(2.f).toNearestInt());
+        g.setColour(down ? T->card.darker(0.05f) : hover ? T->card.brighter(0.04f) : T->card); g.fillRoundedRectangle(r, rad);
+        if (on) { g.setColour(tc.withAlpha(T->dark ? 0.30f : 0.26f)); g.fillRoundedRectangle(r, rad); }
+        g.setColour(on ? tc : T->fieldEdge); g.drawRoundedRectangle(r.reduced(0.5f), rad, on ? 1.6f : 1.f);
+        const float d = juce::jmax(7.f, r.getHeight() * 0.2f);
+        if (on) { g.setColour(tc.withAlpha(0.3f)); g.fillEllipse(Rectangle<float>(d * 1.8f, d * 1.8f).withCentre({r.getX() + rad * 0.95f, r.getCentreY()})); }
+        g.setColour(tc); g.fillEllipse(Rectangle<float>(d, d).withCentre({r.getX() + rad * 0.95f, r.getCentreY()}));
+        g.setColour(T->ink); v3::caps(g, getButtonText(), r.withTrimmedLeft(rad * 1.5f).translated(0, down ? 0.5f : 0.f), juce::jlimit(9.f, 13.f, r.getHeight() * 0.30f), juce::Justification::centredLeft);
+    }
+private:
+    Colour tc;
+};
+class PadKey : public TypeKey {
+public:
+    PadKey(AccrocProcessor& p, int t, const kit::Palette& pal) : TypeKey(u8(acr::kTypeNames[t]), pal, kTypeCol[t]), proc(p), type(t) {}
     ~PadKey() override { proc.pad(type, 0.f); }
     void buttonStateChanged() override { const bool d = isDown(); if (d != down) { down = d; proc.pad(type, d ? 1.f : 0.f); } }
 private:
@@ -186,15 +263,19 @@ AccrocEditor::AccrocEditor(AccrocProcessor& p)
         {"skip_range", "Port\xC3\xA9" "e", "Saut maximal en arri\xC3\xA8re, en doubles-croches."},
         {"gate_div", "Grille", "Taille des cases de micro-coupure."},
         {"gate_dens", "Densit\xC3\xA9", "Part des cases coup\xC3\xA9" "es (rampes de 2 ms, sans clic)."}};
-    for (auto& d : defs) { auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(pt); }
-    stepSeg = std::make_unique<Seg>(proc.apvts, "step", juce::StringArray{"Pas 1/8", "Pas 1/16", "Pas 1/32"}, u8("Dur\xC3\xA9" "e d'un pas de la s\xC3\xA9quence (16 pas)."), pal);
-    clockSeg = std::make_unique<Seg>(proc.apvts, "clock", juce::StringArray{"Lecture", "Toujours"},
+    for (auto& d : defs) {
+        auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(pt);
+        auto* k = k3.add(new v3::Knob3(proc.apvts, d.id, u8(d.lab), u8(d.tip), v3::KnobSize::S));
+        k->setBipolar(v3::rk::bipolarOf(proc.apvts, d.id)); k->setLabelPx(11.f); addChildComponent(k);
+    }
+    stepSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "step", juce::StringArray{"Pas 1/8", "Pas 1/16", "Pas 1/32"}, u8("Dur\xC3\xA9" "e d'un pas de la s\xC3\xA9quence (16 pas)."), pal);
+    clockSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "clock", juce::StringArray{"Lecture", "Toujours"},
                                      u8("Lecture : la s\xC3\xA9quence ne joue que quand l'h\xC3\xB4te lit (cal\xC3\xA9" "e sur sa position). "
                                         "Toujours : horloge interne au tempo quand l'h\xC3\xB4te est \xC3\xA0 l'arr\xC3\xAAt."), pal);
     addAndMakeVisible(*stepSeg); addAndMakeVisible(*clockSeg);
     for (int i = 0; i <= acr::kNumTypes; ++i) {
         const bool erase = i == acr::kNumTypes;
-        auto* b = brushes.add(new kit::w::PushKey(erase ? u8("Gomme") : u8(acr::kTypeNames[i]), pal, erase ? kit::w::kSilk : kTypeCol[i])); addAndMakeVisible(b);
+        auto* b = brushes.add(new TypeKey(erase ? u8("Gomme") : u8(acr::kTypeNames[i]), pal, erase ? kit::w::kSilk : kTypeCol[i])); addAndMakeVisible(b);
         b->setTooltip(erase ? u8("Pinceau gomme : un clic sur un pas l'efface.") : u8("Pinceau : ") + u8(kTypeTip[i]));
         b->onClick = [this, i, erase] { setBrush(erase ? -1 : i); };
     }
@@ -222,14 +303,41 @@ AccrocEditor::AccrocEditor(AccrocProcessor& p)
         u8("- Intensit\xC3\xA9 0 = signal intact. Raccords en fondus de 4 ms, limiteur doux en sortie."),
         u8("- Latence de 4 ms d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te ; le Mix reste en phase.")});
     setBrush(proc.brush);
+    addAndMakeVisible(skin.btn);
+    skin.btn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
+    skin.btn.onScale = [this](float s) { setUiScale(s); };
     setResizable(true, true);
-    setResizeLimits(640, (int)(640 * kH / kW), 1800, (int)(1800 * kH / kW));
-    getConstrainer()->setFixedAspectRatio((double)kW / kH);
-    setSize((int)kW, (int)kH);
+    scale_ = v3::Prefs::scale("accroc", 1.f);
+    setThemeMode(v3::Prefs::theme("accroc", v3::Mode::Light), false);
     timerCallback();
     startTimerHz(30);
 }
-AccrocEditor::~AccrocEditor() { stopTimer(); setLookAndFeel(nullptr); }
+AccrocEditor::~AccrocEditor() { stopTimer(); v3::Prefs::setScale("accroc", scale_); setLookAndFeel(nullptr); }
+
+void AccrocEditor::setThemeMode(v3::Mode m, bool persist) {
+    skin.set(m);
+    const bool n3 = isV3();
+    setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&skin.look3) : static_cast<juce::LookAndFeel*>(&look));
+    const v3::Theme* tp = skin.tp();
+    seqView->setTheme(tp); status->setTheme(tp);
+    for (auto* p : pots) p->setVisible(!n3);
+    for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
+    for (auto* sg : {stepSeg.get(), clockSeg.get()}) { sg->T = tp; sg->repaint(); }
+    for (auto* b : brushes) b->T = tp;
+    for (auto* b : pads) b->T = tp;
+    reroll.T = clear.T = tp; power.T = tp; help.T = tp;
+    if (persist) v3::Prefs::setTheme("accroc", m);
+    if (v3::rk::fit(*this, n3, {kW3, kH3}, {kW, kH}, 0.58f, 1.63f, scale_)) resized();
+    sendLookAndFeelChange();
+    repaint();
+}
+
+void AccrocEditor::setUiScale(float s) {
+    const bool n3 = isV3();
+    scale_ = juce::jlimit(n3 ? 0.75f : 0.58f, n3 ? 1.5f : 1.63f, s);
+    setSize(juce::roundToInt((n3 ? kW3 : kW) * scale_), juce::roundToInt((n3 ? kH3 : kH) * scale_));
+    v3::Prefs::setScale("accroc", scale_);
+}
 
 void AccrocEditor::setBrush(int b) {
     proc.brush = b;
@@ -237,7 +345,12 @@ void AccrocEditor::setBrush(int b) {
 }
 
 void AccrocEditor::resized() {
-    u_ = (float)getWidth() / kW;
+    if (isV3()) resized3(); else resizedClassic();
+    skin.btn.scale = scale_;
+}
+
+void AccrocEditor::resizedClassic() {
+    u_ = (float)getWidth() / kW; scale_ = u_;
     const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
     power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
     help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
@@ -263,11 +376,13 @@ void AccrocEditor::resized() {
 void AccrocEditor::timerCallback() {
     seqView->repaint(); status->repaint();
     if (brushes[acr::kNumTypes]->lit != (proc.brush < 0) || (proc.brush >= 0 && !brushes[proc.brush]->lit)) setBrush(proc.brush);
+    for (auto* k : k3) k->tickMod(1.f / 30.f);
     for (int i = 0; i < pads.size(); ++i) { const bool on = proc.activity(i) > 0.02f; if (pads[i]->lit != on) { pads[i]->lit = on; pads[i]->repaint(); } }
     if (proc.getCurrentProgram() != shownProgram) { shownProgram = proc.getCurrentProgram(); presets.setSelectedId(shownProgram + 1, juce::dontSendNotification); }
 }
 
 void AccrocEditor::paint(juce::Graphics& g) {
+    if (isV3()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe Accroc", kit::w::serial::accroc});
     sec(g, pal, u, u8("S\xC3\xA9quence \xC2\xB7 16 pas"), 32, 60, 688);
@@ -283,4 +398,61 @@ void AccrocEditor::paint(juce::Graphics& g) {
     sec(g, pal, u, "Crush", 296, 552, 372, kTypeCol[acr::Crush]);
     sec(g, pal, u, "Saut", 684, 552, 124, kTypeCol[acr::Skip]);
     sec(g, pal, u, "Micro-coupures", 824, 552, 248, kTypeCol[acr::Gate]);
+}
+
+// ============================================================ v3 « hybride v2 » : coordonnées de conception 1240 x 870
+namespace {
+constexpr float kRowH = 148.f, kRowA = 382.f, kRow1 = 542.f, kRow2 = 702.f;
+// début des sections d'effets (pas de 120 par potard, 28 d'écart) : rangée 1 et rangée 2
+const float kX1[4] = {40.f, 428.f, 576.f, 844.f}, kX2[4] = {40.f, 308.f, 696.f, 844.f};
+}
+
+void AccrocEditor::resized3() {
+    u_ = (float)getWidth() / kW3; scale_ = u_;
+    help.layout(Si(1114, 34, 30, 30), getLocalBounds());
+    skin.btn.setBounds(Si(1080, 35, 28, 28));
+    power.setBounds(Si(1150, 36, 70, 26));
+    presets.setBounds(Si(400, 34, 290, 32));
+    seqView->setBounds(Si(20, 84, 780, 230));
+    for (int i = 0; i < pads.size(); ++i) pads[i]->setBounds(Si(820.f + 101.f * (float)(i % 4), 84.f + 58.f * (float)(i / 4), 97, 54));
+    status->setBounds(Si(820, 202, 400, 112));
+    const float bw = 780.f / 9.f;
+    for (int i = 0; i < brushes.size(); ++i) brushes[i]->setBounds(Si(20.f + bw * (float)i + 2.f, 326, bw - 4.f, 44));
+    reroll.setBounds(Si(820, 326, 194, 44)); clear.setBounds(Si(1026, 326, 194, 44));
+    const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false), kw = 112.f;
+    auto place = [&](int i, float cx, float y) { k3[i]->setScale(u_); k3[i]->setBounds(Si(cx - kw * 0.5f, y, kw, kh)); };
+    for (int i = 0; i < 3; ++i) place(i, 40.f + 120.f * ((float)i + 0.5f), kRowA + 34.f);
+    place(3, 776.f + 60.f, kRowA + 34.f); place(4, 776.f + 180.f, kRowA + 34.f);
+    stepSeg->setBounds(Si(440, kRowA + 44, 300, 34)); clockSeg->setBounds(Si(440, kRowA + 90, 300, 34));
+    stepSeg->px = clockSeg->px = 12.f * u_;
+    const int n1[4] = {3, 1, 2, 2}, n2[4] = {2, 3, 1, 2};
+    int idx = 5;
+    for (int s2 = 0; s2 < 4; ++s2) for (int i = 0; i < n1[s2]; ++i) place(idx++, kX1[s2] + 120.f * ((float)i + 0.5f), kRow1 + 34.f);
+    for (int s2 = 0; s2 < 4; ++s2) for (int i = 0; i < n2[s2]; ++i) place(idx++, kX2[s2] + 120.f * ((float)i + 0.5f), kRow2 + 34.f);
+}
+
+void AccrocEditor::paint3(juce::Graphics& g) {
+    skin.art.draw(g, String("bd|") + v3::modeKey(skin.mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) {
+        const float k = b.getWidth() / kW3; const auto& t = skin.T;
+        auto R = [k](float x, float y, float w, float h) { return Rectangle<float>(x * k, y * k, w * k, h * k); };
+        v3::background(ig, t, b);
+        v3::rk::brand(ig, t, k, "Orbe", "Accroc");
+        v3::rk::label(ig, t.inkMute, k, "Preset", 402, 14, 120);
+        v3::hero(ig, t, R(20, 84, 780, 230), 22.f * k); v3::hero(ig, t, R(820, 202, 400, 112), 18.f * k);
+        for (float y : {kRowA, kRow1, kRow2}) v3::card(ig, t, R(20, y, 1200, kRowH), 18.f * k);
+        const auto c = t.inkMute;
+        auto sec = [&](const String& title, float x, float y, Colour dot = {}) {
+            float tx = x;
+            if (!dot.isTransparent()) { ig.setColour(t.dark ? dot : dot.darker(0.25f)); ig.fillEllipse(R(x, y + 5, 9, 9)); tx += 16; }
+            v3::rk::label(ig, c, k, title, tx, y, 260);
+        };
+        sec(u8("Hasard"), 40, kRowA + 12); sec(u8("Pas \xC2\xB7 horloge"), 440, kRowA + 12); sec(u8("Sortie"), 776, kRowA + 12);
+        sec("Stutter", kX1[0], kRow1 + 12, kTypeCol[acr::Stutter]); sec("Retour", kX1[1], kRow1 + 12, kTypeCol[acr::Reverse]);
+        sec(u8("Arr\xC3\xAAt bande"), kX1[2], kRow1 + 12, kTypeCol[acr::TapeStop]); sec("Gel granulaire", kX1[3], kRow1 + 12, kTypeCol[acr::Freeze]);
+        sec(u8("B\xC3\xA9gaiement"), kX2[0], kRow2 + 12, kTypeCol[acr::Stammer]); sec("Crush", kX2[1], kRow2 + 12, kTypeCol[acr::Crush]);
+        sec("Saut", kX2[2], kRow2 + 12, kTypeCol[acr::Skip]); sec("Micro-coupures", kX2[3], kRow2 + 12, kTypeCol[acr::Gate]);
+        for (float x : {420.f, 756.f}) v3::rk::sep(ig, t, k, x, kRowA + 14, 120);
+        for (float x : {414.f, 562.f, 830.f}) v3::rk::sep(ig, t, k, x, kRow1 + 14, 120);
+        for (float x : {294.f, 682.f, 830.f}) v3::rk::sep(ig, t, k, x, kRow2 + 14, 120);
+    });
 }

@@ -3,6 +3,7 @@
 using namespace kit;
 using juce::Rectangle, juce::String;
 
+namespace v3 = kit::v3;
 namespace osamp {
 
 // ---------------- échantillon + analyse ----------------
@@ -151,9 +152,36 @@ void WaveView::rebuild() {
         }
         mn[(size_t)x] = lo; mx[(size_t)x] = hi;
     }
+    // enveloppe lissée (v3) : deux courbes, haut et bas
+    const auto r = inner();
+    const float cy = r.getCentreY(), hh = r.getHeight() * 0.5f * 0.92f;
+    const v3::Trace::Opts o{cols, 0.9f, 1e9f, -2.f, 0};
+    auto X = [&](float i) { return r.getX() + i * r.getWidth() / (float)cols; };
+    trTop.build(mx.data(), cols, X, [&](float v) { return cy - juce::jlimit(0.f, 1.f, v) * hh; }, cy, o);
+    trBot.build(mn.data(), cols, X, [&](float v) { return cy - juce::jlimit(-1.f, 0.f, v) * hh; }, cy, o);
+}
+
+void WaveView::paint3(juce::Graphics& g) {
+    const auto& t = *T;
+    auto well = getLocalBounds().toFloat().reduced(3.f);
+    const float rad = juce::jmin(16.f, well.getHeight() * 0.12f);
+    g.setGradientFill(juce::ColourGradient(t.scrTop, well.getX(), well.getY(), t.scrBot, well.getX(), well.getBottom(), false)); g.fillRoundedRectangle(well, rad);
+    g.setColour(juce::Colours::white.withAlpha(0.07f)); g.drawRoundedRectangle(well.reduced(0.5f), rad, 1.f);
+    auto r = inner();
+    g.setColour(t.scrGrid);
+    for (int i = 1; i < 4; ++i) g.fillRect(r.getX(), r.getY() + r.getHeight() * (float)i / 4.f, r.getWidth(), 1.f);
+    g.setColour(juce::Colours::white.withAlpha(0.14f)); g.fillRect(r.getX(), r.getCentreY() - 0.5f, r.getWidth(), 1.f);
+    if (!smp || mn.empty()) { g.setColour(t.scrMute); v3::caps(g, emptyText, r, juce::jmax(11.f, getHeight() * 0.09f), juce::Justification::centred); }
+    else {
+        const float cy = r.getCentreY();
+        trTop.draw(g, col, 1.5f, 0.8f, 0.30f, cy);
+        trBot.draw(g, col, 1.5f, 0.8f, 0.30f, r.getBottom());
+    }
+    if (paintOver) paintOver(g, *this);
 }
 
 void WaveView::paint(juce::Graphics& g) {
+    if (v3::bridge::v3(T)) { paint3(g); return; }
     auto well = getLocalBounds().toFloat().reduced(3.f);
     screenWell(g, P, well);
     auto r = inner();

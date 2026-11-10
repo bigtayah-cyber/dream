@@ -19,6 +19,17 @@ FaceCfg faceCfg(int vi) {
     }
 }
 Rectangle<float> centred(float cx, float cy, float w, float h) { return {cx - w / 2, cy - h / 2, w, h}; }
+namespace v3 = kit::v3;
+// Accent de famille v3 (couleur de la face d'origine) et teinte secondaire de l'écran.
+struct Accent3 { Colour acc, scr; };
+Accent3 accent3(int vi) {
+    switch (vi) {
+        case 0: return {Colour(0xFFFF3B2E), Colour(0xFF7FD1FF)};   // Grain Nord : rouge afficheur, bleu glace
+        case 1: return {Colour(0xFFFF9A3C), Colour(0xFFFFC98A)};   // Gorge : ambre des lampes
+        case 2: return {Colour(0xFFFF4FA3), Colour(0xFF5CE1E6)};   // Poupée : rose et turquoise
+        default: return {Colour(0xFFD2B04E), Colour(0xFFF2E3A8)};  // Patine : laiton
+    }
+}
 }  // namespace
 
 Palette OneKnobEditor::palette(int i) {
@@ -112,8 +123,19 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
 
     // poussoirs à LED du volet
     auto pushPainter = [this](const char* label, Colour ledC) {
-        return [this, label, ledC](juce::Graphics& g, FaceButton& b, bool, bool down) {
+        return [this, label, ledC](juce::Graphics& g, FaceButton& b, bool hover, bool down) {
             const auto r = b.getLocalBounds().toFloat();
+            if (isV3()) {   // v3 : pastille d'état + libellé
+                const float h = r.getHeight(), d = h * 0.42f;
+                const auto dot = Rectangle<float>(d, d).withCentre({r.getX() + h * 0.45f, r.getCentreY()});
+                const bool on = b.getToggleState();
+                if (on) { g.setColour(T.accent.withAlpha(0.25f)); g.fillEllipse(dot.expanded(d * 0.35f)); }
+                g.setColour(on ? T.accent : T.track); g.fillEllipse(dot);
+                g.setColour(hover ? T.ink : T.ink.withAlpha(0.9f)); g.setFont(v3::font(h * 0.56f));
+                g.drawText(u8(label), r.withTrimmedLeft(h * 0.95f), juce::Justification::centredLeft, true);
+                juce::ignoreUnused(down);
+                return;
+            }
             const float h = r.getHeight();
             pushButton(g, pal, Rectangle<float>(r.getX() + 1.5f, r.getY() + 1.5f, h * 1.3f, h - 3.f), b.getToggleState(), down, ledC);
             engraved(g, pal, u8(label), r.withTrimmedLeft(h * 1.3f + 8.f * u_), juce::Justification::centredLeft, 9.5f * u_, 1.2f * u_, true);
@@ -137,6 +159,20 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
 
     advBtn.painter = [this](juce::Graphics& g, FaceButton& b, bool hover, bool down) {
         const auto r = b.getLocalBounds().toFloat();
+        if (isV3()) {   // v3 : pilule « Réglages » à chevron
+            auto pr = r.reduced(1.f);
+            const float rad = pr.getHeight() * 0.5f;
+            g.setColour(down ? T.field.darker(0.05f) : hover ? T.field.brighter(0.04f) : T.field); g.fillRoundedRectangle(pr, rad);
+            g.setColour(b.getToggleState() ? T.accent : T.fieldEdge); g.drawRoundedRectangle(pr.reduced(0.5f), rad, b.getToggleState() ? 1.5f : 1.f);
+            g.setColour(b.getToggleState() ? T.accentText : T.ink);
+            v3::caps(g, u8("Réglages"), pr.withTrimmedRight(pr.getHeight() * 0.7f), pr.getHeight() * 0.36f, juce::Justification::centred);
+            const float cx = pr.getRight() - pr.getHeight() * 0.62f, cy = pr.getCentreY(), t = pr.getHeight() * 0.12f;
+            juce::Path ch;
+            if (b.getToggleState()) { ch.startNewSubPath(cx - t, cy + t * 0.5f); ch.lineTo(cx, cy - t * 0.5f); ch.lineTo(cx + t, cy + t * 0.5f); }
+            else { ch.startNewSubPath(cx - t, cy - t * 0.5f); ch.lineTo(cx, cy + t * 0.5f); ch.lineTo(cx + t, cy - t * 0.5f); }
+            g.strokePath(ch, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            return;
+        }
         const float h = r.getHeight();
         pushButton(g, pal, Rectangle<float>(r.getX() + 1.5f, r.getY() + 1.5f, h * 1.3f, h - 3.f), b.getToggleState(), down, pal.accent);
         const auto tr = r.withTrimmedLeft(h * 1.3f + 8.f * u_);
@@ -163,26 +199,97 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
     if (vi == 2) keyBox.setTooltip(u8("Tonalité. Auto : hard-tune CHROMATIQUE (toutes les notes, effet immédiat). Ou impose la tonique : la voix est plaquée sur sa gamme."));
     keyBox.setVisible(usesPitch); scaleBox.setVisible(usesPitch);
 
-    // taille et volet mémorisés dans l'état du projet
+    // --- v3 : grand potard héros, petits potards du volet (mêmes paramètres, attachements propres), IN, thème
+    auto& ap = proc.apvts;
+    big3 = std::make_unique<v3::Knob3>(ap, "char", u8("Caractère"), u8("Caractère : toute la chaîne vocale du modèle en un geste."), v3::KnobSize::L);
+    big3->setDoubleClickReturnValue(true, vc.defaultK * 10.0);
+    big3->setScaleLabels("0", "10");
+    big3->setFormatter([](double v) { return v3::fmt::num(v, 1); });
+    addChildComponent(*big3);
+    const char* sIds[5] = {"trim", "tone", "mix", "out", "spec"};
+    const String sLab[5] = {u8("Entrée"), "Ton", "Mix", "Sortie", u8(vc.specName)};
+    for (int i = 0; i < 5; ++i) {
+        small3[i] = std::make_unique<v3::Knob3>(ap, sIds[i], sLab[i], smalls[i].s->getTooltip().upToFirstOccurrenceOf(u8(" Double-clic"), false, false), v3::KnobSize::S);
+        small3[i]->setLabelPx(11.f);
+        addChildComponent(*small3[i]);
+    }
+    small3[0]->setBipolar(true); small3[1]->setBipolar(true); small3[3]->setBipolar(true);
+    small3[0]->setFormatter([](double v) { return v3::fmt::db(v, 1); });
+    small3[3]->setFormatter([](double v) { return v3::fmt::db(v, 1); });
+    small3[1]->setFormatter([](double v) { return std::fabs(v) < 0.05 ? String("0") : (v > 0 ? u8("aigu ") : u8("grave ")) + v3::fmt::num(std::fabs(v), 1); });
+    small3[2]->setFormatter([](double v) { return v3::fmt::withUnit(v3::fmt::num(v, 0), "%"); });
+    small3[4]->setFormatter([](double v) { return v3::fmt::withUnit(v3::fmt::num(v, 0), "%"); });
+    small3[2]->setPeach(true); small3[3]->setPeach(true);
+    inSw3 = std::make_unique<v3::InSwitch>(*ap.getParameter("bypass"));
+    addChildComponent(*inSw3);
+    addAndMakeVisible(themeBtn);
+    themeBtn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
+    themeBtn.onScale = [this](float s) { setUiScale(s); };
+
+    // taille et volet mémorisés dans l'état du projet (Classique) ; thème et échelle v3 dans les réglages d'interface
     panelOpen = (bool)proc.apvts.state.getProperty("adv", false);
     advBtn.setToggleState(panelOpen, juce::dontSendNotification);
     setResizable(true, true);
-    const int w = juce::jlimit(240, 600, (int)proc.apvts.state.getProperty("uiW", 300));
-    setPanel(panelOpen, false);
-    setSize(w, juce::roundToInt((float)w * (kH + (panelOpen ? kPanel : 0.f)) / kW));
+    scale_ = v3::Prefs::scale(vc.id, 1.f);
+    setThemeMode(v3::Prefs::theme(vc.id, v3::Mode::Light), false);
     startTimerHz(30);
 }
 
-OneKnobEditor::~OneKnobEditor() { stopTimer(); setLookAndFeel(nullptr); }
+OneKnobEditor::~OneKnobEditor() { stopTimer(); v3::Prefs::setScale(OneKnobProcessor::voicing().id, scale_); setLookAndFeel(nullptr); }
+
+void OneKnobEditor::setThemeMode(v3::Mode m, bool persist) {
+    mode = m;
+    T = v3::make(m == v3::Mode::Classic ? v3::Mode::Light : m, accent3(vi).acc);
+    T.mode = m;
+    look3.setTheme(T);
+    art.clear();
+    const bool n3 = isV3();
+    setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&look3) : static_cast<juce::LookAndFeel*>(&look));
+    knobS.setVisible(!n3); inSw.setVisible(!n3);
+    big3->setVisible(n3); big3->setup(&T, &art);
+    for (auto& k : small3) k->setup(&T, &art);
+    inSw3->setVisible(n3); inSw3->setup(&T);
+    themeBtn.T = &T; themeBtn.current = m;
+    for (auto* b : {&keyBox, &scaleBox}) b->setScrollWheelEnabled(false);
+    if (persist) v3::Prefs::setTheme(OneKnobProcessor::voicing().id, m);
+    setPanel(panelOpen, false);
+    applySize();
+    sendLookAndFeelChange();
+    repaint();
+}
+
+void OneKnobEditor::setUiScale(float s) {
+    if (!isV3()) { proc.apvts.state.setProperty("uiW", juce::roundToInt(kW * juce::jlimit(0.8f, 2.f, s)), nullptr); applySize(); return; }
+    scale_ = juce::jlimit(0.75f, 1.5f, s);
+    v3::Prefs::setScale(OneKnobProcessor::voicing().id, scale_);
+    applySize();
+}
+
+void OneKnobEditor::applySize() {
+    int w, h;
+    if (isV3()) {
+        const float bh = kH3 + (panelOpen ? kPanel3 : 0.f);
+        setResizeLimits(juce::roundToInt(kW3 * 0.75f), juce::roundToInt(bh * 0.75f), juce::roundToInt(kW3 * 1.5f), juce::roundToInt(bh * 1.5f));
+        getConstrainer()->setFixedAspectRatio(kW3 / bh);
+        w = juce::roundToInt(kW3 * scale_); h = juce::roundToInt(bh * scale_);
+    } else {
+        const float bh = kH + (panelOpen ? kPanel : 0.f);
+        setResizeLimits(240, juce::roundToInt(240.f * bh / kW), 600, juce::roundToInt(600.f * bh / kW));
+        getConstrainer()->setFixedAspectRatio(kW / bh);
+        w = juce::jlimit(240, 600, (int)proc.apvts.state.getProperty("uiW", 300));
+        h = juce::roundToInt((float)w * bh / kW);
+    }
+    if (getWidth() == w && getHeight() == h) resized(); else setSize(w, h);
+}
 
 void OneKnobEditor::setPanel(bool open, bool resize) {
     panelOpen = open;
     proc.apvts.state.setProperty("adv", open, nullptr);
-    const float h = kH + (open ? kPanel : 0.f);
-    setResizeLimits(240, juce::roundToInt(240.f * h / kW), 600, juce::roundToInt(600.f * h / kW));
-    getConstrainer()->setFixedAspectRatio(kW / h);
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&trimS, &toneS, &mixS, &outS, &specS, &autoInB, &autoGainB, &optB, &engineB}) c->setVisible(open);
-    if (resize) setSize(getWidth(), juce::roundToInt((float)getWidth() * h / kW));
+    const bool n3 = isV3();
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&trimS, &toneS, &mixS, &outS, &specS}) c->setVisible(open && !n3);
+    for (auto& k : small3) if (k != nullptr) k->setVisible(open && n3);
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&autoInB, &autoGainB, &optB, &engineB}) c->setVisible(open);
+    if (resize) applySize();
 }
 
 OneKnobEditor::Layout OneKnobEditor::layout() const {
@@ -196,6 +303,11 @@ OneKnobEditor::Layout OneKnobEditor::layout() const {
 }
 
 void OneKnobEditor::resized() {
+    if (isV3()) resized3(); else resizedClassic();
+    themeBtn.scale = isV3() ? scale_ : (float)getWidth() / kW;
+}
+
+void OneKnobEditor::resizedClassic() {
     u_ = (float)getWidth() / kW;
     look.u = u_;
     const auto L = layout();
@@ -213,6 +325,7 @@ void OneKnobEditor::resized() {
     const float xs[5] = {46, 98, 150, 202, 254};
     juce::Slider* sm[5] = {&trimS, &toneS, &mixS, &outS, &specS};
     for (int i = 0; i < 5; ++i) sm[i]->setBounds(S(xs[i] - 24, kH + 20, 48, 48).toNearestInt());
+    themeBtn.setBounds(Si(22, 68, 20, 20));
     autoInB.setBounds(Si(22, kH + 96, 130, 22));
     autoGainB.setBounds(Si(162, kH + 96, 110, 22));
     optB.setBounds(Si(22, kH + 124, 130, 22));
@@ -225,6 +338,17 @@ void OneKnobEditor::timerCallback() {
     gr += (proc.reduction.load() - gr) * 0.35f;
     inDb = proc.inDb.load();
     ++tick;
+    if (isV3()) {
+        vuSm += (vu - vuSm) * 0.3f;
+        ringLvl[ringPos] = juce::jlimit(0.f, 1.f, (vu + 30.f) / 36.f);
+        ringGr[ringPos] = juce::jlimit(0.f, 18.f, gr);
+        ringPos = (ringPos + 1) % kHist;
+        big3->tickMod(1.f / 30.f);
+        for (auto& k : small3) k->tickMod(1.f / 30.f);
+        repaint(Si(20, 78, 360, 212));
+        if (panelOpen) repaint(Si(20, kH3 + 76, 20, 20));
+        return;
+    }
     const auto L = layout();
     repaint(S(L.hero.getX() - 4, L.hero.getY() - 4, L.hero.getWidth() + 8, L.hero.getHeight() + 8).toNearestInt());
     repaint(S(L.bottom.getX(), L.bottom.getY(), L.bottom.getWidth(), L.bottom.getHeight()).toNearestInt());
@@ -262,6 +386,7 @@ void OneKnobEditor::serialPlate(juce::Graphics& g, Rectangle<float> r, bool bras
 }
 
 void OneKnobEditor::paint(juce::Graphics& g) {
+    if (isV3()) { paint3(g); return; }
     const float u = u_;
     const auto& vc = OneKnobProcessor::voicing();
     const auto b = getLocalBounds();
@@ -441,4 +566,126 @@ void OneKnobEditor::paintPanel(juce::Graphics& g, Rectangle<float> r) {
     const auto c = inDb > -12.f ? pal.ledAmber : pal.ledGreen;
     const float lv = inDb < -40.f ? 0.f : inDb < -24.f ? 0.35f : 1.f;
     led(g, (46 + 26) * u, r.getY() + 13 * u, 2.6f * u, lv, c, LedBezel::Black);
+}
+
+// ============================================================ v3 « hybride v2 » (Clair / Sombre)
+// Coordonnées de conception : 400 × 670 (+ 196 volet ouvert).
+void OneKnobEditor::resized3() {
+    u_ = (float)getWidth() / kW3;
+    scale_ = u_;
+    themeBtn.setBounds(Si(244, 24, 28, 28));
+    inSw3->setBounds(Si(282, 25, 96, 26));
+    big3->setScale(u_ * 1.5f); big3->setLabelPx(10.f);
+    big3->setBounds(Si(50, 314, 300, 232));
+    if (usesPitch) { keyBox.setBounds(Si(20, 614, 96, 32)); scaleBox.setBounds(Si(124, 614, 110, 32)); }
+    advBtn.setBounds(Si(250, 614, 130, 32));
+    const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false);
+    for (int i = 0; i < 5; ++i) { small3[i]->setScale(u_); small3[i]->setBounds(Si(20.f + 72.f * (float)i, kH3 + 16.f, 72, kh)); }
+    autoInB.setBounds(Si(34, kH3 + 130, 160, 24)); autoGainB.setBounds(Si(206, kH3 + 130, 160, 24));
+    optB.setBounds(Si(34, kH3 + 158, 160, 24)); engineB.setBounds(Si(206, kH3 + 158, 160, 24));
+}
+
+void OneKnobEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
+    const float u = b.getWidth() / kW3;
+    auto R = [u](float x, float y, float w, float h) { return Rectangle<float>(x * u, y * u, w * u, h * u); };
+    const auto& vc = OneKnobProcessor::voicing();
+    v3::background(g, T, b);
+    g.setColour(T.inkMute); v3::caps(g, "dreamaws", R(25, 14, 160, 16), 11.f * u, juce::Justification::centredLeft);
+    g.setColour(T.accentText);
+    tracked(g, u8(vc.name), R(23, 28, 220, 32), juce::Justification::centredLeft, 2.f * u, v3::font(30.f * u, true));
+    g.setColour(T.accent); g.fillRoundedRectangle(R(25, 62, 28, 3), 1.5f * u);
+    v3::hero(g, T, R(20, 78, 360, 212), 18.f * u);
+    v3::card(g, T, R(20, 302, 360, 284), 16.f * u);
+    g.setColour(T.inkMute); g.setFont(v3::font(13.f * u));
+    g.drawText(u8(vc.tag), R(20, 550, 360, 20), juce::Justification::centred, true);
+    if (!usesPitch) { g.setColour(T.inkMute); g.setFont(v3::font(12.f * u)); g.drawText(String(u8("N° ")) + vc.serial, R(24, 614, 200, 32), juce::Justification::centredLeft, false); }
+    else {
+        g.setColour(T.inkMute);
+        v3::caps(g, u8("Tonalité"), R(24, 594, 90, 14), 10.5f * u, juce::Justification::centredLeft);
+        v3::caps(g, "Gamme", R(128, 594, 90, 14), 10.5f * u, juce::Justification::centredLeft);
+    }
+    // textes fixes de l'écran
+    g.setColour(T.scrMute);
+    v3::caps(g, u8("Niveau · réduction"), R(34, 88, 210, 16), 11.f * u, juce::Justification::centredLeft);
+    const bool comp = vi == 1 || vi == 3;
+    v3::caps(g, comp ? u8("Réduction") : u8("Tonalité"), R(258, 88, 112, 16), 11.f * u, juce::Justification::centredLeft);
+    const Colour lc[2] = {lvlColour(), T.accent};
+    const char* leg[2] = {"sortie", "réduction"};
+    float lx = 34.f;
+    for (int i = 0; i < 2; ++i) {
+        g.setColour(lc[i]); g.fillRoundedRectangle(R(lx, 112, 12, 3), 1.5f * u);
+        g.setColour(T.scrInk.withAlpha(0.85f)); g.setFont(v3::font(12.f * u));
+        g.drawText(u8(leg[i]), R(lx + 17, 104, 70, 18), juce::Justification::centredLeft, false);
+        lx += 72.f;
+    }
+    g.setColour(juce::Colours::white.withAlpha(0.10f)); g.fillRect(R(248, 92, 1, 182));
+    if (panelOpen) {
+        v3::card(g, T, R(20, kH3 + 6, 360, 182), 16.f * u);
+        g.setColour(T.cardEdge); g.fillRect(R(34, kH3 + 122, 332, 1));
+    }
+}
+
+void OneKnobEditor::paintHero3(juce::Graphics& g) {
+    const float u = u_;
+    const auto plot = S(34, 126, 204, 146);
+    // repères horizontaux discrets
+    for (int i = 1; i <= 3; ++i) {
+        const float y = plot.getY() + plot.getHeight() * (float)i / 4.f;
+        g.setColour(juce::Colours::white.withAlpha(0.06f));
+        for (float x = plot.getX(); x < plot.getRight(); x += 6.f * u) g.fillRect(x, y - 0.5f, 2.f * u, 1.f);
+    }
+    for (int i = 0; i < kHist; ++i) { const int k = (ringPos + i) % kHist; bLvl[i] = ringLvl[k]; bGr[i] = ringGr[k]; }
+    auto FX = [&](float i) { return plot.getX() + plot.getWidth() * i / (float)(kHist - 1); };
+    {
+        juce::Graphics::ScopedSaveState st(g);
+        g.reduceClipRegion(plot.expanded(6.f * u, 4.f * u).toNearestInt());
+        const v3::Trace::Opts o{kHist, 1.4f, 1e9f, -1.f, 6};
+        trLvl.build(bLvl, kHist, FX, [&](float v) { return plot.getBottom() - v * plot.getHeight() * 0.92f; }, plot.getBottom(), o);
+        trGr.build(bGr, kHist, FX, [&](float v) { return plot.getY() + juce::jmin(v, 18.f) / 18.f * plot.getHeight() * 0.8f; }, plot.getY(), o);
+        trLvl.draw(g, lvlColour(), 1.8f * u, 0.8f, 0.16f, plot.getBottom(), true);
+        trGr.draw(g, T.accent, 1.8f * u, 1.f, 0.0f, plot.getBottom(), false);
+    }
+    // colonne de droite : grand chiffre parlant
+    const auto big = v3::font(46.f * u, true);
+    const bool comp = vi == 1 || vi == 3;
+    auto readout = [&](const String& cap, const String& val, float y) {
+        g.setColour(T.scrMute); v3::caps(g, cap, S(258, y, 112, 14), 10.5f * u, juce::Justification::centredLeft);
+        g.setColour(T.scrInk); v3::tabular(g, val, S(258, y + 14, 112, 26), v3::font(21.f * u, true), juce::Justification::centredLeft);
+    };
+    if (comp) {
+        const String n = v3::fmt::num(gr < 0.05f ? 0.0 : -(double)gr, 1);
+        g.setColour(T.scrInk); v3::tabular(g, n, S(258, 106, 112, 56), big, juce::Justification::centredLeft);
+        g.setColour(T.scrMute); g.setFont(v3::font(15.f * u)); g.drawText("dB", S(258, 160, 112, 18), juce::Justification::centredLeft, false);
+        readout(u8("Sortie · VU"), v3::fmt::signedNum(vuSm, 1), 214);
+    } else {
+        const int pc = proc.keyPc.load(), st = proc.keyState.load();
+        const bool known = pc >= 0 && pc < 12 && st != 2;
+        const bool chroma = !known && vi == 2 && st == 0;   // Poupée, tonalité Auto : hard-tune chromatique
+        g.setColour(known ? accent3(vi).scr : T.scrMute); g.setFont(big);
+        g.drawText(known ? String(kKeyName[pc]) : String(v3::fmt::minus()), S(258, 106, 112, 56), juce::Justification::centredLeft, false);
+        g.setColour(T.scrInk.withAlpha(0.9f)); g.setFont(v3::font(15.f * u));
+        g.drawText(known ? (proc.keyScale.load() == 2 ? u8("mineur") : u8("majeur")) : String(), S(258, 160, 112, 18), juce::Justification::centredLeft, false);
+        const bool blink = (tick / 8) % 2 == 0;
+        g.setColour(st == 2 ? (blink ? T.out : T.scrMute) : T.scrMute); g.setFont(v3::font(12.f * u));
+        g.drawText(chroma ? u8("chromatique") : st == 0 ? u8("manuelle") : st == 1 ? u8("auto · verrouillée") : u8("auto · à l'écoute…"), S(258, 180, 112, 16), juce::Justification::centredLeft, true);
+        readout(u8("Réduction"), v3::fmt::db(gr < 0.05f ? 0.0 : -(double)gr, 1), 214);
+    }
+    // crête de sortie
+    const bool peak = proc.level.load() > 0.89f;
+    const auto pd = Rectangle<float>(6.f * u, 6.f * u).withCentre(S(364, 94, 0, 0).getPosition());
+    if (peak) { g.setColour(T.out.withAlpha(0.3f)); g.fillEllipse(pd.expanded(3.f * u)); }
+    g.setColour(peak ? T.out : juce::Colours::white.withAlpha(0.15f)); g.fillEllipse(pd);
+}
+
+void OneKnobEditor::paint3(juce::Graphics& g) {
+    const float u = u_;
+    art.draw(g, String("bd|") + v3::modeKey(mode) + (panelOpen ? "|p" : "|f"), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) { paintBackdrop3(ig, b); });
+    paintHero3(g);
+    if (panelOpen) {   // niveau d'entrée : vert dans la zone idéale (−24 à −12 dBFS RMS), ambre au-dessus, éteint sous −40
+        const auto c = inDb > -12.f ? Colour(0xFFF2A516) : Colour(0xFF2FBF87);
+        const float lv = inDb < -40.f ? 0.f : inDb < -24.f ? 0.4f : 1.f;
+        const auto dot = Rectangle<float>(6.f * u, 6.f * u).withCentre(S(29, kH3 + 85, 0, 0).getPosition());
+        g.setColour(T.track); g.fillEllipse(dot);
+        if (lv > 0.f) { g.setColour(c.withAlpha(0.25f * lv)); g.fillEllipse(dot.expanded(3.f * u)); g.setColour(c.withAlpha(lv)); g.fillEllipse(dot); }
+    }
 }

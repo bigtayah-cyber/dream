@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < v.size(); ++i) v[i] = 0.4f * (float)std::sin(2.0 * 3.14159265 * 180.0 * (double)i / 48000.0) * (0.6f + 0.4f * (float)std::sin(2.0 * 3.14159265 * 3.0 * (double)i / 48000.0));
     proc.setCurrentProgram(15);
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
-    ed->setSize(1104, 674);
+    if (auto* ae = dynamic_cast<AccrocEditor*>(ed.get())) { ae->setThemeMode(kit::v3::rk::envMode(), false); ae->setUiScale(kit::v3::rk::envScale()); }
     snap::feed(proc, std::vector<float>(v.begin(), v.begin() + 48000 * 3 / 4)); snap::settle(200);
     if (!snap::savePng(*ed, argv[1])) return 1;
     proc.setCurrentProgram(13); proc.brush = acr::Crush; proc.pad(acr::Freeze, 1.f);

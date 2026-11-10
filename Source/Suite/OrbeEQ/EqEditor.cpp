@@ -3,6 +3,7 @@
 using namespace of;
 using kit::u8;
 using juce::Point;
+namespace v3 = kit::v3;
 
 namespace {
 const char* kTypeName[] = {"Cloche", "Plateau grave", "Plateau aigu", "Passe-haut", "Passe-bas", "Notch"};
@@ -44,7 +45,58 @@ public:
         return best;
     }
 
+    const v3::Theme* T = nullptr;   // nul : rendu Classique
+    void setTheme(const v3::Theme* t) { T = t; setOpaque(t == nullptr); repaint(); }
+    void paint3(juce::Graphics& g) {
+        const auto& t = *T; const float u = scale(), ku = (float)getWidth() / 1060.f;
+        const auto r = plot(); const auto P = proc.readParams(); const float R = proc.rangeDb();
+        const float stepDb = R > 13.f ? 6.f : 3.f, y0 = gfx::yOfDb(0.f, r, R, -R);
+        { juce::Graphics::ScopedSaveState st(g); g.reduceClipRegion(r.expanded(2).toNearestInt());
+            for (float d = -R; d <= R + 0.01f; d += stepDb) { g.setColour(juce::Colours::white.withAlpha(std::fabs(d) < 0.01f ? 0.22f : 0.06f)); g.fillRect(r.getX(), gfx::yOfDb(d, r, R, -R) - 0.5f, r.getWidth(), 1.f); }
+            gfx::freqGrid(g, r, u, 20.f, 20000.f, {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000}, false);
+            g.setGradientFill(juce::ColourGradient(t.sung.withAlpha(0.22f), 0, r.getY(), t.sung.withAlpha(0.02f), 0, r.getBottom(), false));
+            g.fillPath(gfx::specPath(proc.analyzer.db.data(), odsp::Analyzer::kBins, sr(), r, -10.f, -100.f, true));
+            g.setColour(t.sung.withAlpha(0.45f)); g.strokePath(gfx::specPath(proc.analyzer.db.data(), odsp::Analyzer::kBins, sr(), r, -10.f, -100.f, false), juce::PathStrokeType(1.2f * ku, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            odsp::Coef cf[eq::kBands]; for (int i = 0; i < eq::kBands; ++i) cf[i] = eq::coefOf(P.b[i], sr());
+            auto db = [&](float f, int only) { double m = 1; for (int i = 0; i < eq::kBands; ++i) if (P.b[i].on && (only < 0 || only == i)) m *= cf[i].mag(f, sr()); return (float)(20 * std::log10(m + 1e-9)); };
+            const int N = juce::jmax(64, (int)(r.getWidth() / 3.f)), sel = ed.selected();
+            vals.resize((size_t)N); selv.resize((size_t)N);
+            for (int i = 0; i < N; ++i) { const float f = gfx::fOf(r.getX() + r.getWidth() * (float)i / (float)(N - 1), r); vals[(size_t)i] = db(f, -1); selv[(size_t)i] = P.b[sel].on ? db(f, sel) : 0.f; }
+            auto X = [&](float i) { return r.getX() + r.getWidth() * i / (float)(N - 1); };
+            auto Y = [&](float d) { return juce::jlimit(r.getY() - 2, r.getBottom() + 2, gfx::yOfDb(d, r, R, -R)); };
+            trSel.build(selv.data(), N, X, Y, y0, {N, 0.f, 1e9f, -1e9f, 0}); trTot.build(vals.data(), N, X, Y, y0, {N, 0.f, 1e9f, -1e9f, 0});
+            trSel.draw(g, EqEditor::bandColour(sel), 1.f * ku, 0.f, 0.28f, y0);
+            trTot.draw(g, t.out, 2.4f * ku, 1.f, 0.10f, y0);
+        }
+        g.setFont(v3::font(11.5f * ku));
+        for (float d = -R; d <= R + 0.01f; d += stepDb) { g.setColour(t.scrMute); g.drawText(d > 0.01f ? "+" + String((int)d) : d < -0.01f ? v3::fmt::minus() + String((int)-d) : String(0), Rectangle<float>(2 * u, gfx::yOfDb(d, r, R, -R) - 8 * ku, 38 * u, 16 * ku), juce::Justification::centredRight, false); }
+        for (float f : {20.f, 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f, 20000.f}) { g.setColour(t.scrMute); g.drawText(gfx::hzLabel(f), Rectangle<float>(gfx::xOf(f, r) - 18 * ku, r.getBottom() + 5 * ku, 36 * ku, 16 * ku), juce::Justification::centred, false); }
+        g.setColour(t.scrMute); v3::caps(g, u8("Spectre d'entr\xC3\xA9" "e"), Rectangle<float>(r.getX() + 10 * ku, r.getY() + 6 * ku, 220 * ku, 16 * ku), 11.f * ku, juce::Justification::centredLeft);
+        for (int i = 0; i < eq::kBands; ++i) {
+            const auto c = pointOf(P, i, r); const auto col = EqEditor::bandColour(i); const bool on = P.b[i].on, isSel = i == ed.selected(), hot = i == hover || i == dragBand;
+            const float rad = (isSel ? 9.f : 7.5f) * ku + (hot ? 1.5f * ku : 0.f);
+            if (isSel || hot) { g.setColour(col.withAlpha(on ? 0.25f : 0.10f)); g.fillEllipse(Rectangle<float>((rad + 6 * ku) * 2, (rad + 6 * ku) * 2).withCentre(c)); }
+            g.setColour(on ? col : juce::Colour(0xFF121626)); g.fillEllipse(Rectangle<float>(rad * 2, rad * 2).withCentre(c));
+            if (!on) { g.setColour(col.withAlpha(0.6f)); g.drawEllipse(Rectangle<float>(rad * 2, rad * 2).withCentre(c), 1.5f * ku); }
+            if (isSel) { g.setColour(juce::Colours::white.withAlpha(0.9f)); g.drawEllipse(Rectangle<float>((rad + 3 * ku) * 2, (rad + 3 * ku) * 2).withCentre(c), 1.3f * ku); }
+            g.setColour(on ? juce::Colour(0xFF0E1124) : col); g.setFont(v3::font(10.5f * ku, true));
+            g.drawText(String(i + 1), Rectangle<float>(rad * 2, rad * 2).withCentre(c), juce::Justification::centred, false);
+        }
+        const int hb = dragBand >= 0 ? dragBand : hover;
+        if (hb >= 0) {
+            const auto& b = P.b[hb]; const auto c = pointOf(P, hb, r);
+            String tx = String(hb + 1) + "   " + v3::fmt::hz(b.freq);
+            if (eq::hasGain(b.type)) tx += "   " + v3::fmt::db(b.gain);
+            tx += "   Q " + v3::fmt::num(b.q, 2);
+            const auto f = v3::font(14.f * ku, true); const float w = v3::tabularWidth(tx, f) + 24 * ku;
+            auto box = Rectangle<float>(c.x - w / 2, c.y - 44 * ku, w, 28 * ku).constrainedWithin(r);
+            g.setColour(juce::Colour(0xE60A0D1C)); g.fillRoundedRectangle(box, 9 * ku); g.setColour(EqEditor::bandColour(hb).withAlpha(0.7f)); g.drawRoundedRectangle(box, 9 * ku, 1.f);
+            g.setColour(t.scrInk); v3::tabular(g, tx, box, f, juce::Justification::centred);
+        }
+    }
+    v3::Trace trSel, trTot; std::vector<float> vals, selv;
     void paint(juce::Graphics& g) override {
+        if (T != nullptr) { paint3(g); return; }
         const float u = scale(); const auto pal = of::palette();
         kit::screenWell(g, pal, getLocalBounds().toFloat(), kit::Display::OLED);
         const auto r = plot(); const auto P = proc.readParams(); const float R = proc.rangeDb();
@@ -186,7 +238,25 @@ private:
 class BandChips : public juce::Component, public juce::SettableTooltipClient {
 public:
     BandChips(EqProcessor& p, EqEditor& e) : proc(p), ed(e) { setTooltip(u8("Choisir une bande. Le voyant active ou coupe la bande.")); }
+    const v3::Theme* T = nullptr;
     void paint(juce::Graphics& g) override {
+        if (T != nullptr) {
+            const auto& t = *T; const float ku = (float)getWidth() / 1060.f, w = (float)getWidth() / 8.f; const auto P = proc.readParams();
+            for (int i = 0; i < eq::kBands; ++i) {
+                auto c = Rectangle<float>(w * (float)i, 0, w, (float)getHeight()).reduced(4 * ku, 2);
+                const bool s = i == ed.selected(), on = P.b[i].on; const float rad = c.getHeight() * 0.5f;
+                if (s) { juce::DropShadow(t.shadow, juce::roundToInt(rad * 0.6f), {0, 1}).drawForRectangle(g, c.toNearestInt()); g.setColour(t.card); } else g.setColour(t.field);
+                g.fillRoundedRectangle(c, rad);
+                g.setColour(s ? t.accent : t.fieldEdge); g.drawRoundedRectangle(c.reduced(0.5f), rad, s ? 1.5f : 1.f);
+                const auto bc = EqEditor::bandColour(i), dot = on ? (t.dark ? bc : bc.darker(0.35f)) : t.track;
+                if (on) { g.setColour(dot.withAlpha(0.25f)); g.fillEllipse(Rectangle<float>(18 * ku, 18 * ku).withCentre({c.getX() + 18 * ku, c.getCentreY()})); }
+                g.setColour(dot); g.fillEllipse(Rectangle<float>(10 * ku, 10 * ku).withCentre({c.getX() + 18 * ku, c.getCentreY()}));
+                g.setColour(on ? t.ink : t.inkMute); g.setFont(v3::font(13.f * ku, true));
+                g.drawText(String(i + 1), Rectangle<float>(c.getX() + 32 * ku, c.getY(), 14 * ku, c.getHeight()), juce::Justification::centred, false);
+                v3::tabular(g, on ? v3::fmt::hz(P.b[i].freq) : String("off"), Rectangle<float>(c.getX() + 48 * ku, c.getY(), c.getWidth() - 56 * ku, c.getHeight()), v3::font(13.f * ku, on), juce::Justification::centredLeft);
+            }
+            return;
+        }
         const float u = (float)getWidth() / 836.f, w = (float)getWidth() / 8.f; const auto P = proc.readParams(); const auto pal = of::palette();
         for (int i = 0; i < eq::kBands; ++i) {   // touches de bande : LED de la couleur de la bande (allumée = bande active)
             auto c = Rectangle<float>(w * (float)i, 0, w, (float)getHeight()).reduced(3 * u, 2);
@@ -202,7 +272,7 @@ public:
     }
     void mouseDown(const juce::MouseEvent& e) override {
         const float w = (float)getWidth() / 8.f; const int i = juce::jlimit(0, 7, (int)(e.position.x / w));
-        if (e.position.x - w * (float)i < 20.f * (float)getWidth() / 836.f) { auto* o = proc.par(i, "on"); proc.setReal(o, o->getValue() > 0.5f ? 0.f : 1.f); }
+        if (e.position.x - w * (float)i < (T != nullptr ? 34.f : 20.f) * (float)getWidth() / (T != nullptr ? 1060.f : 836.f)) { auto* o = proc.par(i, "on"); proc.setReal(o, o->getValue() > 0.5f ? 0.f : 1.f); }
         ed.select(i);
     }
 private:
@@ -212,20 +282,37 @@ private:
 // ------------------------------------------------------------------ champ numérique (glisser, molette, double-clic pour saisir)
 class EqField : public juce::Component, public juce::SettableTooltipClient {
 public:
+    const v3::Theme* T = nullptr;
+    void setTheme(const v3::Theme* t) {
+        T = t;
+        if (t != nullptr) { ed.setColour(juce::Label::textColourId, t->ink); ed.setColour(juce::Label::textWhenEditingColourId, t->ink); ed.setColour(juce::TextEditor::backgroundColourId, t->card); ed.setColour(juce::TextEditor::outlineColourId, t->accent); ed.setColour(juce::TextEditor::textColourId, t->ink); ed.setColour(juce::CaretComponent::caretColourId, t->accentText); }
+        else { ed.setColour(juce::Label::textColourId, kIce); ed.setColour(juce::Label::textWhenEditingColourId, juce::Colours::white); ed.setColour(juce::TextEditor::backgroundColourId, Colour(0xFF050508)); ed.setColour(juce::TextEditor::outlineColourId, kLilac); ed.setColour(juce::TextEditor::textColourId, juce::Colours::white); ed.setColour(juce::CaretComponent::caretColourId, kLilac); }
+        resized(); refresh();
+    }
     EqField(const String& cap, const String& tip) : caption(cap) {
         setTooltip(tip); setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
         ed.setJustificationType(juce::Justification::centred); ed.setInterceptsMouseClicks(false, true);
         ed.setColour(juce::Label::textColourId, kIce); ed.setColour(juce::Label::textWhenEditingColourId, juce::Colours::white);
         ed.setColour(juce::TextEditor::backgroundColourId, Colour(0xFF050508)); ed.setColour(juce::TextEditor::outlineColourId, kLilac);
         ed.setColour(juce::TextEditor::textColourId, juce::Colours::white); ed.setColour(juce::CaretComponent::caretColourId, kLilac);
-        ed.onTextChange = [this] { if (par) { par->beginChangeGesture(); par->setValueNotifyingHost(par->getValueForText(ed.getText())); par->endChangeGesture(); } refresh(); };
+        ed.onTextChange = [this] { if (par) { par->beginChangeGesture(); par->setValueNotifyingHost(par->getValueForText(ed.getText().replace(",", ".").replace(v3::fmt::minus(), "-").replace(juce::String::charToString((juce::juce_wchar)0x00A0), " "))); par->endChangeGesture(); } refresh(); };
         addAndMakeVisible(ed);
     }
     void bind(juce::RangedAudioParameter* p, bool en) { par = p; enabled = en; setInterceptsMouseClicks(en, true); refresh(); }
-    void refresh() { if (par && !ed.isBeingEdited()) ed.setText(enabled ? par->getText(par->getValue(), 0) : juce::String::fromUTF8("\xE2\x80\x94"), juce::dontSendNotification); ed.setAlpha(enabled ? 1.f : 0.4f); repaint(); }
-    void resized() override { const float u = (float)getHeight() / 44.f; ed.setFont(kit::mono(13.f * u)); ed.setBounds(getLocalBounds().withTrimmedTop(int(14 * u)).reduced(3)); }
+    void refresh() { if (par && !ed.isBeingEdited()) ed.setText(enabled ? (T != nullptr ? v3::fmt::tidy(par->getText(par->getValue(), 0)) : par->getText(par->getValue(), 0)) : juce::String::fromUTF8("\xE2\x80\x94"), juce::dontSendNotification); ed.setAlpha(enabled ? 1.f : 0.4f); repaint(); }
+    void resized() override {
+        const float u = (float)getHeight() / 44.f;
+        if (T != nullptr) { const float k = (float)getHeight() / 64.f; ed.setFont(v3::font(24.f * k, true)); ed.setBounds(getLocalBounds().withTrimmedTop(int(22 * k)).reduced(6)); return; }
+        ed.setFont(kit::mono(13.f * u)); ed.setBounds(getLocalBounds().withTrimmedTop(int(14 * u)).reduced(3));
+    }
     void paint(juce::Graphics& g) override {
         const float u = (float)getHeight() / 44.f; auto r = getLocalBounds().toFloat();
+        if (T != nullptr) {
+            const float k = (float)getHeight() / 64.f;
+            g.setColour(T->field); g.fillRoundedRectangle(r.reduced(0.5f), 14 * k); g.setColour(T->fieldEdge); g.drawRoundedRectangle(r.reduced(0.5f), 14 * k, 1.f);
+            g.setColour(T->inkMute.withAlpha(enabled ? 1.f : 0.6f)); v3::caps(g, caption, Rectangle<float>(r.getX() + 14 * k, r.getY() + 8 * k, r.getWidth() - 20 * k, 14 * k), 11.f * k, juce::Justification::centredLeft);
+            return;
+        }
         kit::screenWell(g, of::palette(), r);
         g.setColour(of::palette().mute); kit::tracked(g, caption, Rectangle<float>(r.getX() + 9 * u, r.getY() + 5 * u, r.getWidth() - 12 * u, 9 * u), juce::Justification::centredLeft, 1.3f * u, kit::fnt(7.4f * u, true));
     }
@@ -261,7 +348,7 @@ EqEditor::EqEditor(EqProcessor& p)
     onKey.onClick = [this] { if (!updating) proc.setReal(proc.par(sel, "on"), onKey.getToggleState() ? 1.f : 0.f); };
     onKey.setTooltip(u8("Active ou coupe la bande s\xC3\xA9lectionn\xC3\xA9" "e."));
     outPot = std::make_unique<Pot>(proc.apvts, "out", "Sortie", u8("Gain de sortie apr\xC3\xA8s l'\xC3\xA9galiseur."), pal); outPot->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(*outPot);
-    rangeSeg = std::make_unique<Seg>(proc.apvts, "range", juce::StringArray{u8("\xC2\xB1" "12"), u8("\xC2\xB1" "24")}, u8("\xC3\x89" "chelle verticale du graphe en dB."), pal); addAndMakeVisible(*rangeSeg);
+    rangeSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "range", juce::StringArray{u8("\xC2\xB1" "12"), u8("\xC2\xB1" "24")}, u8("\xC3\x89" "chelle verticale du graphe en dB."), pal); addAndMakeVisible(*rangeSeg);
     for (auto* k : {&aKey, &bKey}) { k->setClickingTogglesState(false); addAndMakeVisible(*k); }
     aKey.onClick = [this] { proc.switchAB(0); }; bKey.onClick = [this] { proc.switchAB(1); };
     aKey.setTooltip(u8("M\xC3\xA9moire A : compare deux r\xC3\xA9glages complets.")); bKey.setTooltip(u8("M\xC3\xA9moire B : compare deux r\xC3\xA9glages complets."));
@@ -278,14 +365,44 @@ EqEditor::EqEditor(EqProcessor& p)
         u8("- Afficheur du haut : preset (clic pour la liste, fl\xC3\xA8" "ches pour d\xC3\xA9" "filer). A / B : deux m\xC3\xA9moires compl\xC3\xA8tes \xC3\xA0 comparer."),
         u8("- \xC3\x89" "chelle : \xC2\xB1" "12 ou \xC2\xB1" "24 dB pour le graphe.")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
+    cPrev.onClick = prev.onClick; cNext.onClick = next.onClick; cPrev.setTooltip(prev.getTooltip()); cNext.setTooltip(next.getTooltip());
+    addChildComponent(cPrev); addChildComponent(cNext);
+    outK3 = std::make_unique<v3::Knob3>(proc.apvts, "out", "Sortie", u8("Gain de sortie apr\xC3\xA8s l'\xC3\xA9galiseur."), v3::KnobSize::S);
+    outK3->setBipolar(v3::rk::bipolarOf(proc.apvts, "out")); outK3->setLabelPx(11.f); addChildComponent(*outK3);
+    addAndMakeVisible(skin.btn);
+    skin.btn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
+    skin.btn.onScale = [this](float s) { setUiScale(s); };
     setResizable(true, true);
-    setResizeLimits(450, (int)(450 * kH / kW), 1800, (int)(1800 * kH / kW));
-    getConstrainer()->setFixedAspectRatio((double)kW / kH);
-    setSize((int)kW, (int)kH);
+    scale_ = v3::Prefs::scale("eq", 1.f);
+    setThemeMode(v3::Prefs::theme("eq", v3::Mode::Light), false);
     refreshFields();
     startTimerHz(20);
 }
-EqEditor::~EqEditor() { stopTimer(); setLookAndFeel(nullptr); }
+EqEditor::~EqEditor() { stopTimer(); v3::Prefs::setScale("eq", scale_); setLookAndFeel(nullptr); }
+
+void EqEditor::setThemeMode(v3::Mode m, bool persist) {
+    skin.set(m);
+    const bool n3 = isV3();
+    setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&skin.look3) : static_cast<juce::LookAndFeel*>(&look));
+    const v3::Theme* tp = skin.tp();
+    graph->setTheme(tp); chips->T = tp; fFreq->setTheme(tp); fGain->setTheme(tp); fQ->setTheme(tp);
+    outPot->setVisible(!n3); outK3->setVisible(n3); outK3->setup(&skin.T, &skin.art);
+    prev.setVisible(!n3); next.setVisible(!n3); cPrev.T = cNext.T = tp; cPrev.setVisible(n3); cNext.setVisible(n3);
+    for (auto* k : {&onKey, &aKey, &bKey}) k->T = tp;
+    rangeSeg->T = tp; power.T = tp; help.T = tp;
+    if (persist) v3::Prefs::setTheme("eq", m);
+    if (v3::rk::fit(*this, n3, {kW3, kH3}, {kW, kH}, 0.5f, 2.f, scale_)) resized();
+    sendLookAndFeelChange();
+    refreshFields();
+    repaint();
+}
+
+void EqEditor::setUiScale(float s) {
+    const bool n3 = isV3();
+    scale_ = juce::jlimit(n3 ? 0.75f : 0.5f, n3 ? 1.5f : 2.f, s);
+    setSize(juce::roundToInt((n3 ? kW3 : kW) * scale_), juce::roundToInt((n3 ? kH3 : kH) * scale_));
+    v3::Prefs::setScale("eq", scale_);
+}
 
 void EqEditor::select(int band) { sel = juce::jlimit(0, eq::kBands - 1, band); refreshFields(); repaint(); }
 
@@ -303,11 +420,17 @@ void EqEditor::timerCallback() {
     refreshFields();
     aKey.setToggleState(proc.abIndex() == 0, juce::dontSendNotification); bKey.setToggleState(proc.abIndex() == 1, juce::dontSendNotification);
     modified = !proc.matchesPreset();
+    if (isV3()) { repaint(Si(300, 0, 360, 76)); chips->repaint(); repaint(Si(20, 508, 840, 40)); return; }
     repaint(Si(370, 0, 260, 50)); chips->repaint();
 }
 
 void EqEditor::resized() {
-    u_ = (float)getWidth() / kW;
+    if (isV3()) resized3(); else resizedClassic();
+    skin.btn.scale = scale_;
+}
+
+void EqEditor::resizedClassic() {
+    u_ = (float)getWidth() / kW; scale_ = u_;
     const auto content = getLocalBounds().toFloat().reduced(18.f * u_, 0);
     power.setBounds(kit::w::inSlot(content, u_).toNearestInt());
     help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
@@ -320,15 +443,17 @@ void EqEditor::resized() {
 }
 
 void EqEditor::mouseUp(const juce::MouseEvent& e) {
-    if (Rectangle<float>(378 * u_, 6 * u_, 244 * u_, 38 * u_).contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showPresetMenu();
+    if (presetArea().contains(e.position) && !e.mouseWasDraggedSinceMouseDown()) showPresetMenu();
 }
+juce::Rectangle<float> EqEditor::presetArea() const { return isV3() ? S(364, 30, 250, 40) : Rectangle<float>(378 * u_, 6 * u_, 244 * u_, 38 * u_); }
 void EqEditor::showPresetMenu() {
     juce::PopupMenu m;
     for (int i = 0; i < eq::kPresets; ++i) m.addItem(i + 1, EqProcessor::presetName(i), true, i == proc.currentPreset());
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(378, 6, 244, 38))).withMinimumWidth(juce::roundToInt(244 * u_)), [this](int r) { if (r > 0) proc.applyPreset(r - 1); });
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(presetArea().toNearestInt())).withMinimumWidth(juce::roundToInt(presetArea().getWidth())), [this](int r) { if (r > 0) proc.applyPreset(r - 1); });
 }
 
 void EqEditor::paint(juce::Graphics& g) {
+    if (isV3()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Rack, "Orbe EQ", kit::w::serial::eq});
     auto well = Rectangle<float>(378 * u, 6 * u, 244 * u, 38 * u);
@@ -343,4 +468,44 @@ void EqEditor::paint(juce::Graphics& g) {
     section(g, pal, u, u8("Sortie \xC2\xB7 \xC3\xA9" "chelle"), 674, 398, 194);
     g.setColour(pal.mute); kit::tracked(g, "Type", Rectangle<float>(408 * u, 427 * u, 100 * u, 9 * u), juce::Justification::centredLeft, 1.3f * u, kit::fnt(8.f * u, true));
     kit::tracked(g, u8("\xC3\x89" "chelle"), Rectangle<float>(790 * u, 427 * u, 70 * u, 9 * u), juce::Justification::centredLeft, 1.3f * u, kit::fnt(8.f * u, true));
+}
+
+// ============================================================ v3 « hybride v2 » : coordonnées de conception 1100 x 700
+void EqEditor::resized3() {
+    u_ = (float)getWidth() / kW3; scale_ = u_;
+    help.layout(Si(974, 34, 30, 30), getLocalBounds());
+    skin.btn.setBounds(Si(940, 35, 28, 28));
+    power.setBounds(Si(1010, 36, 70, 26));
+    cPrev.setBounds(Si(326, 30, 34, 40)); cNext.setBounds(Si(618, 30, 34, 40));
+    aKey.setBounds(Si(690, 32, 48, 36)); bKey.setBounds(Si(744, 32, 48, 36));
+    graph->setBounds(Si(20, 84, 1060, 360)); chips->setBounds(Si(20, 452, 1060, 42));
+    fFreq->setBounds(Si(44, 552, 176, 64)); fGain->setBounds(Si(230, 552, 150, 64)); fQ->setBounds(Si(390, 552, 130, 64));
+    typeBox.setBounds(Si(552, 566, 170, 38)); onKey.setBounds(Si(738, 566, 112, 38));
+    outK3->setScale(u_); outK3->setBounds(Si(886, 540, 100, v3::Knob3::boxHeight(v3::KnobSize::S, false)));
+    rangeSeg->setBounds(Si(992, 586, 84, 34)); rangeSeg->px = 12.f * u_;
+}
+
+void EqEditor::paint3(juce::Graphics& g) {
+    const float u = u_;
+    const auto& T = skin.T;
+    skin.art.draw(g, String("bd|") + v3::modeKey(skin.mode), getLocalBounds().toFloat(), [this](juce::Graphics& ig, Rectangle<float> b) {
+        const float k = b.getWidth() / kW3; const auto& t = skin.T;
+        auto R = [k](float x, float y, float w, float h) { return Rectangle<float>(x * k, y * k, w * k, h * k); };
+        v3::background(ig, t, b);
+        v3::rk::brand(ig, t, k, "Orbe", "EQ");
+        v3::hero(ig, t, R(20, 84, 1060, 360), 22.f * k);
+        v3::card(ig, t, R(20, 508, 1060, 172), 18.f * k);
+        v3::rk::label(ig, t.inkMute, k, "Type", 554, 540, 100); v3::rk::label(ig, t.inkMute, k, u8("\xC3\x89" "chelle"), 994, 564, 80);
+        v3::rk::label(ig, t.inkMute, k, u8("Sortie"), 888, 524, 100);
+        v3::rk::sep(ig, t, k, 868, 524, 140);
+    });
+    const int pi = proc.currentPreset();
+    auto well = S(364, 30, 250, 40);
+    g.setColour(T.inkMute); v3::caps(g, u8("Preset ") + String(pi + 1).paddedLeft('0', 2) + "/" + String(eq::kPresets), S(366, 10, 220, 16), 11.f * u, juce::Justification::centredLeft);
+    g.setColour(T.field); g.fillRoundedRectangle(well, 14 * u); g.setColour(T.fieldEdge); g.drawRoundedRectangle(well.reduced(0.5f), 14 * u, 1.f);
+    g.setColour(T.ink); g.setFont(v3::font(18.f * u, true)); g.drawFittedText(EqProcessor::presetName(pi), well.reduced(36 * u, 0).toNearestInt(), juce::Justification::centred, 1, 0.8f);
+    g.setColour(modified ? T.accent : T.track); g.fillEllipse(Rectangle<float>(9 * u, 9 * u).withCentre({well.getX() + 18 * u, well.getCentreY()}));
+    if (modified) { g.setColour(T.accentText); v3::caps(g, u8("Modifi\xC3\xA9"), S(520, 10, 94, 16), 11.f * u, juce::Justification::centredRight); }
+    g.setColour(T.inkMute); v3::caps(g, u8("M\xC3\xA9moire"), S(692, 10, 100, 16), 11.f * u, juce::Justification::centredLeft);
+    g.setColour(T.inkMute); v3::caps(g, u8("Bande ") + String(sel + 1) + u8(" \xC2\xB7 s\xC3\xA9lection"), S(44, 524, 400, 16), 11.f * u, juce::Justification::centredLeft);
 }

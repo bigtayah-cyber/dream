@@ -162,8 +162,12 @@ que l'écart entre harmoniques n'est observable par aucune méthode).
 - LPC : moins juste sur les voix très aiguës (f0 > 600 Hz) et sur les grandes transpositions (> 7 dt, l'impulsion glottique
   rééchantillonnée change un peu la pente du spectre).
 - La détection plafonne à ≈ 1100 Hz (sifflements, voix de tête très aiguës non corrigés).
-- Note forcée par MIDI : prévue dans le moteur (`Params::forcedNote`), **pas branchée** : le plugin ne déclare pas d'entrée
-  MIDI (l'ajouter changerait la configuration de bus des projets existants). L'édition note par note couvre le besoin.
+- Note forcée par MIDI : prévue dans le moteur (`Params::forcedNote`), **pas branchée** (décision du 10 nov., avant la
+  livraison) : le plugin ne déclare pas d'entrée MIDI. L'ajouter n'est pas sûr à ce stade : en AU, recevoir du MIDI impose
+  le type `aumf` (MusicEffect) au lieu de `aufx`, donc un autre composant pour l'hôte, et les projets AU existants perdraient
+  le plugin ; en VST3, un bus d'événements s'ajoute à la configuration des projets existants ; et FL Studio ne route pas le
+  MIDI vers un effet sans passer par le port MIDI du plugin, à vérifier à la main. À faire dans une version qui assume ce
+  changement (avec `stateVersion`). L'édition note par note couvre le besoin en attendant.
 - Pas d'export MIDI des notes, pas de « sélection multiple » ni de glisser du temps des notes dans le piano-roll.
 
 ## 10. À écouter à l'oreille (FL Studio)

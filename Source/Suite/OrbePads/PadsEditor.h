@@ -1,5 +1,6 @@
 #pragma once
 #include "PadsProcessor.h"
+#include "../../Kit/v3/InstrumentSkin.h"
 
 class PadsEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer {
 public:
@@ -35,13 +36,17 @@ private:
     kit::Palette pal;
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
-    kit::w::HelpKey help;
+    kit::v3::bridge::HelpKey help;
+    kit::v3::Skin skin{"orbepads", kit::v3::accents::ice};
+    juce::OwnedArray<kit::v3::Knob3> k3;
+    std::unique_ptr<kit::v3::Knob3> masterK3;
+    void resized3(); void paint3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
     osamp::WaveView wave;
-    osamp::Seg modeSeg, divSeg, playSeg, dltSeg;
-    std::unique_ptr<osamp::Seg> grpSeg;
+    kit::v3::GridSeg modeSeg, divSeg, playSeg, dltSeg;
+    std::unique_ptr<kit::v3::GridSeg> grpSeg;
     juce::Slider sens;
     std::unique_ptr<SliderAtt> sensAtt;
-    kit::w::PushKey importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, clearB{kit::u8("Effacer les repères")};
+    kit::v3::bridge::PushKey importB{kit::u8("Importer")}, demoB{kit::u8("Démo")}, clearB{kit::u8("Effacer les repères")};
     juce::ToggleButton revB;
     std::unique_ptr<ButtonAtt> revAtt;
     std::unique_ptr<osamp::Knob> k[9];
