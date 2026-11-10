@@ -550,13 +550,14 @@ private:
         entry->setJustification(juce::Justification::centred); entry->setFont(font(15.f * u, true));
         entry->setText(valueText().replace(juce::String::charToString((juce::juce_wchar)0x00A0), " "), false); entry->selectAll();
         addAndMakeVisible(*entry); placeEntry(); entry->grabKeyboardFocus();
-        auto done = [this](bool apply) {
+        juce::Component::SafePointer<Knob3> self(this);
+        auto done = [this, self](bool apply) {
             if (entry == nullptr) return;
             if (apply) {
                 auto s = entry->getText().replace(",", ".").replace(fmt::minus(), "-").retainCharacters("0123456789.-+");
                 if (s.containsAnyOf("0123456789")) setValue(juce::jlimit(getMinimum(), getMaximum(), getValueFromText(s)), juce::sendNotificationSync);
             }
-            juce::MessageManager::callAsync([sp = juce::Component::SafePointer<Knob3>(this)] { if (sp != nullptr) { sp->entry.reset(); sp->repaint(); } });
+            juce::MessageManager::callAsync([safe = self] { if (safe != nullptr) { safe->entry.reset(); safe->repaint(); } });
         };
         entry->onReturnKey = [done] { done(true); };
         entry->onEscapeKey = [done] { done(false); };
@@ -638,7 +639,8 @@ public:
         m.addSectionHeader("Taille");
         const float sizes[] = {0.75f, 1.f, 1.25f, 1.5f};
         for (int i = 0; i < 4; ++i) m.addItem(10 + i, String(juce::roundToInt(sizes[i] * 100.f)) + juce::String::charToString((juce::juce_wchar)0x00A0) + "%", true, std::fabs(scale - sizes[i]) < 0.04f);
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [sp = juce::Component::SafePointer<ThemeMenu>(this)](int r) {
+        juce::Component::SafePointer<ThemeMenu> self(this);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this), [sp = self](int r) {
             if (sp == nullptr || r == 0) return;
             const float sz[] = {0.75f, 1.f, 1.25f, 1.5f};
             if (r >= 1 && r <= 3) { if (sp->onTheme) sp->onTheme((Mode)(r - 1)); }
