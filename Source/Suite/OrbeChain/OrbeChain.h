@@ -66,7 +66,7 @@ public:
     void prepare(double sampleRate) {
         sr = (float)sampleRate;
         win = std::max(64, (int)(0.032 * sampleRate)) & ~1;
-        tune.init(win); dbl1.init(win); dbl2.init(win);
+        tune.init(win, sampleRate); dbl1.init(win); dbl2.init(win);   // décaleur partagé (Dsp/Splicer.h) : latence win/2 inchangée, formants préservés sur Tune
         lim.init((int)(0.0015 * sampleRate), sampleRate);
         sat.init(voile::Oversampler::stagesFor(sampleRate, 3));   // saturation suréchantillonnée ×8 (×4 à 88,2/96 kHz), phase linéaire
         satLat = sat.latency();
@@ -234,6 +234,7 @@ private:
         const bool on = P.tnOn > 0.5f, manual = P.key >= 0.5f;
         const float f0 = yin.analyze();
         if (f0 > 0.f) {
+            { const float per = sr / f0; tune.setPeriod(per); dbl1.setPeriod(per); dbl2.setPeriod(per); }   // raccords synchrones à la période
             const float midi = 69.f + 12.f * std::log2(f0 / 440.f);
             if (!manual) trackKey(midi);
             const int key = manual ? (int)(P.key + 0.5f) - 1 : effKey, sc = manual ? 1 + (int)(P.scale + 0.5f) : effScale;

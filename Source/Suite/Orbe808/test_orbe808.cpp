@@ -54,10 +54,12 @@ static double aliasDb(const std::vector<float>& y, size_t start, double sr, doub
     }
     return 10.0 * std::log10(worst / pf + 1e-30);
 }
-// Note tenue (réglages sans clic ni harmonique ajouté), rendu sur 2,6 s ; mesure après 0,5 s.
+// Note tenue (réglages sans clic ni harmonique ajouté), rendu sur 2,6 s ; mesure après 0,5 s. Depuis la saturation après
+// l'enveloppe (vague 2B), le spectre suit le niveau : on fige l'enveloppe (len 600 s, -0,1 dB sur la fenêtre) pour ne mesurer
+// que le repliement, sans l'étalement dû à l'évolution voulue des harmoniques.
 static double aliasOf(double sr, int note, int sat, float drive) {
     o808::Engine e; e.prepare(sr);
-    o808::Params p; p.len = 3.6f; p.punch = 0; p.pt = 0.05f; p.drive = drive; p.sat = sat; p.tone = 0; p.cut = 1.f; p.click = 0; p.glide = 0.12f; p.level = 0.8f; e.setParams(p);
+    o808::Params p; p.len = 600.f; p.punch = 0; p.pt = 0.05f; p.drive = drive; p.sat = sat; p.tone = 0; p.cut = 1.f; p.click = 0; p.glide = 0.12f; p.level = 0.8f; e.setParams(p);
     e.noteOn(note, 1.f);
     std::vector<float> y((size_t)(sr * 2.6)); e.render(y.data(), (int)y.size());
     return aliasDb(y, (size_t)(sr * 0.5), sr, 440.0 * std::pow(2.0, (note - 69) / 12.0));
@@ -105,6 +107,21 @@ int main() {
             std::printf("808 %.0f Hz : latence declaree %d, premier echantillon non nul %d\n", sr, e.latency(), first);
             CHECK(first == e.latency() && e.latency() > 0, "latence 808 : declaree %d, mesuree %d", e.latency(), first);
         }
+    }
+    {   // vague 2B : saturation après l'enveloppe -> le taux d'harmoniques (H3..H20 / fondamental) baisse avec le niveau de la queue.
+        // Preset « Trap saturée » sans clic ni triangle (tone 0 : son H2/H6.. linéaire fausserait la mesure), C2, 44,1 kHz.
+        const double sr = 44100; o808::Engine e; e.prepare(sr);
+        o808::Params p = preset(1); p.click = 0; p.tone = 0; e.setParams(p);
+        e.noteOn(36, 1.f); std::vector<float> y((size_t)(sr * 2.0)); e.render(y.data(), (int)y.size());
+        const double f0 = 440 * std::pow(2, (36 - 69) / 12.0);
+        auto gz = [&](size_t s0, double f) { double re = 0, im = 0; const size_t n = 4096;
+            for (size_t i = 0; i < n; ++i) { const double w = 0.5 - 0.5 * std::cos(2 * 3.14159265358979 * (double)i / (double)(n - 1)), ph = 2 * 3.14159265358979 * f * (double)i / sr; re += w * y[s0 + i] * std::cos(ph); im += w * y[s0 + i] * std::sin(ph); }
+            return re * re + im * im; };
+        double hd[4]; const double ts[4] = {0.05, 0.3, 0.6, 1.2};
+        for (int k = 0; k < 4; ++k) { const size_t s0 = (size_t)(ts[k] * sr); double H = 0; for (int h = 2; h <= 20; ++h) H += gz(s0, f0 * h);
+            hd[k] = 10 * std::log10(H / gz(s0, f0)); std::printf("808 bloom : t=%.2f s, fond %.1f dB, harmoniques/fond %.1f dB\n", ts[k], 10 * std::log10(gz(s0, f0)) - 20 * std::log10(4096 / 4.0), hd[k]); }
+        CHECK(hd[0] > -12.0, "attaque pas assez saturee (%.1f dB)", hd[0]);
+        CHECK(hd[3] < hd[0] - 15.0, "pas de bloom : %.1f dB a 1,2 s contre %.1f dB a 50 ms", hd[3], hd[0]);
     }
     std::printf(fails ? "orbe808_test : %d echec(s)\n" : "orbe808_test : OK\n", fails);
     return fails ? 1 : 0;

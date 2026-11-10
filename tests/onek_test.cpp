@@ -1,16 +1,19 @@
-// Tests des plugins à un potard (hors JUCE). Usage : onek_test [prise.wav]
+// Tests objectifs des plugins à un potard (hors JUCE) : les mesures de l'audit 3 (docs/audit2/03-un-potard.md) devenues des seuils.
+// g++ -O2 -std=c++17 -I Source tests/onek_test.cpp -o /tmp/onek_test && /tmp/onek_test [prise.wav]
+// Options : --cpu (mesure du coût par instance), --rapide (saute 96 kHz et les blocs extrêmes).
+#include <chrono>
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <new>
+#include <string>
 #include "../Source/OneKnob/OneKnob.h"
 #include "../Source/Kit/BypassFadeTest.h"
-#include <new>
-#include <cstdlib>
 using namespace onek;
 static int fails = 0;
-// compteur d'allocations (test « zéro allocation en temps réel »)
 static bool gCountAlloc = false;
 static long gAllocs = 0;
 void* operator new(std::size_t n) { if (gCountAlloc) ++gAllocs; if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
@@ -20,9 +23,11 @@ void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 #define CHECK(c, ...) do { if (!(c)) { ++fails; std::printf("  ECHEC: "); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
+using Vec = std::vector<float>;
+constexpr double kPiD = 3.14159265358979323846;
+static const char* nm(int m) { return voicings()[(size_t)m].name; }
 
-// lecteur WAV PCM16/24/32/float -> mono
-static bool readWav(const char* path, std::vector<float>& mono, double& sr) {
+static bool readWav(const char* path, Vec& mono, double& sr) {
     std::ifstream f(path, std::ios::binary); if (!f) return false;
     std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), {});
     if (b.size() < 44 || std::memcmp(&b[0], "RIFF", 4)) return false;
@@ -50,223 +55,295 @@ static bool readWav(const char* path, std::vector<float>& mono, double& sr) {
     return true;
 }
 
-// énergie par bande (FFT radix-2 sur trames de 2048)
-static void bands(const std::vector<float>& x, double sr, double& low, double& mid, double& high, double& centroid) {
-    const int N = 2048; low = mid = high = 0; double num = 0, den = 0;
-    for (size_t s = (size_t)sr; s + N < x.size(); s += N) {
-        std::vector<std::complex<double>> a(N);
-        for (int i = 0; i < N; ++i) a[(size_t)i] = x[s + (size_t)i] * (0.5 - 0.5 * std::cos(2 * 3.14159265 * i / N));
-        for (int i = 1, j = 0; i < N; ++i) { int bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) std::swap(a[(size_t)i], a[(size_t)j]); }
-        for (int len = 2; len <= N; len <<= 1) { const double ang = -2 * 3.14159265 / len; std::complex<double> wl(std::cos(ang), std::sin(ang));
-            for (int i = 0; i < N; i += len) { std::complex<double> w(1); for (int k = 0; k < len / 2; ++k) { auto u = a[(size_t)(i + k)], v = a[(size_t)(i + k + len / 2)] * w; a[(size_t)(i + k)] = u + v; a[(size_t)(i + k + len / 2)] = u - v; w *= wl; } } }
-        for (int k = 1; k < N / 2; ++k) { const double f = k * sr / N, e = std::norm(a[(size_t)k]); (f < 250 ? low : f < 4000 ? mid : high) += e; num += f * e; den += e; }
+// ---------------------------------------------------------------- signaux
+static uint32_t gSeed = 12345;
+static float urnd() { gSeed = gSeed * 1664525u + 1013904223u; return (float)(gSeed >> 8) / 8388608.f - 1.f; }
+// voix de synthèse : 10 harmoniques à enveloppe de formants, syllabes de 180 ms, vibrato, sifflantes brèves ; RMS voisé = levelDb
+static Vec voice(double sr, double secs, double levelDb, double f0 = 150.0, bool syll = true) {
+    Vec x((size_t)(secs * sr)); double ph = 0, s2 = 0; size_t nv = 0;
+    float hp = 0, lpn = 0;
+    for (size_t i = 0; i < x.size(); ++i) {
+        const double t = (double)i / sr, f = f0 * (1.0 + 0.012 * std::sin(2 * kPiD * 5.5 * t) + 0.04 * std::sin(2 * kPiD * 0.3 * t));
+        ph += f / sr; ph -= std::floor(ph);
+        double v = 0; for (int h = 1; h <= 10; ++h) { const double fh = h * f; const double g = 1.0 / (1.0 + std::pow((fh - 600) / 400, 2)) + 0.5 / (1.0 + std::pow((fh - 1800) / 500, 2)) + 0.15; v += g * std::sin(2 * kPiD * h * ph) / std::sqrt((double)h); }
+        const double ts = std::fmod(t, 0.24);
+        const double env = !syll ? 1.0 : ts < 0.18 ? std::sin(kPiD * ts / 0.18) : 0.0;
+        const float n = urnd(); hp = 0.6f * (hp + n - lpn); lpn = n;   // bruit aigu (sifflante)
+        const double sib = syll && std::fmod(t, 0.96) > 0.90 ? 0.6 : 0.0;
+        x[i] = (float)(v * env + sib * hp);
+        if (env > 0.1) { s2 += (double)x[i] * x[i]; ++nv; }
     }
-    centroid = den > 0 ? num / den : 0;
+    const float k = (float)(std::pow(10.0, levelDb / 20.0) / std::sqrt(s2 / (double)std::max<size_t>(1, nv)));
+    for (auto& v : x) v *= k;
+    return x;
 }
-static double rms(const std::vector<float>& x) { double s = 0; for (float v : x) s += (double)v * v; return std::sqrt(s / (double)std::max<size_t>(1, x.size())); }
+static Vec sine(double sr, double secs, double f, float a) { Vec x((size_t)(secs * sr)); for (size_t i = 0; i < x.size(); ++i) x[i] = a * (float)std::sin(2 * kPiD * f * (double)i / sr); return x; }
 
-static std::vector<float> run(const std::vector<float>& in, double sr, int vi, float k) {
-    Chain c; c.prepare(sr, 512);
-    const auto& v = voicings()[(size_t)vi];
-    std::vector<float> out(in.size()), L(512), R(512);
-    for (size_t p = 0; p < in.size(); p += 512) {
-        const int n = (int)std::min<size_t>(512, in.size() - p);
-        c.setKnob(k, v);
-        c.process(&in[p], nullptr, L.data(), R.data(), n);
-        for (int i = 0; i < n; ++i) out[p + (size_t)i] = 0.5f * (L[(size_t)i] + R[(size_t)i]);
+struct Out { Vec L, R; int lat = 0; double gr = 0; };
+// Traite x (mono, ou stéréo si xr) par blocs ; perBlock(chain, indexBloc) appelé avant chaque bloc.
+template <class F>
+static Out run(int model, float k, const Vec& x, double sr, int block, const Extras& e, F&& perBlock, const Vec* xr = nullptr, bool classicMode = false, double grFrom = -1) {
+    Chain c; c.select(model); c.setClassic(classicMode); c.prepare(sr, std::min(block, 2048)); c.setExtras(e);
+    Out o; o.L.assign(x.size(), 0.f); o.R.assign(x.size(), 0.f); o.lat = c.latency();
+    double acc = 0; int nb = 0;
+    for (size_t p = 0, bi = 0; p < x.size(); p += (size_t)block, ++bi) {
+        const int n = (int)std::min<size_t>((size_t)block, x.size() - p);
+        c.setKnob(k, voicings()[(size_t)model]);
+        perBlock(c, (int)bi);
+        c.process(&x[p], xr ? &(*xr)[p] : nullptr, &o.L[p], &o.R[p], n);
+        if (grFrom >= 0 && (double)p > grFrom * sr) { acc += c.meanReduction(); ++nb; }
     }
-    return out;
+    o.gr = nb ? acc / nb : 0; o.lat = c.latency();
+    return o;
+}
+static Out run(int model, float k, const Vec& x, double sr, int block = 512, const Extras& e = Extras{}, double grFrom = -1) {
+    return run(model, k, x, sr, block, e, [](Chain&, int) {}, nullptr, false, grFrom);
+}
+static double errDb(const Vec& y, const Vec& x, int lat, size_t from) {
+    double e = 0, r = 0; for (size_t i = from + (size_t)lat; i < y.size(); ++i) { const double d = y[i] - x[i - (size_t)lat]; e += d * d; r += (double)x[i - (size_t)lat] * x[i - (size_t)lat]; }
+    return 10 * std::log10(e / (r + 1e-30) + 1e-30);
+}
+static double rmsDb(const Vec& x, size_t a, size_t b) { double s = 0; b = std::min(b, x.size()); for (size_t i = a; i < b; ++i) s += (double)x[i] * x[i]; return 10 * std::log10(s / (double)std::max<size_t>(1, b - a) + 1e-20); }
+static int peakPos(const Vec& y) { size_t pk = 0; for (size_t i = 0; i < y.size(); ++i) if (std::fabs(y[i]) > std::fabs(y[pk])) pk = i; return (int)pk; }
+// spectre de puissance (Blackman-Harris), N puissance de 2
+static std::vector<double> spectrum(const Vec& y, size_t start, size_t N) {
+    std::vector<std::complex<double>> z(N);
+    for (size_t i = 0; i < N; ++i) { const double a = 2 * kPiD * (double)i / (double)(N - 1); z[i] = (0.35875 - 0.48829 * std::cos(a) + 0.14128 * std::cos(2 * a) - 0.01168 * std::cos(3 * a)) * y[start + i]; }
+    for (size_t i = 1, j = 0; i < N; ++i) { size_t bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) std::swap(z[i], z[j]); }
+    for (size_t len = 2; len <= N; len <<= 1) { const auto wl = std::polar(1.0, -2 * kPiD / (double)len); for (size_t i = 0; i < N; i += len) { std::complex<double> w(1); for (size_t k = 0; k < len / 2; ++k) { const auto u = z[i + k], t = z[i + k + len / 2] * w; z[i + k] = u + t; z[i + k + len / 2] = u - t; w *= wl; } } }
+    std::vector<double> p(N / 2); for (size_t k = 0; k < N / 2; ++k) p[k] = std::norm(z[k]); return p;
+}
+// YIN hors ligne (MIDI par trame de 240 échantillons, 0 si non voisé)
+static Vec track(const Vec& x, double sr) {
+    Vec o; const int W = 1200, tM = 700; std::vector<double> cm(tM + 2);
+    for (size_t p = W + tM; p + W < x.size(); p += 240) {
+        const float* a = &x[p]; double e = 0; for (int j = 0; j < W; ++j) e += a[j] * (double)a[j];
+        if (std::sqrt(e / W) < 0.004) { o.push_back(0); continue; }
+        double cum = 0; cm[0] = 1; for (int t = 1; t <= tM; ++t) { double d = 0; for (int j = 0; j < W; ++j) { const double v = a[j] - a[j - t]; d += v * v; } cum += d; cm[(size_t)t] = d * t / (cum + 1e-12); }
+        int b = -1; for (int t = 40; t < tM; ++t) if (cm[(size_t)t] < 0.15) { while (t + 1 < tM && cm[(size_t)t + 1] < cm[(size_t)t]) ++t; b = t; break; }
+        if (b < 0) { o.push_back(0); continue; }
+        double tau = b; const double a0 = cm[(size_t)b - 1], b0 = cm[(size_t)b], c0 = cm[(size_t)b + 1], den = a0 - 2 * b0 + c0; if (std::fabs(den) > 1e-12) tau += 0.5 * (a0 - c0) / den;
+        o.push_back((float)(69 + 12 * std::log2(sr / tau / 440)));
+    }
+    return o;
 }
 
 int main(int argc, char** argv) {
-    // 1. tonalité automatique : mélodie en ré mineur, notes un peu fausses -> verrouillage fiable (ré mineur ou son relatif fa majeur)
+    const char* wav = nullptr; bool cpu = false, quick = false;
+    for (int i = 1; i < argc; ++i) { if (!std::strcmp(argv[i], "--cpu")) cpu = true; else if (!std::strcmp(argv[i], "--rapide")) quick = true; else wav = argv[i]; }
+    const double fs = 48000.0;
+
+    // [1] Neutralité à 0 : sortie = entrée retardée de la latence déclarée (mono, stéréo différente G/D), aux trois fréquences
+    for (double sr : {44100.0, 48000.0, 96000.0}) {
+        if (quick && sr > 50000) continue;
+        Vec x = voice(sr, 3.0, -20.0), xr = voice(sr, 3.0, -26.0, 210.0);
+        for (size_t i = 0; i < x.size(); ++i) { x[i] += 0.003f * urnd(); xr[i] += 0.003f * urnd(); }
+        for (int m = 0; m < 4; ++m) {
+            auto o = run(m, 0.f, x, sr);
+            auto s = run(m, 0.f, x, sr, 512, Extras{}, [](Chain&, int) {}, &xr);
+            const double em = std::max(errDb(o.L, x, o.lat, 0), errDb(o.R, x, o.lat, 0));
+            const double es = std::max(errDb(s.L, x, s.lat, 0), errDb(s.R, xr, s.lat, 0));
+            std::printf("[1] %-10s %5.1f kHz k=0 : latence %d, écart au sec retardé mono %.1f dB, stéréo %.1f dB\n", nm(m), sr / 1000, o.lat, em, es);
+            CHECK(em < -100.0 && es < -100.0, "k=0 non neutre (%s, %.0f Hz) : %.1f / %.1f dB", nm(m), sr, em, es);
+        }
+    }
+    // [2] Latence déclarée = mesurée (impulsion faible), k = 0 et 0,25 ; 0 pour Gorge et Patine
+    for (int m = 0; m < 4; ++m) for (float k : {0.f, 0.25f}) {
+        Vec x(40000, 0.f); x[6000] = 0.01f;
+        auto o = run(m, k, x, fs);
+        const int meas = peakPos(o.L) - 6000;
+        std::printf("[2] %-10s k=%.2f : latence déclarée %d, mesurée %d\n", nm(m), k, o.lat, meas);
+        CHECK(meas == o.lat, "latence %s k=%.2f : mesurée %d, déclarée %d", nm(m), k, meas, o.lat);
+        if (m == 1 || m == 3) CHECK(o.lat == 0, "%s doit être sans latence (%d)", nm(m), o.lat);
+    }
+    // [3] La compression suit le potard : réduction moyenne croissante, nulle à 0, franche à 10 (plus de plafond de -8 dB)
     {
-        const double sr = 48000; std::vector<float> x; float ph = 0;
-        const int seq[] = {62, 64, 65, 62, 69, 67, 65, 64, 62, 65, 69, 70, 69, 67, 65, 64, 62, 60, 62, 65, 67, 69, 65, 62};
-        for (int rep = 0; rep < 2; ++rep) for (int m : seq) {
-            const float f = 440.f * std::pow(2.f, ((float)m - 69.f + 0.18f) / 12.f);
-            for (int i = 0; i < (int)(0.4 * sr); ++i) { ph += f / (float)sr; ph -= std::floor(ph); const float t = (float)i / (float)(0.4 * sr);
-                x.push_back(0.4f * (std::sin(6.2832f * ph) + 0.4f * std::sin(12.566f * ph) + 0.2f * std::sin(18.85f * ph)) * std::min(1.f, 30.f * t) * (1.f - 0.3f * t)); }
+        const Vec x = voice(fs, 6.0, -18.0);
+        for (int m = 0; m < 4; ++m) {
+            double g[6]; std::printf("[3] %-10s réduction moyenne (dB) à k =", nm(m));
+            for (int i = 0; i <= 5; ++i) { g[i] = run(m, 0.2f * (float)i, x, fs, 512, Extras{}, 3.0).gr; std::printf(" %.1f:%.1f", 0.2 * i, g[i]); }
+            std::printf("\n");
+            CHECK(g[0] < 0.05, "%s : compression résiduelle à 0 (%.2f dB)", nm(m), g[0]);
+            for (int i = 1; i <= 5; ++i) CHECK(g[i] >= g[i - 1] - 0.3, "%s : réduction non croissante (%.1f -> %.1f)", nm(m), g[i - 1], g[i]);
+            CHECK(g[5] >= 9.0, "%s : réduction à 10 trop faible (%.1f dB)", nm(m), g[5]);
         }
-        voile::Engine e; e.prepare(sr); voile::Params p; p.safe = true; p.autoKey = p.autoScale = true; p.tension = 1.f; e.set(p);
-        std::vector<float> a(x.size()), b(x.size());
-        for (size_t i = 0; i < x.size(); i += 512) { const int n = (int)std::min<size_t>(512, x.size() - i); e.process(&x[i], nullptr, &a[i], &b[i], n); }
-        std::printf("[1] tonalité détectée : %s (%d/%d)\n", e.keyKnown() ? "oui" : "non", e.detectedKey(), e.detectedScale());
-        const bool dmin = e.detectedKey() == 2 && e.detectedScale() == 2, fmaj = e.detectedKey() == 5 && e.detectedScale() == 1;
-        CHECK(e.keyKnown() && e.keyStatus() == 1 && (dmin || fmaj), "attendu ré mineur (2/2) ou fa majeur (5/1), obtenu %d/%d", e.detectedKey(), e.detectedScale());
     }
-    // 1b. justesse mesurée (YIN hors-ligne) : la correction ne doit jamais désaccorder la prise
+    // [4] Auto-entrée : même réduction (±1 dB) que la prise arrive à -30 ou à -6 dBFS
+    for (int m = 0; m < 4; ++m) {
+        double g[3]; int i = 0;
+        for (double lv : {-18.0, -30.0, -6.0}) g[i++] = run(m, 0.6f, voice(fs, 8.0, lv), fs, 512, Extras{}, 5.0).gr;
+        std::printf("[4] %-10s auto-entrée, k=6 : réduction %.2f dB à -18 ; %.2f à -30 ; %.2f à -6\n", nm(m), g[0], g[1], g[2]);
+        CHECK(std::fabs(g[1] - g[0]) <= 1.0 && std::fabs(g[2] - g[0]) <= 1.0, "%s : auto-entrée dépendante du niveau", nm(m));
+    }
+    // [5] Bruit entre les phrases : phrases de 1,5 s, pauses de 3 s, bruit de pièce à -53 dBFS : bruit de pause <= +2 dB ; phrases ±3 dB
     {
-        const double sr = 48000;
-        struct Nt { int m; float c; };
-        auto synth = [&](const std::vector<Nt>& v, float dur) { std::vector<float> x; double ph = 0;
-            for (auto& nt : v) { const int n = (int)(dur * sr);
-                for (int i = 0; i < n; ++i) { const float f = 440.f * std::pow(2.f, ((float)nt.m - 69.f + nt.c / 100.f) / 12.f); ph += f / sr; ph -= std::floor(ph);
-                    float sm = 0; for (int h = 1; h <= 8; ++h) sm += std::sin(6.2832 * h * ph) / (float)h;
-                    const float t = (float)i / (float)n; x.push_back(0.3f * sm * std::min(1.f, t * (float)n / (0.02f * (float)sr)) * std::min(1.f, (1 - t) * (float)n / (0.03f * (float)sr))); }
-                for (int i = 0; i < (int)(0.08 * sr); ++i) x.push_back(0.f); }
-            return x; };
-        auto track = [&](const std::vector<float>& x) { std::vector<float> o; const int W = 1024, tMax = 343, hop = 480;
-            std::vector<float> d(x.size() / 2); for (size_t i = 0; i < d.size(); ++i) d[i] = 0.5f * (x[2 * i] + x[2 * i + 1]);
-            std::vector<float> cm((size_t)tMax + 2);
-            for (size_t p = 0; p + hop < x.size(); p += hop) { o.push_back(0); const long s = (long)(p / 2) - W / 2 - tMax; if (s < 0 || s + W + tMax > (long)d.size()) continue;
-                const float* a = &d[(size_t)s + tMax]; double e = 0; for (int j = 0; j < W; ++j) e += a[j] * a[j]; if (std::sqrt(e / W) < 0.004) continue;
-                double cum = 0; cm[0] = 1; for (int t = 1; t <= tMax; ++t) { double dd = 0; for (int j = 0; j < W; ++j) { double v = a[j] - a[j - t]; dd += v * v; } cum += dd; cm[(size_t)t] = cum > 1e-12 ? (float)(dd * t / cum) : 1.f; }
-                int best = -1; for (int t = 26; t < tMax; ++t) if (cm[(size_t)t] < 0.12f) { while (t + 1 < tMax && cm[(size_t)t + 1] < cm[(size_t)t]) ++t; best = t; break; }
-                if (best < 1) continue; double tau = best, a0 = cm[(size_t)best - 1], b0 = cm[(size_t)best], c0 = cm[(size_t)best + 1], den = a0 - 2 * b0 + c0; if (std::fabs(den) > 1e-12) tau += 0.5 * (a0 - c0) / den;
-                o.back() = (float)(69 + 12 * std::log2(24000.0 / tau / 440.0)); }
-            return o; };
-        auto runK = [&](const std::vector<float>& x, int vi, float k, int ks, int ss, int& lat, int& st) { Chain c; c.prepare(sr, 512); c.setKeySel(ks, ss); std::vector<float> o(x.size()), L(512), R(512);
-            for (size_t p = 0; p < x.size(); p += 512) { const int n = (int)std::min<size_t>(512, x.size() - p); c.setKnob(k, voicings()[(size_t)vi]); c.process(&x[p], nullptr, L.data(), R.data(), n); for (int i = 0; i < n; ++i) o[p + (size_t)i] = 0.5f * (L[(size_t)i] + R[(size_t)i]); }
-            lat = c.latency(); st = c.keyStatus(); return o; };
-        // part des trames où |sortie - entrée| > 10 cents
-        auto over = [&](const std::vector<float>& in, const std::vector<float>& out, int lat) { auto a = track(in), b = track(out); const size_t L = (size_t)std::lround((double)lat / 480.); int n = 0, bad = 0;
-            for (size_t i = 0; i + L < a.size() && i + L < b.size(); ++i) { if (a[i] <= 0 || b[i + L] <= 0) continue; const double c = (b[i + L] - a[i]) * 100; if (std::fabs(c) > 600) continue; ++n; if (std::fabs(c) > 10) ++bad; } return n ? 100.0 * bad / n : 0.0; };
-        auto offGrid = [&](const std::vector<float>& out, int key, int sc) { auto b = track(out); int n = 0, bad = 0; for (float m : b) { if (m <= 0) continue; ++n; if (std::fabs(m - (float)voile::nearestAllowed(m, key, sc)) * 100 > 10) ++bad; } return n ? 100.0 * bad / n : 0.0; };
-        const int dm[] = {62, 64, 65, 62, 69, 67, 65, 64, 62, 65, 69, 70, 69, 67, 65, 64, 62, 60, 62, 65, 67, 69, 65, 62};
-        std::vector<Nt> tuned; for (int r = 0; r < 3; ++r) for (int m : dm) tuned.push_back({m, (float)(((r * 7 + m) % 9) - 4)});    // +-4 cents
-        std::vector<Nt> rap; unsigned sd = 12345; for (int i = 0; i < 50; ++i) { sd = sd * 1103515245u + 12345u; rap.push_back({55 + (int)((sd >> 16) % 22), 0.f}); }
-        auto xt = synth(tuned, 0.4f), xr = synth(rap, 0.35f);
-        int lat, st;
-        for (int vi : {0, 2}) {
-            auto y = runK(xt, vi, 0.1f, 0, 0, lat, st); const double lo = over(xt, y, lat);
-            std::printf("[1b] %s k=0.1 prise accordée, Auto : %.0f%% des trames à >10 cents de l'entrée\n", voicings()[(size_t)vi].name, lo);
-            CHECK(lo <= 3.0, "prise accordée désaccordée à k bas (%s) : %.0f%%", voicings()[(size_t)vi].name, lo);
-            y = runK(xr, vi, 1.0f, 0, 0, lat, st); const double ch = over(xr, y, lat);
-            std::printf("[1b] %s k=1 prise hors gamme, Auto non fiable (état %d) : %.0f%% à >10 cents de l'entrée\n", voicings()[(size_t)vi].name, st, ch);
-            CHECK(st == 2 && ch <= 4.0, "Auto non fiable : la hauteur doit rester celle de l'entrée (%s) état %d, %.0f%%", voicings()[(size_t)vi].name, st, ch);
+        const double ph = 1.5, pa = 3.0; const int reps = 4;
+        Vec x; for (int r = 0; r < reps; ++r) { auto v = voice(fs, ph, -26.0); x.insert(x.end(), v.begin(), v.end()); x.insert(x.end(), (size_t)(pa * fs), 0.f); }
+        float lp = 0; for (auto& v : x) { lp += 0.3f * (urnd() - lp); v += 0.0045f * lp * 2.2f; }
+        for (int m = 0; m < 4; ++m) for (float k : {0.5f, 1.f}) {
+            auto o = run(m, k, x, fs);
+            double nIn = 0, nOut = 0, vIn = 0, vOut = 0;
+            for (int r = 1; r < reps; ++r) {
+                const size_t t0 = (size_t)((r * (ph + pa)) * fs), a = (size_t)((r * (ph + pa) + ph + 2.0) * fs), b = (size_t)((r * (ph + pa) + ph + 3.0) * fs);
+                nIn += rmsDb(x, a, b); nOut += rmsDb(o.L, a + (size_t)o.lat, b + (size_t)o.lat);
+                vIn += rmsDb(x, t0, t0 + (size_t)(ph * fs)); vOut += rmsDb(o.L, t0 + (size_t)o.lat, t0 + (size_t)o.lat + (size_t)(ph * fs));
+            }
+            const double dn = (nOut - nIn) / (reps - 1), dv = (vOut - vIn) / (reps - 1);
+            std::printf("[5] %-10s k=%.1f : bruit de pause %+.1f dB, phrases %+.1f dB (entrée : bruit %.1f dBFS)\n", nm(m), k, dn, dv, nIn / (reps - 1));
+            CHECK(dn <= 2.0, "%s k=%.1f : bruit de pause remonté de %+.1f dB", nm(m), k, dn);
+            CHECK(std::fabs(dv) <= 3.0, "%s k=%.1f : niveau des phrases %+.1f dB", nm(m), k, dv);
         }
-        { auto y = runK(xt, 2, 1.0f, 7, 1, lat, st);   // Poupée à fond, tonalité manuelle fausse : Fa# majeur
-          const double og = offGrid(y, 6, 1); std::printf("[1b] Poupée k=1, manuel Fa# majeur (faux) : %.0f%% des trames hors de la grille choisie (état %d)\n", og, st);
-          CHECK(st == 0 && og <= 25.0, "tonalité manuelle : la sortie doit suivre la grille choisie (%.0f%% hors grille)", og); }
     }
-    // 1c. bypass honoré (même Fader que OneKnobProcessor::processBlock) : sortie = entrée retardée (< -120 dB), saut au basculement < -60 dBFS
-    for (size_t vi = 0; vi < voicings().size(); ++vi) {
-        Chain c; std::vector<float> sc(4096); const auto& v = voicings()[vi];
-        auto m = bypassfx::measure(48000.0, c.latency(), 512, [&] { c.prepare(48000.0, 512); }, [&](float* l, float* r, int n) { c.setKnob(0.6f, v); c.process(l, r, l, r ? r : sc.data(), n); });
-        std::printf("[1c] bypass %s : latence %d, erreur %.1f dB, saut au basculement %.1f dBFS (signal seul : %.1f)\n", v.name, c.latency(), m.exactDb, m.jumpDb, m.plainDb);
-        CHECK(m.exactDb < -120.0, "bypass non exact (%s) : %.1f dB", v.name, m.exactDb); CHECK(m.jumpDb < -60.0, "clic au basculement (%s) : %.1f dBFS", v.name, m.jumpDb);
-    }
-    { // [1d] chantier 12 : latence mesurée = déclarée (suréchantillonnage de la saturation inclus) ; repliement du limiteur doux
-        for (auto& v : voicings()) {
-            Chain c; c.prepare(48000.0, 512); c.setKnob(0.5f, v);
-            std::vector<float> in(30000, 0.f), L(in.size()), R(in.size()); in[4000] = 0.01f;   // impulsion faible : saturation quasi linéaire
-            for (size_t i = 0; i < in.size(); i += 500) c.process(&in[i], nullptr, &L[i], &R[i], 500);
-            size_t pk = 0; for (size_t i = 0; i < L.size(); ++i) if (std::fabs(L[i]) > std::fabs(L[pk])) pk = i;
-            std::printf("[1d] %s : latence déclarée %d, mesurée %d\n", v.name, c.latency(), (int)pk - 4000);
-            CHECK(std::abs((int)pk - 4000 - c.latency()) <= 2, "latence %s : mesurée %d, déclarée %d", v.name, (int)pk - 4000, c.latency());
-        }
-        const double fs = 48000.0, f0 = 5000.0; const size_t N = 65536;
-        std::vector<float> y(N * 2); TanhAdaa lim;
-        for (size_t n = 0; n < y.size(); ++n) y[n] = lim.process((float)(0.9 * std::sin(2.0 * 3.14159265358979 * f0 * (double)n / fs)) * 0.9f) / 0.9f * 0.95f;
-        std::vector<std::complex<double>> z(N);
-        for (size_t i = 0; i < N; ++i) { const double w = 0.35875 - 0.48829 * std::cos(2 * 3.14159265358979 * (double)i / (double)(N - 1)) + 0.14128 * std::cos(4 * 3.14159265358979 * (double)i / (double)(N - 1)) - 0.01168 * std::cos(6 * 3.14159265358979 * (double)i / (double)(N - 1)); z[i] = w * y[N + i]; }
-        for (size_t i = 1, j = 0; i < N; ++i) { size_t bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) std::swap(z[i], z[j]); }
-        for (size_t len = 2; len <= N; len <<= 1) { const std::complex<double> wl = std::polar(1.0, -2 * 3.14159265358979 / (double)len); for (size_t i = 0; i < N; i += len) { std::complex<double> w(1); for (size_t k = 0; k < len / 2; ++k) { const auto u = z[i + k], t = z[i + k + len / 2] * w; z[i + k] = u + t; z[i + k + len / 2] = u - t; w *= wl; } } }
-        double pf = 0, worst = 0;
-        for (size_t k = 1; k < N / 2; ++k) { const double f = (double)k * fs / (double)N, p = std::norm(z[k]); const int h = (int)std::lround(f / f0); if (std::fabs(f - h * f0) < 60.0) { if (h == 1) pf += p; continue; } if (f > 20000.0) continue; worst = std::max(worst, p); }
-        const double db = 10 * std::log10(worst / pf + 1e-30);
-        std::printf("[1d] limiteur doux (tanh ADAA), sinus 5 kHz à 0,9 : repliement %.1f dB (tanh direct : -79 dB)\n", db);
-        CHECK(db < -85.0, "repliement du limiteur %.1f dB", db);
-    }
-    // [3] volet avancé (chantier 8)
+    // [6] Harmonies : Gorge et Patine sans moteur de hauteur (aucune raie hors des harmoniques de 220 Hz, < -90 dB) ;
+    //     doubles de Grain Nord = unissons (rien à ±40-250 Hz des harmoniques : plus de quarte basse ni d'octave granulaires)
     {
-        const double fs = 48000.0;
-        // voix synthétique : 5 harmoniques, syllabes de 180 ms (enveloppe), RMS ramené à -18 dBFS
-        auto voice = [&](double secs, float gainDb) {
-            std::vector<float> x((size_t)(secs * fs)); double ph = 0, s2 = 0;
-            for (size_t i = 0; i < x.size(); ++i) {
-                const double t = (double)i / fs, f = 196.0 * (1.0 + 0.03 * std::sin(2 * 3.14159265 * 0.7 * t));
-                ph += f / fs; ph -= std::floor(ph);
-                double v = 0; for (int h = 1; h <= 5; ++h) v += std::sin(2 * 3.14159265 * h * ph) / h;
-                const double syl = std::fmod(t, 0.24) < 0.18 ? std::sin(3.14159265 * std::fmod(t, 0.24) / 0.18) : 0.0;
-                x[i] = (float)(v * syl); s2 += x[i] * (double)x[i];
+        const Vec x = sine(fs, 3.0, 220.0, 0.2f);
+        for (int m : {1, 3, 0}) {
+            Extras e; e.option = 0.f;   // Gorge : sans râle (le râle ajoute volontairement f0/2)
+            auto o = run(m, m == 0 ? 0.3f : 1.f, x, fs, 512, e);
+            const auto P = spectrum(o.L, 65536, 65536); double pf = 0, worst = 0;
+            for (size_t k = 1; k < P.size(); ++k) {
+                const double f = (double)k * fs / 65536.0, h = f / 220.0, d = std::fabs(h - std::round(h)) * 220.0;
+                if (std::round(h) == 1 && d < 15) pf += P[k];
+                if (f < 60 || f > 4000 || d < (m == 0 ? 40.0 : 15.0)) continue;
+                worst = std::max(worst, P[k]);
             }
-            const float k = (float)(std::pow(10.0, (-18.0 + gainDb) / 20.0) / std::sqrt(s2 / (double)x.size()));
-            for (auto& v : x) v *= k;
-            return x;
-        };
-        // réduction de gain moyenne sur les 2 dernières secondes (6 s de signal)
-        auto grOf = [&](const Voicing& v, float levelDb, float trimDb, bool autoIn) {
-            auto x = voice(6.0, levelDb);
-            Chain c; c.prepare(fs, 512); Extras e; e.trimDb = trimDb; e.autoIn = autoIn; c.setExtras(e);
-            std::vector<float> L(512), R(512); double acc = 0; int nb = 0;
-            for (size_t p = 0; p + 512 <= x.size(); p += 512) {
-                c.setKnob(0.6f, v); c.process(&x[p], nullptr, L.data(), R.data(), 512);
-                if ((double)p > 4.0 * fs) { acc += c.meanReduction(); ++nb; }
-            }
-            return acc / std::max(1, nb);
-        };
-        for (auto& v : voicings()) {
-            const double g0 = grOf(v, 0, 0, true), gm = grOf(v, -12, 0, true), gp = grOf(v, 12, 0, true);
-            const double tm = grOf(v, 0, -12, true), tp = grOf(v, 0, 12, true);
-            const double om = grOf(v, -12, 0, false), op = grOf(v, 12, 0, false);
-            std::printf("[3a] %s auto-entrée : réduction %.2f dB à -18 dBFS ; entrée -12/+12 dB : %.2f / %.2f ; trim -12/+12 : %.2f / %.2f (sans auto : %.2f / %.2f)\n",
-                        v.name, g0, gm, gp, tm, tp, om, op);
-            for (double gg : {gm, gp, tm, tp}) CHECK(std::fabs(gg - g0) <= 1.0, "auto-entrée %s : réduction %.2f dB au lieu de %.2f ±1", v.name, gg, g0);
+            const double db = 10 * std::log10(worst / pf + 1e-30);
+            std::printf("[6] %-10s k=%s : raie hors harmoniques la plus forte %.1f dB\n", nm(m), m == 0 ? "3" : "10", db);
+            CHECK(db < (m == 0 ? -60.0 : -90.0), "%s : raies parasites %.1f dB", nm(m), db);
         }
-        // mix 0 = sec retardé de la latence, exact
-        for (auto& v : voicings()) {
-            Chain c; c.prepare(fs, 512); Extras e; e.mix = 0.f; e.toneDb = 4.f; e.special = 1.f; c.setExtras(e);
-            const int n = 48000; std::vector<float> a(n), b(n), L(n), R(n); unsigned sd = 7;
-            for (int i = 0; i < n; ++i) { sd = sd * 1664525u + 1013904223u; a[(size_t)i] = 0.4f * ((float)(sd >> 8) / 16777216.f - 0.5f); b[(size_t)i] = 0.3f * std::sin(0.01f * (float)i); }
-            for (int p = 0; p < n; p += 480) { c.setKnob(0.8f, v); c.process(&a[(size_t)p], &b[(size_t)p], &L[(size_t)p], &R[(size_t)p], 480); }
-            double err = 0, ref = 0; const int lat = c.latency();
-            for (int i = lat; i < n; ++i) { err += std::pow(L[(size_t)i] - a[(size_t)(i - lat)], 2) + std::pow(R[(size_t)i] - b[(size_t)(i - lat)], 2); ref += a[(size_t)i] * (double)a[(size_t)i]; }
-            const double db = 10 * std::log10(err / ref + 1e-30);
-            std::printf("[3b] %s mix 0 : écart au sec retardé de %d échantillons %.1f dB\n", v.name, lat, db);
-            CHECK(db < -120.0, "mix 0 (%s) : %.1f dB", v.name, db);
-        }
-        // pas de NaN, latence inchangée par le volet, aucune allocation dans process()
-        for (auto& v : voicings()) {
-            Chain c; c.prepare(fs, 512);
-            const int n = 96000; std::vector<float> a(n), L(n), R(n); unsigned sd = 99;
-            for (int i = 0; i < n; ++i) { sd = sd * 1664525u + 1013904223u; const float w = (float)(sd >> 8) / 16777216.f - 0.5f;
-                a[(size_t)i] = i < 20000 ? 1.8f * w : i < 40000 ? 0.f : i < 60000 ? 0.9f : 0.5f * std::sin(0.3f * (float)i) + 1e-30f * w; }
-            bool bad = false; gAllocs = 0; gCountAlloc = true;
-            for (int p = 0, blk = 0; p < n; p += 512, ++blk) {
-                Extras e; e.trimDb = (blk % 3 - 1) * 12.f; e.toneDb = (blk % 5 - 2) * 3.f; e.mix = (float)(blk % 4) / 3.f; e.outDb = (blk % 2) * 12.f;
-                e.special = (float)(blk % 3) / 2.f; e.autoIn = blk % 7 != 0; e.autoGain = blk % 5 != 0;
-                c.setExtras(e); c.setKeySel(blk % 13, blk % 3); c.setKnob((float)(blk % 11) / 10.f, v);
-                const int m = std::min(512, n - p); c.process(&a[(size_t)p], nullptr, &L[(size_t)p], &R[(size_t)p], m);
-            }
-            gCountAlloc = false;
-            for (int i = 0; i < n; ++i) if (!std::isfinite(L[(size_t)i]) || !std::isfinite(R[(size_t)i])) bad = true;
-            std::printf("[3c] %s réglages extrêmes : %s, %ld allocation(s) dans process()\n", v.name, bad ? "NaN/inf !" : "aucun NaN", gAllocs);
-            CHECK(!bad, "NaN/inf (%s)", v.name);
-            CHECK(gAllocs == 0, "allocation en temps réel (%s) : %ld", v.name, gAllocs);
-            // latence mesurée avec le volet à fond (ton, largeur, drive, sortie)
-            Chain d; d.prepare(fs, 512); Extras e; e.toneDb = 6.f; e.special = 1.f; e.outDb = -6.f; e.autoIn = true; d.setExtras(e); d.setKnob(0.5f, v);
-            std::vector<float> in(30000, 0.f), l2(in.size()), r2(in.size()); in[4000] = 0.01f;
-            for (size_t i = 0; i < in.size(); i += 500) { d.setKnob(0.5f, v); d.process(&in[i], nullptr, &l2[i], &r2[i], 500); }
-            size_t pk = 0; for (size_t i = 0; i < l2.size(); ++i) if (std::fabs(l2[i]) > std::fabs(l2[pk])) pk = i;
-            std::printf("[3d] %s volet à fond : latence déclarée %d, mesurée %d\n", v.name, d.latency(), (int)pk - 4000);
-            CHECK(std::abs((int)pk - 4000 - d.latency()) <= 2, "latence avec volet %s : mesurée %d, déclarée %d", v.name, (int)pk - 4000, d.latency());
-        }
+        Extras e; e.option = 1.f;
+        auto o = run(1, 1.f, voice(fs, 4.0, -18.0, 120.0, false), fs, 512, e);
+        auto ref = run(1, 1.f, voice(fs, 4.0, -18.0, 120.0, false), fs, 512, Extras{[] { Extras z; z.option = 0.f; return z; }()});
+        const auto P1 = spectrum(o.L, 96000, 65536), P0 = spectrum(ref.L, 96000, 65536);
+        double s1 = 0, s0 = 0; for (size_t k = 0; k < P1.size(); ++k) { const double f = (double)k * fs / 65536.0; if (f > 50 && f < 70) { s1 += P1[k]; s0 += P0[k]; } }
+        std::printf("[6] Gorge râle : énergie autour de f0/2 (60 Hz) %+.1f dB par rapport au réglage sans râle\n", 10 * std::log10(s1 / (s0 + 1e-30)));
+        CHECK(s1 > s0 * 10.0, "le râle de Gorge ne produit pas de sous-harmonique");
     }
-    // 2. chaîne sur une vraie prise
-    std::vector<float> in; double sr = 44100;
-    const char* path = argc > 1 ? argv[1] : nullptr;
-    if (!path || !readWav(path, in, sr)) { std::printf("[2] pas de WAV fourni : tests de chaîne ignorés\n"); return fails ? 1 : 0; }
-    std::printf("[2] prise : %.1f s à %.0f Hz\n", (double)in.size() / sr, sr);
-    double lo0, mi0, hi0, ce0; bands(in, sr, lo0, mi0, hi0, ce0);
-    std::printf("    original : centroïde %.0f Hz\n", ce0);
-    const float ks[3] = {0.f, 0.5f, 1.f};
-    double ce[4][3], lo[4][3];
-    for (int vi = 0; vi < 4; ++vi) for (int ki = 0; ki < 3; ++ki) {
-        auto out = run(in, sr, vi, ks[ki]);
-        bool bad = false; float pk = 0; for (float v : out) { if (!std::isfinite(v)) bad = true; pk = std::max(pk, std::fabs(v)); }
-        const double dB = 20 * std::log10((rms(out) + 1e-9) / (rms(in) + 1e-9));
-        double l, m, h, c; bands(out, sr, l, m, h, c); ce[vi][ki] = c; lo[vi][ki] = 10 * std::log10((l + 1e-9) / (lo0 + 1e-9));
-        std::printf("    %-10s k=%.1f : niveau %+5.1f dB, pic %.2f, centroïde %5.0f Hz, grave %+5.1f dB\n", voicings()[(size_t)vi].name, ks[ki], dB, pk, c, lo[vi][ki]);
-        CHECK(!bad, "NaN/inf (%s k=%.1f)", voicings()[(size_t)vi].name, ks[ki]);
-        CHECK(pk <= 1.0f, "pic > 1 (%s k=%.1f)", voicings()[(size_t)vi].name, ks[ki]);
-        CHECK(std::fabs(dB) < 4.5, "niveau trop différent de l'entrée : %+.1f dB (%s k=%.1f)", dB, voicings()[(size_t)vi].name, ks[ki]);
-        if (ki == 1 || ki == 2) { char fn[128]; std::snprintf(fn, sizeof fn, "/tmp/onek_%s_%d.raw", voicings()[(size_t)vi].id, ki); FILE* f = std::fopen(fn, "wb"); if (f) { std::fwrite(out.data(), 4, out.size(), f); std::fclose(f); } }
+    // [7] Pas de marche sur la course : balayage 0 -> 10 en 12 s sur un son stationnaire ; énergie > 10 kHz et totale par 50 ms
+    for (int m = 0; m < 4; ++m) {
+        Vec x = voice(fs, 13.0, -18.0, 180.0, false); for (auto& v : x) v += 0.004f * urnd();
+        auto o = run(m, 0.f, x, fs, 480, Extras{}, [&](Chain& c, int bi) { c.setKnob(std::min(1.f, (float)bi * 480.f / (float)(12.0 * fs)), voicings()[(size_t)m]); });
+        const size_t W = 2400; double worst = 0, wk = 0, prevH = 0, prevT = 0, at[3] = {0, 0, 0};
+        Bq hp; hp.hp(fs, 10000.0, 0.7071); Bq hp2; hp2.hp(fs, 10000.0, 0.7071); Vec h(o.L.size()); for (size_t i = 0; i < h.size(); ++i) h[i] = hp2.run(hp.run(o.L[i]));
+        for (size_t f = 1; f * W + W < o.L.size(); ++f) {
+            const double eh = rmsDb(h, f * W, f * W + W), et = rmsDb(o.L, f * W, f * W + W), kk = (double)(f * W) / (12.0 * fs);
+            if (f > 1) { const double d = std::max(std::fabs(eh - prevH), std::fabs(et - prevT)); if (d > worst) { worst = d; wk = kk; }
+                for (int j = 0; j < 3; ++j) { const double kt = j == 0 ? 0.86 : j == 1 ? 0.89 : 0.91; if (std::fabs(kk - kt) < 0.012) at[j] = std::max(at[j], d); } }
+            prevH = eh; prevT = et;
+        }
+        std::printf("[7] %-10s balayage : plus grand saut entre trames de 50 ms %.2f dB (à k=%.2f) ; autour de 8,6/8,9/9,1 : %.2f/%.2f/%.2f dB\n", nm(m), worst, wk * 10, at[0], at[1], at[2]);
+        CHECK(worst < 3.0, "%s : marche de %.1f dB sur la course", nm(m), worst);
     }
-    CHECK(ce[2][2] > ce[2][0] * 1.08, "Poupée devrait s'éclaircir quand on monte le potard (%.0f -> %.0f Hz)", ce[2][0], ce[2][2]);
-    CHECK(ce[0][2] < ce[0][1] * 0.97 || ce[0][2] < ce[0][0], "Grain Nord devrait s'assombrir en fin de course (%.0f -> %.0f Hz)", ce[0][1], ce[0][2]);
-    CHECK(lo[1][2] > lo[1][0] + 0.8, "Gorge devrait gagner du grave (%.1f -> %.1f dB)", lo[1][0], lo[1][2]);
+    // [8] Repliement en fin de course : sinus de 3150 Hz, énergie sous 1,9 kHz (hors continu) < -80 dB, à 44,1 et 48 kHz.
+    //     Poupée exclue : TuneCore prend ce sinus pur pour une voix à f0/4 ou f0/3 (787 ou 1050 Hz) et la pédale/l'octave le
+    //     transposent (traitement de hauteur voulu, pas repliement) ; ses saturations sont suréchantillonnées ×4 (Saturation.h).
+    for (double sr : {44100.0, 48000.0}) for (int m : {0, 1, 3}) {
+        const Vec x = sine(sr, 3.5, 3150.0, 0.3f);
+        auto o = run(m, 1.f, x, sr);
+        const auto P = spectrum(o.L, (size_t)(1.5 * sr), 65536); double pf = 0, low = 0;
+        for (size_t k = 1; k < P.size(); ++k) { const double f = (double)k * sr / 65536.0; pf = std::max(pf, P[k]); if (f > 40 && f < 1900) low += P[k]; }
+        const double db = 10 * std::log10(low / pf + 1e-30);
+        std::printf("[8] %-10s %.1f kHz k=10 : énergie sous 1,9 kHz %.1f dB\n", nm(m), sr / 1000, db);
+        CHECK(db < -80.0, "%s : repliement %.1f dB", nm(m), db);
+    }
+    // [9] Hauteur : glissando A3 -> B3 (400 ms), Poupée à 10 : dépassement < 20 cents ; voix accordée laissée intacte à k bas
+    {
+        Vec x; double ph = 0;
+        for (int i = 0; i < (int)(1.8 * fs); ++i) { const double t = i / fs, mm = t < 0.7 ? 57 : t < 1.1 ? 57 + 2 * (t - 0.7) / 0.4 : 59; ph += 440 * std::pow(2, (mm - 69) / 12) / fs; ph -= std::floor(ph);
+            double s = 0; for (int h = 1; h <= 8; ++h) s += std::sin(2 * kPiD * h * ph) / h; x.push_back(0.12f * (float)s); }
+        auto o = run(2, 1.f, x, fs); auto a = track(o.L, fs);
+        double mx = 0; for (size_t i = 0; i < a.size(); ++i) { const double t = ((double)i * 240 + 1900 - o.lat) / fs; if (t > 1.0 && t < 1.7 && a[i] > 0) mx = std::max(mx, (double)a[i]); }
+        std::printf("[9] Poupée k=10, glissando A3->B3 : hauteur max après l'arrivée %.3f (dépassement %.1f cents)\n", mx, (mx - 59) * 100);
+        CHECK(mx > 0 && (mx - 59) * 100 < 20.0, "dépassement %.1f cents", (mx - 59) * 100);
+        // mélodie légèrement fausse (+-35 cents) : Poupée la plaque, Grain Nord à 3 la laisse (tonalité pas encore utilisée)
+        Vec y; ph = 0; const int mel[] = {57, 60, 62, 64, 65, 64, 62, 60, 57, 59, 60, 62, 64, 62, 60, 59};
+        for (int r = 0; r < 2; ++r) for (int q = 0; q < 16; ++q) { const double c = ((q * 7) % 9 - 4) * 8.75; for (int i = 0; i < (int)(0.35 * fs); ++i) { ph += 440 * std::pow(2, (mel[q] + c / 100 - 69) / 12) / fs; ph -= std::floor(ph);
+            double s = 0; for (int h = 1; h <= 8; ++h) s += std::sin(2 * kPiD * h * ph) / h; y.push_back(0.12f * (float)s * (float)std::min(1.0, i / 600.0)); } }
+        auto err = [&](const Vec& z, int lat) { auto b = track(z, fs); double s = 0; int n = 0; for (size_t i = (size_t)(lat / 240) + 20; i < b.size(); ++i) if (b[i] > 0) { s += std::fabs(b[i] - std::round(b[i])) * 100; ++n; } return n ? s / n : 99.0; };
+        const double e0 = err(y, 0); auto pu = run(2, 1.f, y, fs); auto g3 = run(0, 0.3f, y, fs);
+        const double ep = err(pu.L, pu.lat), eg = err(g3.L, g3.lat);
+        std::printf("[9] mélodie à ±35 c : écart moyen à la grille %.1f c en entrée ; Poupée 10 : %.1f c ; Grain Nord 3 : %.1f c\n", e0, ep, eg);
+        CHECK(ep < 5.0, "Poupée ne plaque pas la hauteur (%.1f c)", ep);
+        CHECK(std::fabs(eg - e0) < 3.0, "Grain Nord à 3 modifie la hauteur (%.1f -> %.1f c)", e0, eg);
+    }
+    // [10] NaN/inf en entrée : sortie finie, le son revient 100 ms après
+    for (int m = 0; m < 4; ++m) {
+        Vec x = voice(fs, 3.0, -18.0); for (int i = 0; i < 64; ++i) x[48000 + (size_t)i * 7] = i % 2 ? NAN : INFINITY;
+        auto o = run(m, 0.7f, x, fs); bool bad = false; for (size_t i = 0; i < o.L.size(); ++i) if (!std::isfinite(o.L[i]) || !std::isfinite(o.R[i])) bad = true;
+        const double after = rmsDb(o.L, (size_t)(1.2 * fs), (size_t)(2.9 * fs)), before = rmsDb(o.L, (size_t)(0.3 * fs), (size_t)(0.99 * fs));
+        std::printf("[10] %-10s NaN/inf en entrée : %s, niveau après %.1f dB (avant %.1f dB)\n", nm(m), bad ? "NaN EN SORTIE" : "sortie finie", after, before);
+        CHECK(!bad && after > before - 6.0, "%s : NaN ou son perdu après une entrée non finie", nm(m));
+    }
+    // [11] Zéro allocation en temps réel (réglages qui bougent, tonalités, moteur Classique <-> Actuel) ; blocs 1 à 8192 identiques
+    for (int m = 0; m < 4; ++m) {
+        Chain c; c.select(m); c.prepare(fs, 512);
+        Vec a = voice(fs, 4.0, -18.0), L(a.size()), R(a.size()); bool bad = false;
+        gAllocs = 0; gCountAlloc = true;
+        for (size_t p = 0, blk = 0; p < a.size(); p += 512, ++blk) {
+            Extras e; e.trimDb = (float)(blk % 3) * 6.f - 6.f; e.toneDb = (float)(blk % 5) - 2.f; e.mix = (float)(blk % 4) / 3.f; e.outDb = (float)(blk % 2) * 6.f;
+            e.special = (float)(blk % 3) / 2.f; e.autoIn = blk % 7 != 0; e.autoGain = blk % 5 != 0; e.option = (float)(blk % 2);
+            c.setExtras(e); c.setKeySel((int)(blk % 13), (int)(blk % 3)); c.setClassic(blk % 40 >= 30); c.setKnob((float)(blk % 11) / 10.f, voicings()[(size_t)m]);
+            c.process(&a[p], nullptr, &L[p], &R[p], (int)std::min<size_t>(512, a.size() - p));
+        }
+        gCountAlloc = false;
+        for (size_t i = 0; i < L.size(); ++i) if (!std::isfinite(L[i]) || !std::isfinite(R[i]) || std::fabs(L[i]) > 4.f) bad = true;
+        std::printf("[11] %-10s réglages extrêmes et bascules : %s, %ld allocation(s)\n", nm(m), bad ? "SORTIE INVALIDE" : "sortie finie", gAllocs);
+        CHECK(!bad && gAllocs == 0, "%s : sortie invalide ou allocation en temps réel (%ld)", nm(m), gAllocs);
+        const Vec x = voice(fs, 2.0, -18.0); auto ref = run(m, 0.7f, x, fs, 512); double worst = -400;
+        for (int b : {1, 7, 64, 333, 2048, 8192}) { if (quick && (b == 1 || b == 8192)) continue; auto o = run(m, 0.7f, x, fs, b); worst = std::max(worst, errDb(o.L, ref.L, 0, 0)); }
+        std::printf("[11] %-10s blocs 1 à 8192 : écart max à la référence (512) %.1f dB\n", nm(m), worst);
+        CHECK(worst < -100.0, "%s : la sortie dépend de la taille des blocs (%.1f dB)", nm(m), worst);
+    }
+    // [12] Mix 0 = sec retardé exact ; bypass (même Fader que le processeur) exact et sans clic
+    for (int m = 0; m < 4; ++m) {
+        Extras e; e.mix = 0.f; e.toneDb = 4.f; e.special = 1.f; const Vec a = voice(fs, 2.0, -18.0), b = voice(fs, 2.0, -20.0, 230.0);
+        auto o = run(m, 0.8f, a, fs, 480, e, [](Chain&, int) {}, &b);
+        const double db = std::max(errDb(o.L, a, o.lat, 0), errDb(o.R, b, o.lat, 0));
+        Chain c; Vec sc(4096); c.select(m);
+        auto bm = bypassfx::measure(fs, [&] { Chain t; t.select(m); return t.latency(); }(), 512, [&] { c.prepare(fs, 512); }, [&](float* l, float* r, int n) { c.setKnob(0.6f, voicings()[(size_t)m]); c.process(l, r, l, r ? r : sc.data(), n); });
+        // saut au basculement : < -60 dBFS, ou pas plus grand que la plus forte pente du signal traité lui-même (harmoniques ajoutées)
+        std::printf("[12] %-10s mix 0 : écart %.1f dB ; bypass : erreur %.1f dB, saut au basculement %.1f dBFS (pente max du signal seul %.1f)\n", nm(m), db, bm.exactDb, bm.jumpDb, bm.plainDb);
+        CHECK(db < -120.0 && bm.exactDb < -120.0 && bm.jumpDb < std::max(-60.0, bm.plainDb + 0.5), "%s : mix 0 / bypass non exacts", nm(m));
+    }
+    // [13] Compatibilité : le moteur Classique de la chaîne = l'ancienne chaîne (classic::Chain) à l'échantillon près, latence d'origine
+    for (int m = 0; m < 4; ++m) {
+        const Vec x = voice(fs, 3.0, -18.0);
+        auto o = run(m, 0.5f, x, fs, 512, Extras{}, [](Chain&, int) {}, nullptr, true);
+        classic::Chain c; c.prepare(fs, 512); c.setExtras(Extras{}); Vec L(x.size()), R(x.size());
+        for (size_t p = 0; p < x.size(); p += 512) { c.setKnob(0.5f, classic::voicings()[(size_t)m]); c.process(&x[p], nullptr, &L[p], &R[p], (int)std::min<size_t>(512, x.size() - p)); }
+        const double db = errDb(o.L, L, 0, 0);
+        std::printf("[13] %-10s Classique : latence %d (d'origine 814 à 48 kHz), écart à l'ancienne chaîne %.1f dB\n", nm(m), o.lat, db);
+        CHECK(o.lat == c.latency() && db < -200.0, "%s : le mode Classique ne reproduit pas l'ancienne chaîne (%.1f dB)", nm(m), db);
+    }
+    // [14] CPU par instance (48 kHz, blocs de 256), voix de synthèse, potard à 5 et à 10
+    if (cpu) for (int m = 0; m < 4; ++m) for (float k : {0.5f, 1.f}) {
+        const Vec x = voice(fs, 10.0, -18.0); Vec L(x.size()), R(x.size());
+        Chain c; c.select(m); c.prepare(fs, 256); double best = 1e9;
+        for (int rep = 0; rep < 3; ++rep) {
+            const auto t0 = std::chrono::steady_clock::now();
+            for (size_t p = 0; p < x.size(); p += 256) { c.setKnob(k, voicings()[(size_t)m]); c.process(&x[p], nullptr, &L[p], &R[p], (int)std::min<size_t>(256, x.size() - p)); }
+            best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        }
+        const double pc = 100.0 * best / 10.0;
+        std::printf("[14] %-10s k=%.0f : %.2f %% d'un cœur\n", nm(m), k * 10, pc);
+        // objectif < 7 % ; Poupée : TuneCore (détection + LPC des formants) coûte à lui seul ~4,5-5,5 % : borne à 9 %
+        const double lim = m == 2 ? 9.0 : 7.0;
+        CHECK(pc < lim, "%s : CPU %.2f %% (objectif < %.0f %%)", nm(m), pc, lim);
+    }
+    // [15] Vraie prise (si fournie) : niveau tenu, pas de pic > 1, caractère attendu
+    Vec in; double sr = 44100;
+    if (wav && readWav(wav, in, sr)) {
+        std::printf("[15] prise : %.1f s à %.0f Hz\n", (double)in.size() / sr, sr);
+        for (int m = 0; m < 4; ++m) for (float k : {0.f, 0.5f, 1.f}) {
+            auto o = run(m, k, in, sr); float pk = 0; bool bad = false;
+            for (size_t i = 0; i < o.L.size(); ++i) { if (!std::isfinite(o.L[i])) bad = true; pk = std::max(pk, std::fabs(o.L[i])); }
+            const double d = rmsDb(o.L, (size_t)o.lat, o.L.size()) - rmsDb(in, 0, in.size() - (size_t)o.lat);
+            std::printf("     %-10s k=%.0f : niveau %+5.1f dB, crête %.2f\n", nm(m), k * 10, d, pk);
+            CHECK(!bad && pk <= 1.0f && std::fabs(d) < 2.5, "%s k=%.0f : niveau %+.1f dB ou crête %.2f", nm(m), k * 10, d, pk);
+            if (k > 0.f) { char fn[160]; std::snprintf(fn, sizeof fn, "/tmp/onek_%s_%d.raw", voicings()[(size_t)m].id, (int)(k * 10)); if (FILE* f = std::fopen(fn, "wb")) { std::fwrite(o.L.data(), 4, o.L.size(), f); std::fclose(f); } }
+        }
+    } else std::printf("[15] pas de prise WAV fournie : test ignoré\n");
     std::printf(fails ? "\n%d ECHEC(S)\n" : "\nTESTS UN-POTARD OK\n", fails);
     return fails ? 1 : 0;
 }

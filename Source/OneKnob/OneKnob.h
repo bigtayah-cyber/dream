@@ -1,107 +1,31 @@
-// Plugins « un seul potard » : un potard CARACTÈRE (0–10) pilote toute une chaîne vocale.
-// C++ pur (sans JUCE). Les réglages de chaque voicing sont des HYPOTHÈSES de travail, calibrées à l'oreille,
-// pas des mesures : aucune source publique ne documente la chaîne réelle de ces voix.
+// Plugins « un seul potard » : un potard CARACTÈRE (0–10) pilote toute une chaîne vocale. C++ pur (sans JUCE), sans allocation dans
+// process(). Deux moteurs :
+//  - ACTUEL (défaut des nouvelles instances) : un modèle par plugin (OneKnobModels.h), courbes de macro à points d'arrêt, dynamique
+//    AVANT l'espace, bus d'espace parallèle, latence propre au modèle (0 pour Gorge et Patine).
+//  - CLASSIQUE (ClassicChain.h) : l'ancien son, pour les projets enregistrés avant la version d'état 2.
+// Chaîne actuelle : entrée (NaN/inf -> 0) -> milieu/côté -> trim -> détecteur de voix + auto-entrée (figée hors voix) -> modèle (mono)
+// -> gain d'entrée rendu, sonie étalonnée + auto-gain fin (±3 dB, sur la voix) -> ton -> porte de pause -> côté (s'efface quand on
+// tourne) -> limiteur de crête (inactif sous -1 dBFS) -> mélange avec le sec retardé -> sortie.
+// À k = 0 : sortie = entrée retardée de la latence déclarée (aucune reverb, saturation ni compression résiduelle).
 #pragma once
 #include <algorithm>
 #include <cmath>
 #include <vector>
-#include "../Engine.h"
+#include "OneKnobShared.h"
+#include "OneKnobDsp.h"
+#include "OneKnobModels.h"
+#include "ClassicChain.h"
+#include "../Kit/Sanitize.h"
 
 namespace onek {
 
-constexpr float kPi = 3.14159265358979f;
-
-// Filtre biquad RBJ.
-struct Biquad {
-    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
-    void reset() { z1 = z2 = 0; }
-    void set(float nb0, float nb1, float nb2, float na0, float na1, float na2) { b0 = nb0 / na0; b1 = nb1 / na0; b2 = nb2 / na0; a1 = na1 / na0; a2 = na2 / na0; }
-    void highpass(float sr, float f, float q = 0.707f) { const float w = 2 * kPi * f / sr, c = std::cos(w), a = std::sin(w) / (2 * q); set((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + a, -2 * c, 1 - a); }
-    void lowpass(float sr, float f, float q = 0.707f) { const float w = 2 * kPi * f / sr, c = std::cos(w), a = std::sin(w) / (2 * q); set((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + a, -2 * c, 1 - a); }
-    void lowShelf(float sr, float f, float db) {
-        const float A = std::pow(10.f, db / 40.f), w = 2 * kPi * f / sr, c = std::cos(w), s = std::sin(w), al = s / 2 * std::sqrt(2.f), t = 2 * std::sqrt(A) * al;
-        set(A * ((A + 1) - (A - 1) * c + t), 2 * A * ((A - 1) - (A + 1) * c), A * ((A + 1) - (A - 1) * c - t), (A + 1) + (A - 1) * c + t, -2 * ((A - 1) + (A + 1) * c), (A + 1) + (A - 1) * c - t);
-    }
-    void highShelf(float sr, float f, float db) {
-        const float A = std::pow(10.f, db / 40.f), w = 2 * kPi * f / sr, c = std::cos(w), s = std::sin(w), al = s / 2 * std::sqrt(2.f), t = 2 * std::sqrt(A) * al;
-        set(A * ((A + 1) + (A - 1) * c + t), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - t), (A + 1) - (A - 1) * c + t, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - t);
-    }
-    float process(float x) { const float y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; }
-};
-
-// Compresseur feed-forward, détection crête liée stéréo, genou doux.
-struct Comp {
-    float thr = -18.f, ratio = 3.f, makeup = 0.f, env = 0.f, aC = 0.f, rC = 0.f, gr = 0.f;
-    void prepare(float sr, float attackMs = 6.f, float releaseMs = 120.f) { setTimes(sr, attackMs, releaseMs); env = 0; gr = 0; }
-    void setTimes(float sr, float attackMs, float releaseMs) { aC = std::exp(-1.f / (attackMs * 1e-3f * sr)); rC = std::exp(-1.f / (releaseMs * 1e-3f * sr)); }
-    float gain(float l, float r) {
-        const float a = std::max(std::fabs(l), std::fabs(r));
-        env = a > env ? aC * env + (1 - aC) * a : rC * env + (1 - rC) * a;
-        const float db = 20.f * std::log10(env + 1e-9f), knee = 6.f, over = db - thr;
-        float red = 0.f;
-        if (over > knee / 2) red = over * (1.f - 1.f / ratio);
-        else if (over > -knee / 2) red = (1.f - 1.f / ratio) * (over + knee / 2) * (over + knee / 2) / (2 * knee);
-        gr = red;
-        return std::pow(10.f, (-red + makeup) / 20.f);
-    }
-};
-
-// De-esser : atténue la bande haute quand elle dépasse un seuil.
-struct DeEss {
-    Biquad hp; float env = 0.f, aC = 0.f, rC = 0.f, thr = 0.05f, amt = 0.f;
-    void prepare(float sr) { hp.highpass(sr, 5500.f, 0.8f); hp.reset(); aC = std::exp(-1.f / (0.0007f * sr)); rC = std::exp(-1.f / (0.03f * sr)); env = 0; }
-    float process(float x) {
-        const float hf = hp.process(x), lf = x - hf, a = std::fabs(hf);
-        env = a > env ? aC * env + (1 - aC) * a : rC * env + (1 - rC) * a;
-        const float g = env > thr ? std::pow(thr / env, 0.6f * amt) : 1.f;
-        return lf + hf * g;
-    }
-};
-
-// tanh antidérivée (ADAA d'ordre 1) : repliement réduit d'environ 13 dB sans latence entière (demi-échantillon de retard de groupe).
-// Calcul en double : la différence de deux log(cosh) voisins perd toute précision en float.
-struct TanhAdaa {
-    double xp = 0.0, fp = 0.0;
-    static double lcosh(double x) {
-        x = std::fabs(x);
-        if (x < 0.5) { const double x2 = x * x; return x2 * (0.5 - x2 * (1.0 / 12.0 - x2 * (1.0 / 45.0 - x2 * (17.0 / 2520.0)))); }
-        return x + std::log1p(std::exp(-2.0 * x)) - 0.6931471805599453;
-    }
-    void reset() { xp = 0.0; fp = 0.0; }
-    float process(float xf) {
-        const double x = xf, f = lcosh(x), dx = x - xp;
-        const double y = std::fabs(dx) > 1e-6 ? (f - fp) / dx : std::tanh(0.5 * (x + xp));
-        xp = x; fp = f;
-        return (float)y;
-    }
-};
-
-// Réglages dérivés du potard.
-struct Mapped {
-    voile::Params eng;       // moteur : tension, mordant, brume, halo
-    float hpHz = 20.f, lpHz = 20000.f;
-    float lowDb = 0.f, highDb = 0.f;         // plateaux grave (180 Hz) et aigu (9 kHz)
-    float comp = 0.f;                        // 0..1 : intensité de compression
-    float deess = 0.f;                       // 0..1
-    float slapMs = 0.f, slapMix = 0.f;       // écho court
-    float lofi = 0.f;                        // 0..1 : réduction de bande + grain
-    float level = 1.f;                       // 0..1 : part du son traité (1 = tout)
-    // réglage spécifique du volet avancé (voir Voicing::spec)
-    float width = 1.f;                       // largeur stéréo des doubles (0 mono .. 2)
-    float atkMs = 6.f, relMs = 120.f;        // temps du compresseur
-    float driveDb = 0.f;                     // attaque de la saturation d'entrée
-};
-
-// Réglages du volet avancé (hors potard principal).
-struct Extras {
-    float trimDb = 0.f;      // entrée, ±12 dB
-    bool autoIn = true;      // auto-entrée : niveau RMS ramené vers -18 dBFS avant les seuils fixes
-    float toneDb = 0.f;      // inclinaison grave/aigu, ±6 dB
-    float mix = 1.f;         // 0 = sec (retardé de la latence), 1 = traité
-    float outDb = 0.f;       // sortie, ±12 dB
-    float special = -1.f;    // 0..1 ; < 0 : valeur d'origine du modèle
-    bool autoGain = true;    // compensation de volume de sortie
-};
+// Briques historiques réutilisées par d'autres plugins de la suite (OrbeChain, Cabine, Master, Synth, Sampler, 808, Beat) :
+// mêmes classes, au caractère près, que l'ancien OneKnob.h (copiées dans ClassicChain.h). Ne pas modifier : elles font leur son.
+using Biquad = classic::Biquad;
+using Comp = classic::Comp;
+using DeEss = classic::DeEss;
+using TanhAdaa = classic::TanhAdaa;
+using classic::lerp;
 
 struct Voicing {
     const char* id;        // identifiant technique
@@ -109,103 +33,33 @@ struct Voicing {
     const char* tag;       // ligne de description gravée
     const char* serial;    // numéro de modèle gravé
     float defaultK;        // réglage initial
-    void (*map)(float k, Mapped&);
     const char* specName;  // réglage spécifique du volet avancé
-    const char* specTip;   // infobulle
+    const char* specTip;
     float specDefault;     // 0..1
-    void (*spec)(float s, Mapped&);
+    const char* optName;   // option propre au modèle (paramètre « opt »)
+    const char* optTip;
+    float optDefault;      // 0 ou 1
+    bool pitch;            // le modèle corrige la hauteur (menus Tonalité / Gamme)
 };
-
-inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
-
-// ---- Les quatre voicings. k va de 0 (presque transparent) à 1. Hypothèses d'écoute, pas des mesures. ----
-
-// Rap mélancolique : retune moyen puis audible, doubles, reverb sombre, lo-fi en fin de course.
-inline void mapGrainNord(float k, Mapped& m) {
-    m.eng.tension = 0.55f * k + 0.15f * k * k;
-    m.eng.mordant = 0.05f + 0.30f * k;
-    m.eng.brume = 0.08f + 0.62f * k;
-    m.eng.halo = 0.10f + 0.40f * k;
-    m.eng.deadCents = 14.f - 9.f * k;                // peu de zone morte quand on pousse
-    m.eng.retuneMs = lerp(140.f, 30.f, k);           // correction lente puis franche
-    m.comp = 0.25f + 0.35f * k;
-    m.highDb = -1.f - 4.f * k;                       // reverb et ton sombres
-    m.lpHz = k < 0.6f ? 19000.f : lerp(19000.f, 7500.f, (k - 0.6f) / 0.4f);
-    m.lofi = std::max(0.f, (k - 0.6f) / 0.4f);
-    m.hpHz = 45.f;
-}
-// Voix gutturale, nonchalante : grain rauque, compression, slapback discret, reverb sombre derrière. Pas d'autotune.
-inline void mapGorge(float k, Mapped& m) {
-    m.eng.tension = 0.f;
-    m.eng.mordant = 0.12f + 0.42f * k;
-    m.eng.brume = 0.04f + 0.24f * k;
-    m.eng.halo = 0.18f * k;
-    m.comp = 0.35f + 0.55f * k;
-    m.lowDb = 0.5f + 3.5f * k;
-    m.highDb = -0.5f - 2.5f * k;
-    m.deess = 0.3f + 0.5f * k;
-    m.slapMs = 85.f; m.slapMix = 0.22f * k;
-    m.hpHz = 50.f;
-}
-// Hyperpop sombre : hauteur nette, doubles +12/-5, brillance, saturation, compression dure. (Pas de formants : voir README.)
-inline void mapPoupee(float k, Mapped& m) {
-    m.eng.tension = 0.35f + 0.65f * k;
-    m.eng.mordant = 0.10f + 0.45f * k;
-    m.eng.halo = 0.10f + 0.60f * k;
-    m.eng.deadCents = 8.f - 7.f * k;
-    m.eng.retuneMs = lerp(60.f, 4.f, k);            // hard-tune net en fin de course
-    m.eng.brume = k < 0.5f ? 0.05f : lerp(0.05f, 0.32f, (k - 0.5f) / 0.5f);
-    m.comp = 0.40f + 0.50f * k;
-    m.highDb = 1.f + 5.f * k;
-    m.slapMs = 55.f; m.slapMix = k < 0.5f ? 0.f : 0.16f * (k - 0.5f) / 0.5f;
-    m.hpHz = 70.f;
-}
-// Caractère générique (artiste non identifié) : saturation douce, compression parallèle, air, doubles, reverb courte.
-inline void mapPatine(float k, Mapped& m) {
-    m.eng.tension = 0.f;
-    m.eng.mordant = 0.05f + 0.35f * k;
-    m.eng.brume = 0.05f + 0.22f * k;
-    m.eng.halo = 0.25f * k;
-    m.comp = 0.30f + 0.50f * k;
-    m.highDb = 4.5f * k;
-    m.hpHz = 45.f;
-}
-
-// Réglages spécifiques (0..1, valeur d'origine = rendu historique du modèle).
-inline void specGrainNord(float s, Mapped& m) { m.width = 2.f * s; }                                    // 0,5 = 100 %
-inline void specGorge(float s, Mapped& m) { m.atkMs = 6.f * std::pow(5.f, 1.f - 2.f * s); m.relMs = 120.f * std::pow(2.5f, 1.f - 2.f * s); }  // 0,5 = 6 ms / 120 ms
-inline void specPoupee(float s, Mapped& m) { m.highDb += 10.f * (s - 0.5f); }                          // ±5 dB d'aigus
-inline void specPatine(float s, Mapped& m) { m.driveDb = 18.f * s; }
 
 inline const std::vector<Voicing>& voicings() {
     static const std::vector<Voicing> v = {
-        {"grainnord", "Grain Nord", "Retune, doubles, brume sombre", "DW-501", 0.45f, mapGrainNord,
-         "Largeur", "Largeur stéréo des doubles et de la brume : 0 = mono, 50 = d'origine, 100 = très large.", 0.5f, specGrainNord},
-        {"gorge", "Gorge", "Grain rauque, compression, slapback", "DW-502", 0.50f, mapGorge,
-         "Vitesse", "Vitesse du compresseur : bas = attaque lente qui laisse passer les consonnes, haut = attaque et relâche rapides.", 0.5f, specGorge},
-        {"poupee", "Poupée", "Hauteur nette, doubles, brillance", "DW-503", 0.50f, mapPoupee,
-         "Brillance", "Brillance : aigus au-dessus de 9 kHz, ±5 dB autour du réglage d'origine.", 0.5f, specPoupee},
-        {"patine", "Patine", "Saturation, compression parallèle, air", "DW-504", 0.45f, mapPatine,
-         "Drive", "Drive : saturation douce en entrée de chaîne (0 à +18 dB d'attaque, niveau compensé).", 0.f, specPatine},
+        {"grainnord", "Grain Nord", "Retune, doubles, brume tonale", "DW-501", 0.45f,
+         "Largeur", "Largeur stéréo des doubles et de la brume : 0 = mono, 50 = d'origine, 100 = très large.", 0.5f,
+         "Brume tonale", "Brume tonale : la queue de la reverb est filtrée par des résonateurs accordés sur la gamme détectée (elle « chante » la tonalité). Sans tonalité fiable : reverb normale.", 1.f, true},
+        {"gorge", "Gorge", "Lampes, grain, râle, slapback", "DW-502", 0.50f,
+         "Vitesse", "Vitesse du compresseur à lampes : bas = lent et doux, 50 = d'origine (relâche double), haut = rapide.", 0.5f,
+         "Râle", "Râle : sous-harmonique et souffle synchrones à la voix, sur les syllabes graves voisées (fin de course). Sans latence.", 1.f, false},
+        {"poupee", "Poupée", "Hard-tune, formants, octave, brillance", "DW-503", 0.50f,
+         "Brillance", "Brillance : air dynamique (contrôlé par le de-esser) autour du réglage d'origine ; sous 50 %, aigus atténués.", 0.5f,
+         "Octave", "Octave : double à l'octave supérieure, formants resserrés (pas de voix de souris), au milieu de la course.", 1.f, true},
+        {"patine", "Patine", "Préampli, opto, air, courbe cible", "DW-504", 0.45f,
+         "Drive", "Drive : attaque du préampli à triode (0 à +18 dB, niveau compensé).", 0.f,
+         "Cible", "Cible : égaliseur lent à 8 bandes qui rapproche le timbre moyen d'une courbe « voix pop finie » (le potard dose la distance).", 1.f, false},
     };
     return v;
 }
-
-// Étage d'auto-entrée : suiveur RMS lent (≈ 1,2 s), muet sous -55 dBFS (le silence ne fait pas monter le gain),
-// gain lissé ramenant le niveau vers -18 dBFS RMS, borné à ±24 dB. Rend les seuils fixes indépendants du niveau de la prise.
-struct AutoInput {
-    float ms = 0.f, fast = 0.f, g = 1.f, cMs = 0.f, cFast = 0.f, cG = 0.f;
-    static constexpr float target = 0.12589254f;  // -18 dBFS RMS
-    void prepare(float sr) { cMs = 1.f / (1.2f * sr); cFast = 1.f / (0.05f * sr); cG = 1.f / (0.25f * sr); ms = target * target; fast = 0.f; g = 1.f; }
-    float process(float x, bool on) {
-        const float x2 = x * x;
-        fast += (x2 - fast) * cFast;
-        if (fast > 3.2e-6f) ms += (x2 - ms) * cMs;   // -55 dBFS
-        const float want = on ? std::clamp(target / std::sqrt(ms + 1e-12f), 0.063f, 15.85f) : 1.f;
-        g += (want - g) * cG;
-        return x * g;
-    }
-};
+inline int indexOf(const Voicing& v) { const auto& a = voicings(); const int i = (int)(&v - a.data()); return i >= 0 && i < (int)a.size() ? i : 0; }
 
 // Valeur lissée (≈ 20 ms), saisie directe à la première consigne.
 struct Glide {
@@ -215,168 +69,218 @@ struct Glide {
     float next() { v += (t - v) * c; if (std::fabs(t - v) < 1e-7f) v = t; return v; }
 };
 
-// Chaîne complète. Latence = celle du moteur de hauteur (constante, déclarée à l'hôte).
-// Ordre : entrée (trim, auto-entrée) → [drive] → passe-haut → moteur → plateaux du modèle + ton → compression → de-esser
-// → slapback → lo-fi → passe-bas → largeur → auto-gain → limiteur doux → mélange avec le sec retardé → sortie.
 class Chain {
 public:
+    static constexpr int kSub = 32;
     void prepare(double sampleRate, int maxBlock) {
         sr = (float)sampleRate;
-        eng.prepare(sampleRate);
         maxN = std::max(1, maxBlock);
-        tmpL.assign((size_t)maxN, 0.f); tmpR.assign((size_t)maxN, 0.f); mono.assign((size_t)maxN, 0.f);
-        slapL.init((int)(0.2 * sampleRate)); slapR.init((int)(0.2 * sampleRate));
-        dryL.init(eng.latency() + maxN + 8); dryR.init(eng.latency() + maxN + 8);
-        for (int c = 0; c < 2; ++c) { hp[c].reset(); lp[c].reset(); lowS[c].reset(); highS[c].reset(); tiltL[c].reset(); tiltH[c].reset(); ds[c].prepare(sr); }
-        comp.prepare(sr);
-        autoIn.prepare(sr); drv.reset();
-        trimG.prepare(sr); mixG.prepare(sr); outG.prepare(sr); widthG.prepare(sr); widthG.set(M.width);
-        lastHp = lastLp = lastLow = lastHigh = lastTone = -100.f; lastAtk = lastRel = -1.f;
-        inMs = outMs = 1e-6f; ag = 1.f; hold[0] = hold[1] = 0.f; hc = 0;
-        grAvg = 0.f; inDb = -100.f;
-        lim[0].reset(); lim[1].reset();
+        for (auto* v : {&inL, &inR, &xin, &core, &spL, &spR}) v->assign((size_t)maxN + kSub, 0.f);
+        (void)classic::voicings(); (void)voicings(); (void)dsp::sat::TriodeTable::get();   // tables statiques construites hors temps réel
+        classic.prepare(sampleRate, maxN);
+        gn.prepare(sampleRate); go.prepare(sampleRate); pu.prepare(sampleRate); pa.prepare(sampleRate);
+        int maxLat = classic.latency();
+        for (int m = 0; m < 4; ++m) maxLat = std::max(maxLat, modelLatency(m));
+        dryL.init(maxLat + maxN + 8); dryR.init(maxLat + maxN + 8); side.init(maxLat + 8); gLine.init(maxLat + 8);
+        curModel = wantModel; curClassic = wantClassic;
+        resetCommon();
+        primedRun = false;
     }
-    int latency() const { return eng.latency(); }
-    void setBpm(double b) { eng.setBpm(b); }
+    void select(int model) { wantModel = std::clamp(model, 0, 3); if (!primedRun) curModel = wantModel; }
+    void setClassic(bool c) { wantClassic = c; if (!primedRun) curClassic = c; }
+    bool classicActive() const { return curClassic; }
+    int latency() const { return wantClassic ? classic.latency() : modelLatency(wantModel); }
+    int maxLatency() const { return std::max(classic.latency(), modelLatency(wantModel)); }   // pour dimensionner les retards de l'hôte
+    void setBpm(double b) { bpm = (float)(b > 20.0 && b < 999.0 ? b : 120.0); classic.setBpm(bpm); }
     float outLevel() const { return peakOut; }
-    bool keyKnown() const { return eng.keyKnown(); }
-    int key() const { return eng.detectedKey(); }
-    int scale() const { return eng.detectedScale(); }
-    int keyStatus() const { return eng.keyStatus(); }   // 0 imposée, 1 auto verrouillée, 2 auto en recherche
-    // Sélecteur de tonalité : keyChoice 0 = Auto, 1..12 = C..B ; scaleChoice 0 = Auto, 1 = Majeur, 2 = Mineur.
-    void setKeySel(int keyChoice, int scaleChoice) { keyChoice_ = std::clamp(keyChoice, 0, 12); scaleChoice_ = std::clamp(scaleChoice, 0, 2); }
-    float gainReduction() const { return comp.gr; }
-    float meanReduction() const { return grAvg; }        // réduction moyenne du dernier bloc (dB)
-    float inputDb() const { return inDb; }               // niveau RMS après trim (dBFS), avant auto-entrée
-    float autoInGainDb() const { return 20.f * std::log10(autoIn.g); }
+    bool keyKnown() const {
+        if (curClassic) return classic.keyKnown();
+        if (curModel == 0) return gn.keys().haveKey;
+        if (curModel == 2) return keyChoice_ > 0;
+        return false;
+    }
+    int key() const { return curClassic ? classic.key() : curModel == 0 ? gn.keys().effKey : std::max(0, keyChoice_ - 1); }
+    int scale() const { return curClassic ? classic.scale() : curModel == 0 ? gn.keys().effScale : (scaleChoice_ == 2 ? 2 : 1); }
+    int keyStatus() const { return curClassic ? classic.keyStatus() : curModel == 0 ? gn.keys().status() : 0; }   // 0 imposée/chromatique, 1 auto verrouillée, 2 recherche
+    void setKeySel(int keyChoice, int scaleChoice) { keyChoice_ = std::clamp(keyChoice, 0, 12); scaleChoice_ = std::clamp(scaleChoice, 0, 2); classic.setKeySel(keyChoice_, scaleChoice_); }
+    float gainReduction() const { return curClassic ? classic.gainReduction() : grNow; }
+    float meanReduction() const { return curClassic ? classic.meanReduction() : grAvg; }
+    float inputDb() const { return curClassic ? classic.inputDb() : inDb; }
+    float autoInGainDb() const { return curClassic ? classic.autoInGainDb() : vd.gDb; }
+    bool voiceActive() const { return vd.active; }
 
     void setExtras(const Extras& e) {
         X = e;
         trimG.set(std::pow(10.f, std::clamp(e.trimDb, -12.f, 12.f) / 20.f));
         mixG.set(std::clamp(e.mix, 0.f, 1.f));
         outG.set(std::pow(10.f, std::clamp(e.outDb, -12.f, 12.f) / 20.f));
+        classic.setExtras(e);
     }
-
     void setKnob(float k, const Voicing& v) {
-        Mapped m; m.eng.mix = 1.f; m.eng.outDb = 0.f;
-        m.eng.safe = true;
-        m.eng.autoKey = keyChoice_ == 0;  m.eng.key = keyChoice_ > 0 ? keyChoice_ - 1 : 0;
-        m.eng.autoScale = scaleChoice_ == 0;  m.eng.scale = scaleChoice_ > 0 ? scaleChoice_ : 1;
-        v.map(std::clamp(k, 0.f, 1.f), m);
-        if (v.spec) v.spec(std::clamp(X.special < 0.f ? v.specDefault : X.special, 0.f, 1.f), m);
-        M = m; eng.set(M.eng);
-        slapSamples = M.slapMs * 1e-3f * sr;
-        // compresseur : seuil et rapport suivent l'intensité (seuils fixes : l'auto-entrée en amont les rend indépendants du niveau)
-        comp.thr = -14.f - 14.f * M.comp; comp.ratio = 1.5f + 4.5f * M.comp; comp.makeup = 0.f;
-        if (M.atkMs != lastAtk || M.relMs != lastRel) { comp.setTimes(sr, M.atkMs, M.relMs); lastAtk = M.atkMs; lastRel = M.relMs; }
-        for (int c = 0; c < 2; ++c) ds[c].amt = M.deess;
-        widthG.set(M.width);
-        drvG = std::pow(10.f, M.driveDb / 20.f);
-        updateFilters();
+        select(indexOf(v));
+        kT = std::clamp(k, 0.f, 1.f);
+        if (wantClassic) classic.setKnob(kT, classic::voicings()[(size_t)wantModel]);
     }
 
-    // Entrée mono (inR nul) ou stéréo ; sortie stéréo. Peut être appelée en place. n ≤ maxBlock.
-    void process(const float* inL, const float* inR, float* outL, float* outR, int n) {
-        n = std::min(n, maxN);
-        if (!mixG.primed) setExtras(X);   // première consigne après prepare() : saisie sans glissement
-        float inSum = 0.f;
-        for (int i = 0; i < n; ++i) {
-            const float xl = inL[i], xr = inR ? inR[i] : xl;
-            dryL.push(xl); dryR.push(xr);                 // sec, avant tout traitement
-            const float raw = inR ? 0.5f * (xl + xr) : xl;
-            inMs += (raw * raw - inMs) * (1.f / (0.5f * sr));
-            float x = raw * trimG.next();
-            inSum += x * x;
-            x = autoIn.process(x, X.autoIn);
-            if (drvG > 1.001f) x = drv.process(x * drvG) / drvG * (1.f + 0.25f * (1.f - 1.f / drvG));
-            mono[(size_t)i] = hp[0].process(x);   // le moteur de hauteur ne voit que le signal filtré passe-haut
+    // Entrée mono (inR nul) ou stéréo ; sortie stéréo. Peut être appelée en place. n <= maxBlock (au-delà : découpé).
+    void process(const float* inLp, const float* inRp, float* outL, float* outR, int n) {
+        for (int p = 0; p < n; p += maxN) {
+            const int m = std::min(maxN, n - p);
+            processChunk(inLp + p, inRp ? inRp + p : nullptr, outL + p, outR + p, m);
         }
-        inDb = 10.f * std::log10(inSum / (float)std::max(1, n) + 1e-10f);
-        eng.process(mono.data(), nullptr, tmpL.data(), tmpR.data(), n);
-        const float lofiAmt = M.lofi;
-        const int hn = 1 + (int)(lofiAmt * 3.f);
-        const float cmpMix = 0.35f + 0.65f * std::min(1.f, M.comp * 1.2f);
-        const float invIn = 1.f / std::max(1e-3f, autoIn.g);
-        float grS = 0.f;
-        peakOut = 0.f;
-        for (int i = 0; i < n; ++i) {
-            float l = tmpL[(size_t)i], r = tmpR[(size_t)i];
-            l = lowS[0].process(highS[0].process(l)); r = lowS[1].process(highS[1].process(r));
-            l = tiltL[0].process(tiltH[0].process(l)); r = tiltL[1].process(tiltH[1].process(r));
-            // compression (parallèle : mélange du signal comprimé et du sec)
-            const float g = comp.gain(l, r);
-            grS += comp.gr;
-            l = l * (1.f - cmpMix * 0.6f) + l * g * (cmpMix * 0.6f);
-            r = r * (1.f - cmpMix * 0.6f) + r * g * (cmpMix * 0.6f);
-            if (M.deess > 0.f) { l = ds[0].process(l); r = ds[1].process(r); }
-            if (M.slapMix > 0.f) {
-                slapL.push(l); slapR.push(r);
-                const float sl = slapL.read(slapSamples), sr2 = slapR.read(slapSamples * 1.13f);
-                l += sl * M.slapMix; r += sr2 * M.slapMix;
-            }
-            if (lofiAmt > 0.001f) {   // grain lo-fi : échantillonnage retenu + quantification douce
-                if (++hc >= hn) { hc = 0; hold[0] = l; hold[1] = r; }
-                const float q = std::exp2(15.f - 4.f * lofiAmt);
-                l = std::round(hold[0] * q) / q; r = std::round(hold[1] * q) / q;
-            }
-            l = lp[0].process(l); r = lp[1].process(r);
-            {   // largeur M/S
-                const float w = widthG.next(), mid = 0.5f * (l + r), side = 0.5f * (l - r) * w;
-                l = mid + side; r = mid - side;
-            }
-            if (X.autoGain) {
-                // compensation de volume lente : la sortie garde le niveau d'entrée quel que soit le potard
-                outMs += ((l * l + r * r) * 0.5f - outMs) * (1.f / (0.5f * sr));
-                const float want = std::sqrt((inMs + 1e-9f) / (outMs + 1e-9f));
-                const float tgt = std::clamp(want, 0.35f, 2.0f);
-                ag += (tgt - ag) * 0.0004f;
-            } else {
-                ag += (invIn - ag) * 0.0004f;   // sans auto-gain : on rend seulement le gain de l'auto-entrée
-                outMs = inMs;
-            }
-            l *= ag; r *= ag;
-            const float wl = lim[0].process(l * 0.9f) / 0.9f * 0.95f;   // limiteur doux de sécurité (tanh ADAA : peu de repliement)
-            const float wr = lim[1].process(r * 0.9f) / 0.9f * 0.95f;
-            // sec retardé de la latence (lecture exacte, entière) ; tous les échantillons du bloc sont déjà poussés
-            const float back = (float)(eng.latency() + (n - 1 - i));
-            const float dl = dryL.read(back), dr = dryR.read(back);
-            const float mx = mixG.next(), og = outG.next();
-            outL[i] = (dl + (wl - dl) * mx) * og;
-            outR[i] = (dr + (wr - dr) * mx) * og;
-            peakOut = std::max(peakOut, std::max(std::fabs(outL[i]), std::fabs(outR[i])));
-        }
-        grAvg = grS / (float)std::max(1, n);
     }
 
 private:
-    void updateFilters() {
-        if (M.hpHz != lastHp) { for (auto& f : hp) f.highpass(sr, M.hpHz); lastHp = M.hpHz; }
-        if (M.lpHz != lastLp) { for (auto& f : lp) f.lowpass(sr, std::min(M.lpHz, 0.45f * sr)); lastLp = M.lpHz; }
-        if (M.lowDb != lastLow) { for (auto& f : lowS) f.lowShelf(sr, 180.f, M.lowDb); lastLow = M.lowDb; }
-        if (M.highDb != lastHigh) { for (auto& f : highS) f.highShelf(sr, 9000.f, M.highDb); lastHigh = M.highDb; }
-        const float t = std::clamp(X.toneDb, -6.f, 6.f);
-        if (std::fabs(t - lastTone) > 0.02f) {   // ton : inclinaison autour de 1 kHz (grave -t, aigu +t)
-            for (auto& f : tiltL) f.lowShelf(sr, 300.f, -t);
-            for (auto& f : tiltH) f.highShelf(sr, 3000.f, t);
-            lastTone = t;
-        }
+    int modelLatency(int m) const { return m == 0 ? gn.latency() : m == 1 ? go.latency() : m == 2 ? pu.latency() : pa.latency(); }
+    void resetCommon() {
+        vd.prepare(sr); gate.prepare(sr); lim.prepare(sr);
+        trimG.prepare(sr); mixG.prepare(sr); outG.prepare(sr);
+        tiltL.prepare(sr, 300.f, true); tiltH.prepare(sr, 3000.f, false);
+        kCur = kT; kPrimed = false; pIn = pOut = 1e-6f; agDb = 0.f; post = 1.f; phase = 0; pStep = 0.f; voiceNow = false;
+        kSmoothC = 1.f - std::exp(-(float)kSub / (0.05f * sr));
+        grAvg = grNow = 0.f; inDb = -100.f; peakOut = 0.f; fade = 1.f; fadeDir = 0;
+        std::fill(dryL.b.begin(), dryL.b.end(), 0.f); std::fill(dryR.b.begin(), dryR.b.end(), 0.f);
+        std::fill(side.b.begin(), side.b.end(), 0.f); std::fill(gLine.b.begin(), gLine.b.end(), 1.f);
     }
-    float sr = 48000.f, slapSamples = 0.f, peakOut = 0.f, drvG = 1.f;
-    float lastHp = -1, lastLp = -1, lastLow = -1, lastHigh = -1, lastTone = -100.f, lastAtk = -1.f, lastRel = -1.f;
-    float inMs = 1e-6f, outMs = 1e-6f, ag = 1.f, hold[2] = {0, 0};
-    float grAvg = 0.f, inDb = -100.f;
-    int hc = 0, keyChoice_ = 0, scaleChoice_ = 0, maxN = 512;
-    Mapped M;
+    // Réinitialise le moteur entrant (aucune allocation : mêmes tailles qu'au premier prepare).
+    void switchEngine() {
+        curModel = wantModel; curClassic = wantClassic;
+        if (curClassic) classic.prepare(sr, maxN);
+        else if (curModel == 0) gn.prepare(sr); else if (curModel == 1) go.prepare(sr); else if (curModel == 2) pu.prepare(sr); else pa.prepare(sr);
+        const bool prim = mixG.primed; resetCommon(); if (prim) setExtras(X);
+        if (curClassic) classic.setKnob(kT, classic::voicings()[(size_t)curModel]);
+    }
+    // Sonie étalonnée hors ligne (dB ajoutés selon k, mesurée sur une prise rap et une voix chantée de synthèse) : le niveau de la voix
+    // ne bouge plus quand on tourne le potard ; l'auto-gain fin ne corrige que le reste (±3 dB).
+    float loudnessDb(float k) const {
+        static const Curve c0{{0.f, 0.f}, {0.25f, -1.1f}, {0.5f, -1.6f}, {0.75f, -1.5f}, {1.f, -0.9f}};
+        static const Curve c1{{0.f, 0.f}, {0.25f, -0.5f}, {0.5f, -0.5f}, {0.75f, -0.6f}, {1.f, -0.9f}};
+        static const Curve c2{{0.f, 0.f}, {0.25f, 4.1f}, {0.5f, 4.6f}, {0.75f, 3.8f}, {1.f, 2.4f}};
+        static const Curve c3{{0.f, 0.f}, {0.25f, 0.3f}, {0.5f, 1.4f}, {0.75f, 3.f}, {1.f, 3.8f}};
+        const Curve* t[4] = {&c0, &c1, &c2, &c3};
+        return (*t[curModel])(k);
+    }
+
+    void processChunk(const float* inLp, const float* inRp, float* outL, float* outR, int n) {
+        if (!mixG.primed) setExtras(X);   // première consigne après prepare() : saisie sans glissement
+        const bool wantSwitch = wantClassic != curClassic || (wantModel != curModel);
+        if (wantSwitch && !primedRun) switchEngine();
+        primedRun = true;
+        // copie nettoyée de l'entrée (G2 : un NaN/inf d'un plugin précédent ne doit rien empoisonner)
+        for (int i = 0; i < n; ++i) { inL[(size_t)i] = inLp[i]; inR[(size_t)i] = inRp ? inRp[i] : inLp[i]; }
+        kit::sanitize(inL.data(), n); kit::sanitize(inR.data(), n);
+        const bool stereo = inRp != nullptr;
+        if (curClassic) classic.process(inL.data(), stereo ? inR.data() : nullptr, outL, outR, n);
+        else processModel(n, stereo, outL, outR);
+        // bascule de moteur ou de modèle : fondu de sortie (5 ms), puis le moteur entrant repart à zéro avec un fondu d'entrée
+        if (wantSwitch && primedRun) {
+            const float step = 1.f / (0.005f * sr);
+            for (int i = 0; i < n; ++i) { fade = std::max(0.f, fade - step); outL[i] *= fade; outR[i] *= fade; }
+            if (fade <= 0.f) { switchEngine(); fade = 0.f; fadeDir = 1; }
+        } else if (fadeDir > 0) {
+            const float step = 1.f / (0.005f * sr);
+            for (int i = 0; i < n; ++i) { fade = std::min(1.f, fade + step); outL[i] *= fade; outR[i] *= fade; }
+            if (fade >= 1.f) fadeDir = 0;
+        }
+        peakOut = 0.f;
+        for (int i = 0; i < n; ++i) peakOut = std::max(peakOut, std::max(std::fabs(outL[i]), std::fabs(outR[i])));
+    }
+
+    // Tranches de kSub échantillons calées sur l'index ABSOLU (et non sur le début du bloc de l'hôte) : les réglages sont recalculés
+    // aux mêmes instants quelle que soit la taille des blocs (1 à 8192), donc la sortie ne dépend pas du découpage de l'hôte.
+    void beginSub() {
+        kCur += (kT - kCur) * kSmoothC;   // potard lissé (~50 ms) : aucune marche, même quand l'hôte saute de 0 à 10
+        if (std::fabs(kT - kCur) < 1e-5f) kCur = kT;
+        Ctx c; c.k = kCur; c.spec = X.special < 0.f ? voicings()[(size_t)curModel].specDefault : X.special;
+        c.opt = X.option < 0.f ? voicings()[(size_t)curModel].optDefault : X.option;
+        c.bpm = bpm; c.keyChoice = keyChoice_; c.scaleChoice = scaleChoice_;
+        if (curModel == 0) gn.update(c); else if (curModel == 1) go.update(c); else if (curModel == 2) pu.update(c); else pa.update(c);
+        fadeK = smoothstep(0.f, 0.1f, kCur); sideG = 1.f - smoothstep(0.f, 0.2f, kCur);
+        tiltL.setDb(-std::clamp(X.toneDb, -6.f, 6.f)); tiltH.setDb(std::clamp(X.toneDb, -6.f, 6.f));
+        voiceNow = vd.active;
+        // sonie : table étalonnée + auto-gain fin mesuré sur la voix seulement (mesure avant correction : pas de boucle)
+        const float base = X.autoGain ? loudnessDb(kCur) : 0.f;
+        baseLin = dbToLin(base * fadeK);
+        pStep = (dbToLin((base + agDb) * fadeK) - post) / (float)kSub;
+        pI = pO = 0.f;
+    }
+    void endSub() {
+        vd.update(kSub, X.autoIn);
+        grNow = curModel == 0 ? gn.effGr() : curModel == 1 ? go.effGr() : curModel == 2 ? pu.effGr() : pa.effGr();
+        grS += grNow; ++nSub;
+        if (vd.open && X.autoGain) {
+            const float c = 1.f - std::exp(-(float)kSub / (3.f * sr));
+            pIn += (pI / (float)kSub - pIn) * c; pOut += (pO / (float)kSub - pOut) * c;
+            const float want = std::clamp(10.f * std::log10((pIn + 1e-12f) / (pOut + 1e-12f)), -3.f, 3.f);
+            agDb += std::clamp(want - agDb, -(float)kSub / sr, (float)kSub / sr);
+        } else if (!X.autoGain) agDb *= 0.99f;
+    }
+    void processModel(int n, bool stereo, float* outL, float* outR) {
+        const float fL = (float)modelLatency(curModel);
+        float inSum = 0.f; grS = 0.f; nSub = 0;
+        if (!kPrimed) {   // premier bloc : réglages saisis sans glissement, compresseurs calés sur leur mélange (k = 0 exactement neutre)
+            kCur = kT; kPrimed = true; phase = 0; beginSub();
+            if (curModel == 0) gn.settle(); else if (curModel == 1) go.settle(); else if (curModel == 2) pu.settle(); else pa.settle();
+            phase = 0; post = dbToLin(0.f); kCur = kT; beginSub(); post += 0.f; phase = -1;
+        }
+        for (int p = 0; p < n;) {
+            if (phase < 0) phase = 0; else if (phase == 0) beginSub();
+            const int m = std::min(kSub - phase, n - p);
+            for (int i = 0; i < m; ++i) {
+                const float xl = inL[(size_t)(p + i)], xr = inR[(size_t)(p + i)];
+                dryL.push(xl); dryR.push(xr);
+                const float mid = stereo ? 0.5f * (xl + xr) : xl, sd = stereo ? 0.5f * (xl - xr) : 0.f;
+                const float t = trimG.next();
+                side.push(sd * t);
+                const float x = mid * t;
+                inSum += x * x;
+                vd.accumulate(x);
+                const float g = vd.nextGain();
+                gLine.push(g);
+                xin[(size_t)i] = x * g;
+            }
+            Slice s{xin.data(), core.data(), spL.data(), spR.data(), m, voiceNow};
+            if (curModel == 0) gn.process(s); else if (curModel == 1) go.process(s); else if (curModel == 2) pu.process(s); else pa.process(s);
+            for (int i = 0; i < m; ++i) {
+                post += pStep;
+                const float back = fL + (float)(m - 1 - i);
+                const float inv = 1.f / std::max(1e-6f, gLine.read(back));
+                const float dl = dryL.read(back), dr = dryR.read(back);
+                const float ref = (stereo ? 0.5f * (dl + dr) : dl) * trimG.v;
+                const float c0 = tiltH.run(tiltL.run(core[(size_t)i] * inv));
+                const float s0l = spL[(size_t)i] * inv, s0r = spR[(size_t)i] * inv;
+                const float mo = (c0 + 0.5f * (s0l + s0r)) * baseLin;
+                pI += ref * ref; pO += mo * mo;
+                const float gg = gate.step(ref, c0 * post, voiceNow || fadeK <= 0.f);
+                const float cg = c0 * post * (1.f - fadeK * (1.f - gg));
+                const float sdd = side.read(back) * sideG;
+                float wl = cg + s0l * post + sdd, wr = cg + s0r * post - sdd;
+                lim.run(wl, wr);
+                const float mx = mixG.next(), og = outG.next();
+                outL[p + i] = (dl + (wl - dl) * mx) * og;
+                outR[p + i] = (dr + (wr - dr) * mx) * og;
+            }
+            p += m; phase += m;
+            if (phase >= kSub) { phase = 0; endSub(); }
+        }
+        inDb = 10.f * std::log10(inSum / (float)std::max(1, n) + 1e-10f);
+        if (nSub > 0) grAvg = grS / (float)nSub;
+    }
+
+    float sr = 48000.f, bpm = 120.f, kT = 0.f, kCur = 0.f, peakOut = 0.f, grAvg = 0.f, grNow = 0.f, inDb = -100.f;
+    float pIn = 1e-6f, pOut = 1e-6f, agDb = 0.f, post = 1.f, fade = 1.f, kSmoothC = 0.01f, fadeK = 0.f, sideG = 1.f, baseLin = 1.f, pStep = 0.f, pI = 0.f, pO = 0.f, grS = 0.f;
+    int nSub = 0, phase = 0;
+    bool voiceNow = false;
+    int maxN = 512, keyChoice_ = 0, scaleChoice_ = 0, wantModel = 0, curModel = 0, fadeDir = 0;
+    bool wantClassic = false, curClassic = false, primedRun = false, kPrimed = false;
     Extras X;
-    voile::Engine eng;
-    Biquad hp[2], lp[2], lowS[2], highS[2], tiltL[2], tiltH[2];
-    TanhAdaa lim[2], drv;
-    DeEss ds[2];
-    Comp comp;
-    AutoInput autoIn;
-    Glide trimG, mixG, outG, widthG;
-    voile::Delay slapL, slapR, dryL, dryR;
-    std::vector<float> tmpL, tmpR, mono;
+    classic::Chain classic;
+    GrainNord gn; Gorge go; Poupee pu; Patine pa;
+    VoiceDetector vd; PauseGate gate; PeakLimiter lim;
+    Glide trimG, mixG, outG;
+    Shelf tiltL, tiltH;
+    voile::Delay dryL, dryR, side, gLine;
+    std::vector<float> inL, inR, xin, core, spL, spR;
 };
 
 }  // namespace onek

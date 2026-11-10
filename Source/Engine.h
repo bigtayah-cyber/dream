@@ -1,9 +1,11 @@
 // Voile : moteur audio. C++17 pur, sans JUCE (testable hors-ligne).
 // Chaîne : correction de hauteur dure -> saturation/bitcrush -> doubles -> delay ping-pong + reverb.
+// Briques partagées : décaleur dsp::VoiceShifter (Dsp/Splicer.h, formants préservés), doubles dsp::AdtVoice, reverb FDN 8 lignes.
 #pragma once
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include "Dsp/Splicer.h"
 
 namespace voile {
 
@@ -21,6 +23,7 @@ struct Params {
     bool safe = false;
     float deadCents = 0.f;   // zone morte autour de la note (cents)
     float retuneMs = -1.f;   // constante de temps de la correction ; < 0 : dérivée de `tension`
+    bool formants = true;    // décaleur à formants préservés (sinon le timbre suit la hauteur)
 };
 
 inline bool allowedNote(int midi, int key, int scale) {
@@ -215,11 +218,12 @@ struct Smooth {
     float next(float t) { v += (t - v) * c; return v; }
 };
 
-// Pitch shifter à deux têtes de lecture croisées (fenêtre sin^2). Latence = win/2 (retard du signal sec).
+// ANCIEN décaleur à deux têtes de lecture croisées (fenêtre sin^2). Latence = win/2 (retard du signal sec). Gardé tel quel pour
+// le mode Classique/Qualité d'Orbe Autotune (son inchangé) ; mesuré : modulation d'amplitude ~18 %, ne plus l'utiliser ailleurs.
 // Décalage nul ou presque (moins de 0,5 cent) : sortie = signal sec retardé de win/2, exactement, et les têtes sont ramenées à
 // l'état « une seule tête » (ph = 0) : plus de peigne à décalage nul, et la reprise du décalage part d'une tête alignée sur le sec.
 // Entre 0,5 et 3 cents : fondu sec -> décalé.
-struct Shifter {
+struct HeadShifter {
     Delay line;
     float ph = 0.f, win = 1536.f;
     void init(int window) { win = (float)window; line.init(window + 4); ph = 0.f; }
@@ -237,6 +241,15 @@ struct Shifter {
         const float sh = line.readCubic(ph * win) * s1 * s1 + line.readCubic(p2 * win) * s2 * s2;
         return dry + a * (sh - dry);
     }
+};
+
+// Décaleur de hauteur de la suite (Voile, un-potard, Looks, Atelier) : dsp::VoiceShifter = raccords synchrones à la période
+// (dsp::Splicer, le décaleur propre d'Orbe Autotune) + formants préservés en option. Décalage < 0,5 cent : sortie = entrée retardée
+// de la latence, bit à bit. init(window) garde l'ancienne interface et l'ancienne latence (window/2) ; les formants ne sont actifs
+// que si la fréquence d'échantillonnage est donnée. La période de la voix se donne par setPeriod() (défaut : 300 échantillons).
+struct Shifter : dsp::VoiceShifter {
+    void init(int window, double sampleRate = 0.0) { dsp::VoiceShifter::init(sampleRate > 0.0 ? sampleRate : 48000.0, window / 2, sampleRate > 0.0); }
+    void initRest(double sampleRate, int restDelay, bool withFormants) { dsp::VoiceShifter::init(sampleRate, restDelay, withFormants); }
 };
 
 // Détecteur de hauteur YIN sur signal décimé.
@@ -320,65 +333,182 @@ struct PingPong {
     }
 };
 
-// Reverb à réseau de retards (FDN 4 lignes, matrice de Hadamard) avec diffusion d'entrée.
+// Reverb de la suite (Voile, un-potard, Looks, Atelier, Cabine, Synth, Sampler) : FDN 8 lignes (Jot), même interface qu'avant.
+//  - premières réflexions : 8 prises par canal de 4 à 30 ms, décorrélées G/D, diffusées par 3 passe-tout courts (comble les
+//    50 premières ms, qui étaient creuses avec l'ancien FDN 4 lignes) ;
+//  - diffusion d'entrée : 4 passe-tout de Dattorro (g = 0,75 / 0,75 / 0,625 / 0,625) ;
+//  - 8 lignes de 29 à 72 ms (longueurs premières), matrice de Householder, lecture modulée (±0,19 ms, LFO 0,13 à 0,83 Hz
+//    décorrélés : anti-métal, anti-flutter) ;
+//  - absorption à 3 bandes dans la boucle : g_i = 10^(-3 L_i / (RT60 fs)) au médium, plateaux 1er ordre à 250 Hz (graves,
+//    setTone) et 3 kHz (aigus, `damp`) ;
+//  - sorties G/D sur deux combinaisons orthogonales des lignes (stéréo décorrélée).
+// setDecay() est mémorisé : init() (prepare de l'hôte) le réapplique, la queue ne se raccourcit pas (correctif G3).
 struct Reverb {
-    static constexpr int N = 4;
-    Delay d[N], ap[2];
-    int len[N] = {}, apLen[2] = {};
-    float lp[N] = {}, g[N] = {1, 1, 1, 1}, sr = 48000.f;
+    static constexpr int N = 8, kEr = 8;
+    struct Ring {
+        std::vector<float> b; int w = 0, m = 0;
+        void init(int n) { int s = 1; while (s < n) s <<= 1; b.assign((size_t)s, 0.f); m = s - 1; w = 0; }
+        void clear() { std::fill(b.begin(), b.end(), 0.f); w = 0; }
+        void push(float x) { b[(size_t)w] = x; w = (w + 1) & m; }
+        float at(int d) const { return b[(size_t)((w - 1 - d) & m)]; }
+        float cubic(float d) const {
+            const float p = (float)(w - 1) - d; const int i = (int)std::floor(p); const float f = p - (float)i;
+            const float y0 = b[(size_t)((i - 1) & m)], y1 = b[(size_t)(i & m)], y2 = b[(size_t)((i + 1) & m)], y3 = b[(size_t)((i + 2) & m)];
+            return ((((0.5f * (y3 - y0) + 1.5f * (y1 - y2)) * f + (y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3)) * f) + 0.5f * (y2 - y0)) * f + y1;
+        }
+    };
+    struct Ap {   // passe-tout de Schroeder, retard fixe
+        Ring r; int len = 1; float g = 0.5f;
+        void init(int L, float gg) { len = std::max(1, L); g = gg; r.init(len + 2); }
+        float run(float x) { const float z = r.at(len - 1), v = x + g * z; r.push(v); return z - g * v; }
+    };
+    Ring line[N], erIn;
+    Ap diff[4], erAp[2][3];
+    int len[N] = {}, erT[2][kEr] = {};
+    float erG[2][kEr] = {};
+    float gM[N] = {}, kL[N] = {}, kH[N] = {}, lo[N] = {}, hi[N] = {};
+    float mc[N] = {}, ms[N] = {}, mwc[N] = {}, mws[N] = {}, depth = 9.f;
+    float sr = 48000.f, rt = 1.5f, lowMul = 1.f, highMul = 1.f, lastDamp = -1.f, cLo = 0.03f, cHi = 0.3f;
+    static int nextPrime(int n) {
+        if (n < 3) return 3;
+        if ((n & 1) == 0) ++n;
+        for (;; n += 2) { bool p = true; for (int d = 3; d * d <= n; d += 2) if (n % d == 0) { p = false; break; } if (p) return n; }
+    }
     void init(double s) {
         sr = (float)s;
-        const int base[N] = {1087, 1283, 1481, 1699}, ab[2] = {142, 107};
-        for (int i = 0; i < N; ++i) { len[i] = std::max(8, (int)(base[i] * sr / 48000.f)); d[i].init(len[i] + 2); lp[i] = 0.f; }
-        for (int i = 0; i < 2; ++i) { apLen[i] = std::max(8, (int)(ab[i] * sr / 48000.f)); ap[i].init(apLen[i] + 2); }
-    }
-    void setDecay(float rt60) {
-        for (int i = 0; i < N; ++i) g[i] = std::pow(10.f, -3.f * (float)len[i] / (rt60 * sr));
-    }
-    void process(float in, float damp, float& oL, float& oR) {
-        float x = in;
-        for (int k = 0; k < 2; ++k) {
-            const float wd = ap[k].read((float)apLen[k] - 1.f);
-            const float w = x + 0.5f * wd;
-            x = -0.5f * w + wd;
-            ap[k].push(w);
-        }
-        float s[N];
-        for (int i = 0; i < N; ++i) s[i] = d[i].read((float)len[i] - 1.f);
-        const float t[N] = {0.5f * (s[0] + s[1] + s[2] + s[3]), 0.5f * (s[0] - s[1] + s[2] - s[3]),
-                            0.5f * (s[0] + s[1] - s[2] - s[3]), 0.5f * (s[0] - s[1] - s[2] + s[3])};
+        const float k = sr / 48000.f;
+        static const float lms[N] = {29.3f, 33.7f, 38.9f, 44.3f, 49.9f, 56.3f, 63.7f, 71.9f};
+        static const float rate[N] = {0.13f, 0.21f, 0.29f, 0.37f, 0.47f, 0.59f, 0.71f, 0.83f};
+        static const float ph[N] = {0.1f, 2.3f, 4.1f, 0.9f, 5.6f, 3.3f, 1.7f, 4.9f};
+        depth = 9.f * k;
         for (int i = 0; i < N; ++i) {
-            lp[i] = (1.f - damp) * (t[i] * g[i]) + damp * lp[i];
-            d[i].push(0.5f * x + lp[i]);
+            len[i] = nextPrime((int)(lms[i] * 1e-3f * sr));
+            line[i].init(len[i] + (int)depth + 8);
+            mc[i] = std::cos(ph[i]); ms[i] = std::sin(ph[i]);
+            mwc[i] = std::cos(2.f * kPi * rate[i] / sr); mws[i] = std::sin(2.f * kPi * rate[i] / sr);
+            lo[i] = hi[i] = 0.f;
         }
-        oL = 0.5f * (s[0] + s[2]);
-        oR = 0.5f * (s[1] + s[3]);
+        static const float dms[4] = {4.77f, 3.60f, 12.73f, 9.31f}, dg[4] = {0.75f, 0.75f, 0.625f, 0.625f};
+        for (int i = 0; i < 4; ++i) diff[i].init(nextPrime((int)(dms[i] * 1e-3f * sr)), dg[i]);
+        static const float tL[kEr] = {4.3f, 7.9f, 11.3f, 14.7f, 17.9f, 21.1f, 24.6f, 28.3f};
+        static const float tR[kEr] = {5.1f, 8.8f, 12.4f, 15.6f, 19.3f, 22.4f, 26.1f, 29.6f};
+        static const float sg[2][kEr] = {{1, -1, 1, 1, -1, 1, -1, -1}, {-1, 1, 1, -1, 1, -1, -1, 1}};
+        for (int c = 0; c < 2; ++c)
+            for (int j = 0; j < kEr; ++j) {
+                const float t = c ? tR[j] : tL[j];
+                erT[c][j] = (int)(t * 1e-3f * sr);
+                erG[c][j] = sg[c][j] * 0.3f * std::exp(-t / 30.f);
+            }
+        erIn.init((int)(0.031f * sr) + 4);
+        erAp[0][0].init(nextPrime((int)(0.0017f * sr)), 0.6f); erAp[0][1].init(nextPrime((int)(0.0009f * sr)), 0.5f);
+        erAp[1][0].init(nextPrime((int)(0.0023f * sr)), 0.6f); erAp[1][1].init(nextPrime((int)(0.0012f * sr)), 0.5f);
+        erAp[0][2].init(nextPrime((int)(0.0047f * sr)), 0.65f); erAp[1][2].init(nextPrime((int)(0.0053f * sr)), 0.65f);
+        cLo = 1.f - std::exp(-2.f * kPi * 250.f / sr);
+        cHi = 1.f - std::exp(-2.f * kPi * 3000.f / sr);
+        lastDamp = -1.f;
+        updateGains();
     }
+    // Temps de décroissance au médium (s).
+    void setDecay(float rt60) { rt = std::max(0.05f, rt60); updateGains(); }
+    // Graves : RT60(grave) = lowMultiplier × RT60(médium). 1 = neutre, < 1 = grave plus court (voix moins boueuse).
+    void setTone(float lowMultiplier) { lowMul = std::max(0.1f, std::min(2.f, lowMultiplier)); updateGains(); }
+    void updateGains() {
+        for (int i = 0; i < N; ++i) {
+            const float L = (float)len[i] + 0.5f * depth;
+            const auto g = [&](float r) { return std::pow(10.f, -3.f * L / (r * sr)); };
+            gM[i] = g(rt);
+            kL[i] = g(rt * lowMul) / gM[i];
+            kH[i] = g(rt * highMul) / gM[i];
+        }
+    }
+    void clear() {
+        for (auto& l : line) l.clear();
+        for (auto& d : diff) d.r.clear();
+        for (auto& c : erAp) for (auto& a : c) a.r.clear();
+        erIn.clear();
+        for (int i = 0; i < N; ++i) lo[i] = hi[i] = 0.f;
+    }
+    // damp : 0 = aigus aussi longs que le médium, 0,95 = très sombre (RT60 aigu × 0,1). Même plage qu'avant.
+    void process(float in, float damp, float& oL, float& oR) {
+        if (damp != lastDamp) {
+            lastDamp = damp;
+            const float d = std::max(0.f, std::min(0.98f, damp));
+            highMul = 0.1f + 0.9f * std::pow(1.f - d, 2.2f);
+            updateGains();
+        }
+        if (!std::isfinite(in)) in = 0.f;
+        // premières réflexions
+        erIn.push(in);
+        float e[2];
+        for (int c = 0; c < 2; ++c) {
+            float a = 0.f;
+            for (int j = 0; j < kEr; ++j) a += erG[c][j] * erIn.at(erT[c][j]);
+            e[c] = erAp[c][2].run(erAp[c][1].run(erAp[c][0].run(a)));
+        }
+        // diffusion d'entrée
+        float u = in;
+        for (auto& d : diff) u = d.run(u);
+        // FDN
+        float s[N], sum = 0.f;
+        for (int i = 0; i < N; ++i) {
+            const float c0 = mc[i];
+            mc[i] = c0 * mwc[i] - ms[i] * mws[i]; ms[i] = c0 * mws[i] + ms[i] * mwc[i];
+            const float nrm = 1.5f - 0.5f * (mc[i] * mc[i] + ms[i] * ms[i]); mc[i] *= nrm; ms[i] *= nrm;
+            s[i] = line[i].cubic((float)len[i] - 1.f - depth * (1.f + ms[i]) * 0.5f);
+            float v = s[i] * gM[i];
+            lo[i] += cLo * (v - lo[i]); v += (kL[i] - 1.f) * lo[i];      // plateau grave
+            hi[i] += cHi * (v - hi[i]); v = hi[i] + kH[i] * (v - hi[i]); // plateau aigu
+            sum += v;
+            sOut[i] = v;
+        }
+        static const float inS[N] = {1, -1, 1, -1, -1, 1, 1, -1};
+        const float h = 2.f / (float)N * sum, ui = 0.35f * u;
+        for (int i = 0; i < N; ++i) line[i].push(sOut[i] - h + inS[i] * ui);
+        static const float oLs[N] = {1, 1, -1, -1, 1, -1, 1, -1}, oRs[N] = {1, -1, 1, -1, -1, -1, 1, 1};
+        float l = 0.f, r = 0.f;
+        for (int i = 0; i < N; ++i) { l += oLs[i] * s[i]; r += oRs[i] * s[i]; }
+        oL = kOut * l + e[0];
+        oR = kOut * r + e[1];
+        if (!std::isfinite(oL) || !std::isfinite(oR)) { clear(); oL = oR = 0.f; }
+    }
+    float sOut[N] = {};
+    float kOut = 0.19f;   // énergie de la réponse ~ celle de l'ancien FDN 4 lignes (même niveau d'envoi dans les plugins)
 };
 
 class Engine {
 public:
     void prepare(double sampleRate) {
         sr = (float)sampleRate;
-        win = std::max(64, (int)(0.032 * sampleRate));
+        // décaleur : retard au repos Lz = 16 ms, comme l'ancien décaleur (latence déclarée inchangée). Mesuré sur une prise réelle :
+        // un Lz plus court (8 ms) avance la voix sur l'analyse YIN et la correction devient moins juste (écart moyen 0,18 dt au lieu
+        // de 0,12) ; 16 ms garde aussi la fenêtre des raccords [Lz - T0/2, Lz + T0/2[ centrée jusqu'à 70 Hz.
+        win = std::max(64, (int)(0.032 * sampleRate)) / 2;
         // saturation suréchantillonnée ×8 (×4 à 88,2/96 kHz) : sa latence (phase linéaire) s'ajoute à celle du décaleur
         sat.init(Oversampler::stagesFor(sampleRate, 3));
-        latSamples = win / 2 + sat.latency();
-        tune.init(win);
-        dbl1.init(win);
-        dbl2.init(win);
+        latSamples = win + sat.latency();
+        tune.initRest(sampleRate, win, P.formants);
+        // doubles « seconde prise » : graines, retards et filtres différents par voix (pas d'harmonie fixe)
+        dbl1.init(sampleRate, 0x9E3779B9u, 19.f, 3.f, 8.f, 6500.f);
+        dbl2.init(sampleRate, 0x85EBCA6Bu, 27.f, 3.5f, 9.f, 5200.f);
+        voiced = false;
+        sendHpC = std::exp(-2.f * kPi * 160.f / sr); sendLpC = 1.f - std::exp(-2.f * kPi * 9000.f / sr); sendHp = sendLp = 0.f;
         dryLine.init(latSamples + 8);
         yin.init(sampleRate);
         hop = std::max(64, (int)(0.0053 * sampleRate));
         pre.init((int)(0.03 * sampleRate) + 4);
         pp.init(sampleRate);
         rev.init(sampleRate);
-        rev.setDecay(1.2f);
+        rev.setTone(0.8f);   // graves de la queue un peu plus courts : la voix ne s'empâte pas
+        // décroissance de la reverb remise d'après BRUME (et non à une valeur fixe) : un nouveau prepareToPlay de l'hôte
+        // (tampon, fréquence, réactivation) ne raccourcit plus la queue ; lastRt est réarmé pour process()
+        lastRt = 0.8f + 1.7f * P.brume;
+        rev.setDecay(lastRt);
         const float c = 1.f - std::exp(-1.f / (0.02f * sr));
         mixS.c = mordS.c = haloS.c = brumeS.c = outS.c = c;
         mixS.v = P.mix; mordS.v = P.mordant; haloS.v = P.halo; brumeS.v = P.brume;
         outS.v = std::pow(10.f, P.outDb / 20.f);
         ratioC = 1.f - std::exp(-1.f / (0.003f * sr));
+        dcR = std::exp(-2.f * kPi * 38.2f / sr);   // coupe-continu : 38,2 Hz = ancien 0.995 a 48 kHz (meme son a 48 kHz, identique a toute frequence)
         ratio = ratioT = 1.f;
         shiftSm = shiftT = 0.f;
         decCount = hopCount = holdCnt = 0;
@@ -395,6 +525,7 @@ public:
     void set(const Params& p) {
         const bool changed = p.autoKey != P.autoKey || p.autoScale != P.autoScale || p.safe != P.safe ||
                              (!p.autoKey && p.key != P.key) || (!p.autoScale && p.scale != P.scale);
+        if (p.formants != P.formants) tune.formants = p.formants;
         P = p;
         if (changed) { haveKey = false; confirm = switchCnt = lostCnt = 0; candK = candS = -1; }
         applySelection();
@@ -409,6 +540,14 @@ public:
     int latency() const { return latSamples; }
     float level() const { return lvl; }
     float shiftSemis() const { return shiftSm; }
+    // Lecture pour l'interface, sans effet sur le son (chemin Voile, mode sûr exclu) : note visée et hauteur chantée
+    // du dernier hop voisé, reconstruites depuis l'état existant (shiftT = (cible - chantée) × tension). Faux si illisible.
+    bool voiceReadout(float& sungMidi, int& targetMidi) const {
+        if (P.safe || !voiced || lastTgt < 0 || P.tension < 0.02f) return false;
+        sungMidi = (float)lastTgt - shiftT / P.tension;
+        targetMidi = lastTgt;
+        return true;
+    }
 
     // inR peut être nul (entrée mono). Fonctionne en place.
     void process(const float* inL, const float* inR, float* outL, float* outR, int n) {
@@ -417,7 +556,8 @@ public:
         if (std::fabs(rt60 - lastRt) > 0.02f) { rev.setDecay(rt60); lastRt = rt60; }
         const float fb = 0.2f + 0.3f * P.brume;
         for (int i = 0; i < n; ++i) {
-            const float x = inR ? 0.5f * (inL[i] + inR[i]) : inL[i];
+            float x = inR ? 0.5f * (inL[i] + inR[i]) : inL[i];
+            if (!std::isfinite(x)) x = 0.f;   // entrée hostile (NaN/inf) : silence, rien ne se propage
 
             accum += x;
             if (++decCount >= yin.dec) { yin.push(accum / (float)yin.dec); accum = 0.f; decCount = 0; }
@@ -447,20 +587,22 @@ public:
                 const float wd = std::min(1.f, m * 50.f);
                 if (wd < 1.f) { const float yd = sat.dry(); y = yd + (y - yd) * wd; }
             } else y = sat.bypass(tuned);
-            const float mainS = y - dcX + 0.995f * dcY;
+            const float mainS = y - dcX + dcR * dcY;
             dcX = y; dcY = mainS;
 
-            // doubles : +12 demi-tons à droite, -5 à gauche
+            // doubles « seconde prise » (ADT, unisson qui bouge), un peu plus à gauche / un peu plus à droite
             const float h = haloS.next(P.halo);
-            const float d1 = dbl1.process(mainS, 2.f) * h * 0.35f;
-            const float d2 = dbl2.process(mainS, 0.7491535f) * h * 0.30f;
+            const float d1 = dbl1.process(mainS, voiced) * h * 0.35f;
+            const float d2 = dbl2.process(mainS, voiced) * h * 0.30f;
 
             // delay + reverb, avec ducking du delay sous la voix
             const float b = brumeS.next(P.brume);
             float dL, dR, rL, rR;
             pp.process(mainS * b * 0.55f, tgtD, fb, dL, dR);
             const float duck = 1.f - 0.75f * std::min(1.f, lvl * 6.f);
-            pre.push(mainS * b * 0.5f);
+            sendLp += (mainS - sendLp) * sendLpC;                      // envoi reverb filtré : 160 Hz - 9 kHz
+            sendHp = sendHpC * sendHp + (1.f - sendHpC) * sendLp;
+            pre.push((sendLp - sendHp) * b * 0.5f);
             rev.process(pre.read((float)(0.02f * sr)), 0.35f, rL, rR);
 
             const float wl = mainS + 0.4f * d1 + 0.8f * d2 + duck * dL + rL;
@@ -558,6 +700,8 @@ private:
     static float median3(float a, float b, float c) { return std::max(std::min(a, b), std::min(std::max(a, b), c)); }
     void analyzeHop() {
         const float f0 = yin.analyze();
+        voiced = f0 > 0.f;
+        if (voiced) { const float per = sr / f0; tune.setPeriod(per); dbl1.setPeriod(per); dbl2.setPeriod(per); }
         float cap = 6.5f;
         if (!P.safe) {   // chemin historique (Voile)
             if (f0 > 0.f) {
@@ -629,7 +773,10 @@ private:
     Params P;
     float sr = 48000.f, bpm = 120.f, lastRt = 0.f;
     int win = 1536, latSamples = 768, hop = 256;
-    Shifter tune, dbl1, dbl2;
+    Shifter tune;
+    dsp::AdtVoice dbl1, dbl2;
+    bool voiced = false;
+    float sendHp = 0.f, sendLp = 0.f, sendHpC = 0.99f, sendLpC = 0.5f;
     Oversampler sat;
     Delay dryLine, pre;
     Yin yin;
@@ -637,7 +784,7 @@ private:
     Reverb rev;
     Smooth mixS, mordS, haloS, brumeS, outS;
     float ratio = 1.f, ratioT = 1.f, ratioC = 0.01f, shiftSm = 0.f, shiftT = 0.f;
-    float accum = 0.f, lvl = 0.f, held = 0.f, dcX = 0.f, dcY = 0.f;
+    float accum = 0.f, lvl = 0.f, held = 0.f, dcX = 0.f, dcY = 0.f, dcR = 0.995f;
     int decCount = 0, hopCount = 0, holdCnt = 0, hold = 0, lastTgt = -1;
     float hist[12] = {}, histWeight = 0.f;
     int keyTick = 0, effKey = 0, effScale = 1;

@@ -91,7 +91,12 @@ void LooksEditor::mouseUp(const juce::MouseEvent& e) {
 }
 void LooksEditor::showMenu() {
     juce::PopupMenu m;
-    for (int i = 0; i < oc::numLooks(); ++i) m.addItem(i + 1, LooksProcessor::lookName(i) + u8("  ·  ") + u8(oc::looks()[(size_t)i].tag), true, i == proc.currentLook());
+    const char* cat = "";   // liste groupée par catégorie (en-têtes) ; le menu défile seul quand il dépasse l'écran
+    for (int i = 0; i < oc::numLooks(); ++i) {
+        const auto& L = oc::looks()[(size_t)i];
+        if (std::strcmp(cat, L.cat) != 0) { cat = L.cat; m.addSectionHeader(u8(cat)); }
+        m.addItem(i + 1, LooksProcessor::lookName(i) + u8("  ·  ") + u8(L.tag), true, i == proc.currentLook());
+    }
     m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(Si(58, 62, 344, 110))).withMinimumWidth(juce::roundToInt(328 * u_)),
                     [this](int r) { if (r > 0) proc.applyLook(r - 1); });
 }
@@ -112,7 +117,7 @@ void LooksEditor::paint(juce::Graphics& g) {
     screenWell(g, pal, scr, Display::VFD);
     const auto vfd = displayColours(Display::VFD, pal).ink;
     g.setColour(vfd.withAlpha(0.6f)); g.setFont(mono(10.f * u));
-    g.drawText(String(proc.currentLook() + 1).paddedLeft('0', 2) + " / " + String(oc::numLooks()), S(70, 68, 100, 14).toNearestInt(), juce::Justification::centredLeft);
+    g.drawText(String(proc.currentLook() + 1).paddedLeft('0', 2) + " / " + String(oc::numLooks()) + u8("  ·  ") + u8(look_.cat), S(70, 68, 220, 14).toNearestInt(), juce::Justification::centredLeft);
     if (moved) { g.setColour(kPeach.withAlpha(0.9f)); g.setFont(mono(9.f * u)); g.drawText(u8("● MODIFIÉ"), S(296, 68, 96, 14).toNearestInt(), juce::Justification::centredRight); }
     screenText(g, pal, Display::VFD, u8(look_.name), S(62, 86, 336, 34), juce::Justification::centred, 24.f * u);
     g.setColour(vfd.withAlpha(0.7f)); g.setFont(lcdFont(12.f * u)); g.drawText(u8(look_.tag), S(62, 124, 336, 18).toNearestInt(), juce::Justification::centred);

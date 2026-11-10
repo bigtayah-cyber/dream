@@ -86,9 +86,9 @@ SampleEditor::SampleEditor(SampleProcessor& p)
     for (auto* b : {&importB, &demoB, &playB}) addAndMakeVisible(b);
     playB.setClickingTogglesState(true);
     playB.onClick = [this] { proc.audition = playB.getToggleState(); };
-    importB.setTooltip(u8("Charger un son (WAV, AIFF, FLAC, OGG) : il est enregistré dans le projet"));
+    importB.setTooltip(u8("Charger un son (WAV, AIFF, FLAC, OGG, MP3) : il est enregistré dans le projet"));
     importB.onClick = [this] {
-        chooser = std::make_unique<juce::FileChooser>(u8("Choisir un son"), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.m4a;*.caf");
+        chooser = std::make_unique<juce::FileChooser>(u8("Choisir un son"), juce::File(), osamp::audioWildcards());
         juce::Component::SafePointer<SampleEditor> self(this);
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                              [safe = self](const juce::FileChooser& fc) { if (safe && fc.getResult().existsAsFile()) safe->loadFile(fc.getResult()); });
@@ -99,7 +99,7 @@ SampleEditor::SampleEditor(SampleProcessor& p)
     help.install(*this, "Orbe Sample", {u8("Transformateur de sample : choisis une zone de la source, applique un préréglage et un traitement, joue le résultat."),
         u8("- Source : glisse les poignées pour régler la zone, ou glisse ailleurs pour en tracer une nouvelle."),
         u8("- Préréglages : neuf transformations de départ ; Hauteur et vitesse ; Découpes : le résultat est découpé et jouable en MIDI à partir de C1."),
-        u8("- Importer charge un son (WAV, AIFF, FLAC, OGG) enregistré dans le projet ; Démo recharge l'exemple ; Lecture écoute le résultat.")});
+        u8("- Importer charge un son (WAV, AIFF, FLAC, OGG, MP3) enregistré dans le projet ; Démo recharge l'exemple ; Lecture écoute le résultat.")});
     setResizeLimits(760, 494, 1600, 1040);
     getConstrainer()->setFixedAspectRatio(1000.0 / 650.0);
     setSize(1000, 650);
@@ -109,7 +109,7 @@ SampleEditor::SampleEditor(SampleProcessor& p)
 SampleEditor::~SampleEditor() { stopTimer(); setLookAndFeel(nullptr); }
 
 bool SampleEditor::isInterestedInFileDrag(const juce::StringArray& f) {
-    for (auto& s : f) if (juce::File(s).hasFileExtension("wav;aif;aiff;flac;ogg;mp3;m4a;caf")) return true;
+    for (auto& s : f) if (juce::File(s).hasFileExtension(osamp::audioExtensions())) return true;
     return false;
 }
 

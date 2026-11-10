@@ -1,5 +1,5 @@
-// Les 10 looks de voix (noms originaux). Chaque look transforme 4 macros (Intensité, Espace, Mordant, Couleur : 0..1) en réglages complets.
-// Valeurs = hypothèses d'écoute tirées de docs/looks-voix.md.
+// Looks de voix (noms originaux) : les 10 d'origine (index 0..9, jamais déplacés : compatibilité d'état), puis les looks Rap / Pop électro ajoutés à la suite.
+// Chaque look transforme 4 macros (Intensité, Espace, Mordant, Couleur : 0..1) en réglages complets. Valeurs = hypothèses d'écoute (docs/looks-voix.md), à juger à l'oreille.
 #pragma once
 #include "OrbeChain.h"
 
@@ -23,6 +23,7 @@ struct Look {
     float trimDb;       // correction de sortie du preset Atelier (statique)
     float bias;         // décalage du niveau automatique d'Orbe Looks (dB, calibré par le test)
     void (*map)(float, float, float, float, S&);
+    const char* cat = "Classiques";   // catégorie affichée dans la liste de l'éditeur
 };
 
 inline const std::vector<Look>& looks() {
@@ -75,6 +76,86 @@ inline const std::vector<Look>& looks() {
              qTune(s, 0.25f + 0.35f * i, lerp(60, 20, i)); qEq(s, 100, 150, 0, 400, -2, 1, 3500, 1, 1, 10000, 1 + 4 * c); qComp(s, -20, 2.2f, 20, 130, 1, 1);
              qSat(s, 0.08f + 0.2f * m, 0.05f, 0); qDs(s, 6500, 0.5f); qDbl(s, 0.35f + 0.35f * i, 0.07f, -0.07f, 0.9f);
              qDly(s, 250, 3, 0.2f, 0.12f * e, 0.7f); qRev(s, 0.6f + 1.2f * e, 25, 0.5f, 0.02f + 0.2f * e); }},
+        // ---- Rap ----
+        {"Obsidienne", "Trap sombre, graves pleins, écho de noire", "ECSTD2YR", {0.55f, 0.45f, 0.35f, 0.35f}, -9.9f, 1.4f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 0.4f + 0.3f * i, lerp(30, 12, i)); qEq(s, 85, 120, 2.5f, 400, -2.5f, 1, 3000, 1.5f, 1, 8000, -3 + 6 * c);
+             qComp(s, -22, 4 + 2 * i, 10, 80, 3, 1); qSat(s, 0.15f + 0.3f * m, 0.15f, 0); qDs(s, 6500, 0.4f); qDbl(s, 0.1f + 0.25f * i, 0.1f, -0.1f, 0.5f);
+             qDly(s, 250, 4, 0.35f + 0.2f * e, 0.06f + 0.22f * e, 0.8f); qRev(s, 1.4f + 2.f * e, 20, 0.75f, 0.06f + 0.22f * e); }, "Rap"},
+        {"Poussière", "Boom-bap voilé, médiums gras, poussière", "ECSDYR", {0.5f, 0.3f, 0.45f, 0.4f}, -9.9f, 0.5f,
+         [](float i, float e, float m, float c, S& s) {
+             (void)i; qEq(s, 80, 150, 2, 800, 1.5f, 0.8f, 3500, -1, 1, 7000, -4 + 5 * c); qComp(s, -20, 3, 25, 130, 2, 1);
+             qSat(s, 0.25f + 0.35f * m, 0.2f, 0.05f + 0.25f * m); qDs(s, 6500, 0.3f); qDly(s, 95, 0, 0.1f, 0.04f + 0.12f * e, 0.5f); qRev(s, 0.5f + 1.f * e, 10, 0.7f, 0.05f + 0.16f * e); }, "Rap"},
+        {"Givre", "Voix froide et fine, attaque sèche", "ECSDYR", {0.55f, 0.3f, 0.35f, 0.5f}, -3.8f, 0.6f,
+         [](float i, float e, float m, float c, S& s) {
+             qEq(s, 130, 200, -2, 350, -2, 1, 4000, 2.5f, 1.2f, 10000, 1 + 4 * c); qComp(s, -26, 5 + 2 * i, 6, 70, 4, 1);
+             qSat(s, 0.12f + 0.25f * m, 0, 0); qDs(s, 7500, 0.5f); qDly(s, 250, 2, 0.15f, 0.03f + 0.15f * e, 0.8f); qRev(s, 0.7f + 1.2f * e, 35, 0.35f, 0.04f + 0.2f * e); }, "Rap"},
+        {"Brume", "Voix flottante dans la brume, large et floue", "ECSTD2YR", {0.5f, 0.6f, 0.3f, 0.35f}, -10.1f, 1.7f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 0.35f + 0.3f * i, lerp(60, 20, i)); qEq(s, 100, 150, 0, 250, -1.5f, 1, 3000, -1.5f, 1, 9000, -4 + 6 * c);
+             qComp(s, -22, 2.5f, 25, 150, 2, 0.8f); qSat(s, 0.1f + 0.2f * m, 0.1f, 0); qDs(s, 7000, 0.4f); qDbl(s, 0.3f + 0.35f * i, 0.22f, -0.22f, 1);
+             qDly(s, 250, 3, 0.35f + 0.2f * e, 0.1f + 0.25f * e, 0.7f); qRev(s, 2.f + 3.f * e, 40, 0.6f, 0.1f + 0.25f * e); }, "Rap"},
+        {"Mirage", "Autotune mélodique lisse et brillant", "ECSTD2YR", {0.6f, 0.45f, 0.35f, 0.55f}, -10.2f, 1.4f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 0.7f + 0.3f * i, lerp(18, 4, i)); qEq(s, 100, 150, 0, 400, -2, 1, 3000, 1 + 2 * (c - 0.5f), 1, 9500, 1 + 5 * c);
+             qComp(s, -22, 3.5f, 12, 90, 3, 1); qSat(s, 0.1f + 0.25f * m, 0.1f, 0); qDs(s, 6500, 0.45f); qDbl(s, 0.2f + 0.35f * i, 0.12f, -0.12f, 0.9f);
+             qDly(s, 250, 2, 0.3f + 0.2f * e, 0.08f + 0.25f * e, 0.7f); qRev(s, 1.2f + 2.f * e, 20, 0.45f, 0.06f + 0.22f * e); }, "Rap"},
+        {"Cassette", "Grain de bande usée, bas débit", "ECSYR", {0.5f, 0.3f, 0.5f, 0.4f}, -6.4f, 0.4f,
+         [](float i, float e, float m, float c, S& s) {
+             (void)i; qEq(s, 180, 250, -1, 1200, 2.5f, 0.9f, 3000, 1.5f, 1, 5500, -10 + 6 * c); qComp(s, -24, 4, 8, 100, 3, 1);
+             qSat(s, 0.3f + 0.4f * m, 0.25f, 0.25f + 0.45f * m); qDly(s, 250, 2, 0.2f, 0.05f + 0.15f * e, 0.6f); qRev(s, 0.5f + 0.9f * e, 8, 0.8f, 0.04f + 0.18f * e); }, "Rap"},
+        {"Ruelle", "Ad-libs : slap et échos de noire en avant", "ECSDYR", {0.5f, 0.55f, 0.35f, 0.5f}, -6.2f, 0.6f,
+         [](float i, float e, float m, float c, S& s) {
+             (void)i; qEq(s, 140, 200, -1, 500, -1, 1, 2800, 2.5f, 1, 9000, 1 + 3 * c); qComp(s, -22, 4, 6, 80, 3, 1);
+             qSat(s, 0.15f + 0.3f * m, 0.1f, 0); qDs(s, 6500, 0.4f); qDly(s, 250, 4, 0.4f + 0.25f * e, 0.2f + 0.4f * e, 0.5f); qRev(s, 1.f + 1.8f * e, 25, 0.5f, 0.05f + 0.2f * e); }, "Rap"},
+        {"Gueulante", "Rap frontal, compression serrée, mordant", "ECSDYR", {0.6f, 0.2f, 0.5f, 0.5f}, -8.3f, 0.4f,
+         [](float i, float e, float m, float c, S& s) {
+             qEq(s, 100, 120, 1.5f, 350, -2, 1, 3000, 3, 1, 9000, 1 + 3 * c); qComp(s, -28, 6 + 3 * i, 4, 50, 6, 1);
+             qSat(s, 0.35f + 0.5f * m, 0.2f, 0); qDs(s, 7000, 0.5f); qDly(s, 80, 0, 0.05f, 0.04f + 0.1f * e, 0.5f); qRev(s, 0.4f + 0.6f * e, 10, 0.6f, 0.02f + 0.1f * e); }, "Rap"},
+
+        // ---- Pop électro ----
+        {"Paillettes", "Hyperpop étincelant, octave haute, ultra net", "ECSTD2YR", {0.6f, 0.4f, 0.4f, 0.7f}, -9.9f, 1.3f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 1, lerp(5, 1, i)); qEq(s, 130, 200, -2, 600, -1.5f, 1, 5500, 2.5f, 1, 11000, 4 + 6 * c); qComp(s, -26, 5, 4, 60, 4, 1);
+             qSat(s, 0.2f + 0.4f * m, 0.1f, 0.05f + 0.3f * m); qDs(s, 8000, 0.5f); qDbl(s, 0.3f + 0.35f * i, 12, 0.2f, 1);
+             qDly(s, 200, 1, 0.3f, 0.05f + 0.16f * e, 0.5f); qRev(s, 0.8f + 1.4f * e, 10, 0.3f, 0.05f + 0.2f * e); }, "Pop électro"},
+        {"Rêverie", "Pop onirique, halo de réverbération long", "ECSTD2YR", {0.5f, 0.6f, 0.25f, 0.6f}, -3.6f, 0.5f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 0.2f + 0.3f * i, lerp(90, 40, i)); qEq(s, 110, 180, 1, 300, -2, 1, 3500, 0.5f, 1, 10000, 2 + 5 * c);
+             qComp(s, -22, 2.2f, 25, 180, 2, 0.8f + 0.2f * i); qSat(s, 0.06f + 0.15f * m, 0.1f, 0); qDs(s, 7500, 0.45f); qDbl(s, 0.35f + 0.4f * i, 0.2f, -0.2f, 1);
+             qDly(s, 250, 3, 0.4f + 0.2f * e, 0.1f + 0.22f * e, 0.6f); qRev(s, 2.2f + 3.5f * e, 35, 0.35f, 0.12f + 0.28f * e); }, "Pop électro"},
+        {"Opale", "Synth-pop nacré, voix lustrée et aérienne", "ECSTD2YR", {0.55f, 0.4f, 0.3f, 0.6f}, -8.2f, 1.7f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 0.5f + 0.3f * i, lerp(35, 12, i)); qEq(s, 120, 160, 0, 280, -1.5f, 1, 4000, 1.5f, 1, 11000, 3 + 5 * c);
+             qComp(s, -22, 3, 12, 100, 2.5f, 1); qSat(s, 0.08f + 0.18f * m, 0.1f, 0); qDs(s, 7500, 0.5f); qDbl(s, 0.25f + 0.3f * i, 0.1f, -0.1f, 0.9f);
+             qDly(s, 250, 2, 0.25f + 0.2f * e, 0.06f + 0.2f * e, 0.7f); qRev(s, 0.9f + 1.5f * e, 20, 0.4f, 0.06f + 0.22f * e); }, "Pop électro"},
+        {"Ondes", "Voix de radio, bande médium compressée", "ECSYR", {0.5f, 0.2f, 0.4f, 0.5f}, -5.5f, 0.5f,
+         [](float i, float e, float m, float c, S& s) {
+             (void)i; qEq(s, 250, 300, -3, 1500, 3, 1, 2800, 3, 1, 5000, -10 + 5 * c); qComp(s, -26, 5, 5, 70, 5, 1);
+             qSat(s, 0.25f + 0.3f * m, 0.15f, 0.05f + 0.2f * m); qRev(s, 0.4f + 0.6f * e, 5, 0.8f, 0.03f + 0.12f * e); }, "Pop électro"},
+        {"Allô", "Voix de téléphone, bande très étroite", "ECSYR", {0.6f, 0.15f, 0.4f, 0.5f}, -2.6f, 0.6f,
+         [](float i, float e, float m, float c, S& s) {
+             qEq(s, 400 + 150 * i, 300, -4, 1100, 5, 0.8f, 2400, 3, 1, 2800, -12 - 8 * (1 - c)); qComp(s, -28, 6, 3, 60, 5, 1);
+             qSat(s, 0.3f + 0.3f * m, 0.1f, 0.15f + 0.35f * m); qRev(s, 0.3f + 0.5f * e, 3, 0.9f, 0.03f + 0.1f * e); }, "Pop électro"},
+        {"Soupir", "Souffle proche, très présent, très sec", "ECSD2R", {0.5f, 0.25f, 0.3f, 0.6f}, 0.0f, 1.1f,
+         [](float i, float e, float m, float c, S& s) {
+             qEq(s, 110, 150, -1, 250, -2, 1, 4500, 2, 1, 12000, 2 + 4 * c); qComp(s, -30, 5, 10, 150, 6, 1);
+             qSat(s, 0.05f + 0.12f * m, 0, 0); qDs(s, 6500, 0.7f + 0.25f * i); qDbl(s, 0.2f + 0.3f * i, 0.06f, -0.06f, 0.6f); qRev(s, 0.4f + 0.8f * e, 15, 0.5f, 0.03f + 0.14f * e); }, "Pop électro"},
+        {"Chorale", "Chœur large, voix multipliées en éventail", "ECSTD2YR", {0.6f, 0.55f, 0.25f, 0.5f}, -3.5f, 0.5f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 0.3f + 0.3f * i, lerp(70, 30, i)); qEq(s, 100, 200, 0, 300, -1.5f, 1, 3000, 1, 1, 10000, 1 + 4 * c);
+             qComp(s, -22, 2.5f, 20, 150, 2, 1); qSat(s, 0.05f + 0.1f * m, 0.05f, 0); qDs(s, 7000, 0.4f); qDbl(s, 0.6f + 0.4f * i, 0.3f, -0.3f, 1);
+             qDly(s, 250, 4, 0.25f, 0.04f + 0.12f * e, 0.7f); qRev(s, 1.8f + 3.f * e, 30, 0.4f, 0.1f + 0.28f * e); }, "Pop électro"},
+        {"Automate", "Voix robotique douce, hauteur verrouillée", "ECSTD2YR", {0.65f, 0.3f, 0.3f, 0.5f}, -6.9f, 1.6f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 1, lerp(3, 1, i)); qEq(s, 120, 150, 0, 400, -2, 1, 3000, 2, 1, 10000, 2 + 4 * c); qComp(s, -24, 4, 8, 80, 3, 1);
+             qSat(s, 0.1f + 0.25f * m, 0, 0.05f + 0.2f * m); qDs(s, 7000, 0.4f); qDbl(s, 0.15f + 0.25f * i, 0.4f, -0.4f, 0.9f);
+             qDly(s, 250, 2, 0.2f, 0.05f + 0.15f * e, 0.7f); qRev(s, 0.6f + 1.f * e, 10, 0.5f, 0.05f + 0.2f * e); }, "Pop électro"},
+        {"Nocturne", "Pop alternatif nocturne, velouté et sombre", "ECSTD2YR", {0.5f, 0.45f, 0.3f, 0.35f}, -5.9f, 0.5f,
+         [](float i, float e, float m, float c, S& s) {
+             qTune(s, 0.25f + 0.3f * i, lerp(60, 25, i)); qEq(s, 100, 150, 1.5f, 450, -2, 1, 3000, 1, 1, 8500, -4 + 5 * c);
+             qComp(s, -22, 3, 18, 130, 2.5f, 1); qSat(s, 0.12f + 0.25f * m, 0.15f, 0); qDs(s, 6500, 0.45f); qDbl(s, 0.25f + 0.3f * i, 0.09f, -0.09f, 0.8f);
+             qDly(s, 250, 4, 0.3f + 0.2f * e, 0.06f + 0.2f * e, 0.7f); qRev(s, 1.6f + 2.5f * e, 25, 0.65f, 0.07f + 0.22f * e); }, "Pop électro"},
     };
     return v;
 }

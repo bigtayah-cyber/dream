@@ -31,13 +31,14 @@ public:
         v->ph2 = 0.37f;
     }
 
-    void render(float* L, float* R, int n) {
+    // Ajoute (+=) l'aperçu au tampon, multiplié par `gain` (potard MASTER) : l'audio déjà présent (Orbe FX) n'est pas touché.
+    void render(float* L, float* R, int n, float gain = 1.f) {
         for (int i = 0; i < n; ++i) {
             float l = 0, r = 0;
             for (auto& v : voices) if (v.on) voice(v, l, r);
             // saturation douce de sortie
-            L[i] += std::tanh(l * 0.9f);
-            R[i] += std::tanh(r * 0.9f);
+            L[i] += gain * std::tanh(l * 0.9f);
+            R[i] += gain * std::tanh(r * 0.9f);
         }
     }
 

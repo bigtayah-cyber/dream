@@ -43,10 +43,14 @@ bool FredonneProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
 }
 
 void FredonneProcessor::prepareToPlay(double rate, int) {
+    // Un changement de fréquence (ou de tampon) de l'hôte ne doit jamais effacer une prise : une prise en cours est close et
+    // analysée à sa propre fréquence (recSr) ; le tampon n'est redimensionné que lorsqu'il ne contient rien à analyser.
+    sr = rate;
+    int s = Recording;
+    if (st.compare_exchange_strong(s, Captured)) {}   // prise en cours : on la garde telle quelle
     const int want = (int)(rate * kMaxSec) + 4096;
-    if (rate != sr || (int)rec.size() != want) {
-        worker.stopThread(30000);
-        sr = rate; recMax = want; rec.assign((size_t)want, 0.f); recLen = 0; st = Idle;
+    if ((s == Idle || s == Armed) && (int)rec.size() != want) {
+        rec.assign((size_t)want, 0.f); recMax = want; recLen = 0; recSr = rate;
     }
     yin.init(rate); yDec = yin.dec; yAcc = 0.f; yCount = 0; std::fill(pre, pre + 4096, 0.f); preIdx = 0; lastP1 = -1.0;
 }
@@ -80,7 +84,7 @@ void FredonneProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBu
         if (s0 == Armed) {
             if (pk > 0.01f) {   // le premier son déclenche l'enregistrement ; 4096 échantillons de pré-roll évitent de couper l'attaque
                 for (int i = 0; i < 4096; ++i) rec[(size_t)i] = pre[(preIdx + i) & 4095];
-                recLen.store(4096); takeStart.store(playing ? ppq - 4096.0 / sr * effectiveBpm() / 60.0 : 0.0);
+                recSr = sr; recLen.store(4096); takeStart.store(playing ? ppq - 4096.0 / sr * effectiveBpm() / 60.0 : 0.0);
                 st.store(Recording);
             } else for (int i = 0; i < n; ++i) { pre[preIdx] = (L[i] + R[i]) * .5f; preIdx = (preIdx + 1) & 4095; }
         }
@@ -117,7 +121,11 @@ void FredonneProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBu
 
 void FredonneProcessor::pressRecord() {
     const int s = st.load();
-    if (s == Idle) { preIdx = 0; std::fill(pre, pre + 4096, 0.f); recLen = 0; st.store(Armed); }
+    if (s == Idle) {
+        const int want = (int)(sr * kMaxSec) + 4096;   // tampon resté à l'ancienne fréquence (prise analysée entre-temps) : remis à la taille
+        if ((int)rec.size() != want) { rec.assign((size_t)want, 0.f); recMax = want; }
+        preIdx = 0; std::fill(pre, pre + 4096, 0.f); recLen = 0; st.store(Armed);
+    }
     else if (s == Armed) st.store(Idle);
     else if (s == Recording) { int e = Recording; st.compare_exchange_strong(e, Captured); }
 }
@@ -128,13 +136,14 @@ void FredonneProcessor::clearTake() {
 }
 
 void FredonneProcessor::loadAudio(const float* mono, int n, double rate) {
-    if (rate != sr) prepareToPlay(rate, 512);
-    n = juce::jmin(n, recMax); std::copy(mono, mono + n, rec.begin()); recLen = n; st.store(Captured);
+    if (st.load() == Analysing) return;
+    if ((int)rec.size() < n) { rec.assign((size_t)n, 0.f); recMax = n; }
+    n = juce::jmin(n, recMax); std::copy(mono, mono + n, rec.begin()); recSr = rate; recLen = n; st.store(Captured);
 }
 
 void FredonneProcessor::timerCallback() {
     if (st.load() == Captured) {
-        if (recLen.load() < (int)(sr * 0.4)) { st.store(Idle); recLen = 0; }
+        if (recLen.load() < (int)(recSr * 0.4)) { st.store(Idle); recLen = 0; }
         else { st.store(Analysing); analysisDone = false; worker.startThread(); }
     }
     if (analysisDone.exchange(false)) { st.store(Idle); dirty = true; }
@@ -143,7 +152,7 @@ void FredonneProcessor::timerCallback() {
 }
 
 void FredonneProcessor::Worker::run() {
-    auto t = std::make_shared<oa::PitchTrack>(oa::analyzePitch(owner.rec.data(), owner.recLen.load(), owner.sr));
+    auto t = std::make_shared<oa::PitchTrack>(oa::analyzePitch(owner.rec.data(), owner.recLen.load(), owner.recSr));
     owner.trackP = t; owner.analysisDone = true;
 }
 
@@ -170,9 +179,39 @@ juce::File FredonneProcessor::writeMidiFile() {
     return f;
 }
 
-void FredonneProcessor::getStateInformation(juce::MemoryBlock& dest) { if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, dest); }
+// L'état garde la prise analysée (piste de hauteur : 16 octets par trame de 10 ms, soit ~200 Ko pour 2 min) et sa position dans le
+// morceau : les notes sont recalculées au chargement avec les réglages sauvegardés, comme après un réglage dans l'interface.
+void FredonneProcessor::getStateInformation(juce::MemoryBlock& dest) {
+    auto tree = apvts.copyState();
+    const auto tk = take();
+    if (tk && tk->track && !tk->track->frames.empty()) {
+        const auto& fr = tk->track->frames;
+        static_assert(sizeof(oa::PitchFrame) == 4 * sizeof(float), "trame de hauteur : 4 flottants");
+        juce::MemoryBlock mb(fr.data(), fr.size() * sizeof(oa::PitchFrame));
+        tree.setProperty("takeFrames", mb.toBase64Encoding(), nullptr);
+        tree.setProperty("takeMaxR", (double)tk->track->maxR, nullptr);
+        tree.setProperty("takeDur", tk->track->dur, nullptr);
+        tree.setProperty("takeStart", takeStart.load(), nullptr);
+    }
+    if (auto xml = tree.createXml()) copyXmlToBinary(*xml, dest);
+}
 void FredonneProcessor::setStateInformation(const void* data, int size) {
-    if (auto xml = getXmlFromBinary(data, size)) if (xml->hasTagName(apvts.state.getType())) apvts.replaceState(juce::ValueTree::fromXml(*xml));
+    auto xml = getXmlFromBinary(data, size);
+    if (!xml || !xml->hasTagName(apvts.state.getType())) return;
+    auto tree = juce::ValueTree::fromXml(*xml);
+    apvts.replaceState(tree);
+    if (!tree.hasProperty("takeFrames") || st.load() == Analysing || st.load() == Captured) return;
+    juce::MemoryBlock mb;
+    if (!mb.fromBase64Encoding(tree.getProperty("takeFrames").toString()) || mb.getSize() % sizeof(oa::PitchFrame) != 0) return;
+    auto t = std::make_shared<oa::PitchTrack>();
+    t->frames.resize(mb.getSize() / sizeof(oa::PitchFrame));
+    std::memcpy(t->frames.data(), mb.getData(), mb.getSize());
+    t->maxR = (float)(double)tree.getProperty("takeMaxR", 0.0);
+    t->dur = (double)tree.getProperty("takeDur", 0.0);
+    takeStart.store((double)tree.getProperty("takeStart", 0.0));
+    trackP = t;
+    resegment();
+    dirty = false;
 }
 
 juce::AudioProcessorEditor* FredonneProcessor::createEditor() { return new FredonneEditor(*this); }

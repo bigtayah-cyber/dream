@@ -1,6 +1,6 @@
 // Orbe Autotune : moteur audio. C++17 pur, sans JUCE (testable hors-ligne).
 // Chaîne : détection YIN -> tonalité (manuelle ou estimée, avec confiance) -> note cible dans la gamme -> décalage de hauteur
-// à deux têtes (Engine.h) -> décalage de formants (STFT, enveloppe cepstrale) -> harmonie / doublage -> mix.
+// à deux têtes (voile::HeadShifter, Engine.h) -> décalage de formants (STFT, enveloppe cepstrale) -> harmonie / doublage -> mix.
 // Deux modes de latence : « Qualité » (décaleur à deux têtes + formants STFT : 37 ms) et « Direct » (décaleur à raccords synchrones
 // à la période de la voix, sans formants : latence <= 256 échantillons).
 // Règle d'or : la correction ne désaccorde jamais. Tonalité non fiable, trame non voisée ou masque vide = pas de décalage.
@@ -12,6 +12,8 @@
 #include <cstring>
 #include <vector>
 #include "../../Engine.h"
+#include "TuneCore.h"
+#include "NoteEdit.h"
 
 namespace atn {
 
@@ -69,6 +71,8 @@ struct Params {
     int scale = 1;
     int flips = 0;     // notes (bit 0 = C) inversées à la main par rapport à la gamme
     bool lowLat = false;   // mode Direct : latence <= 256 échantillons, sans décalage de formants
+    bool orbe = false;     // algorithme « Orbe » (TuneCore.h) : mêmes latences déclarées que l'ancien moteur
+    float expr = 1.f;      // Orbe : expression (vibrato) conservée quand la vitesse est naturelle
 };
 
 // ---------------------------------------------------------------- FFT et décaleur de formants
@@ -154,94 +158,8 @@ struct Formant {
 
 
 // ---------------------------------------------------------------- décaleur à raccords synchrones (mode Direct)
-// PSOLA causal « léger » : un seul lecteur à retard variable dans la mémoire des dernières ~85 ms. Le retard dérive à la vitesse
-// (1 - ratio) échantillons par échantillon ; quand il sort de la fenêtre [lo, lo + T0[ (T0 = période de la voix), il est déplacé d'un
-// nombre ENTIER de périodes : le raccord tombe sur la même phase de la même onde, donc sans peigne ni creux. L'écart exact est
-// affiné par corrélation normalisée (+-R échantillons, interpolation parabolique) et fondu en quelques ms. Fenêtre centrée sur le
-// retard au repos Lz (latence déclarée) tant que la voix est assez aiguë, sinon calée contre le minimum (kMinD). Décalage de moins de
-// 0,5 cent : sortie = signal sec retardé de Lz, exactement ; entre 0,5 et 3 cents : fondu sec -> décalé.
-struct Splicer {
-    static constexpr int kBuf = 4096, kMask = kBuf - 1, kMinD = 32;
-    int nch = 1, w = 0, xf = 0, xfLen = 64, xfCur = 64;
-    bool xfOn = false;
-    float lz = 240.f, d = 240.f, dOld = 0.f, t0 = 300.f;
-    std::vector<float> b[2];
-    void init(int channels, int restDelay) {
-        nch = std::min(2, std::max(1, channels));
-        for (int c = 0; c < 2; ++c) b[c].assign(c < nch ? (size_t)kBuf : 0u, 0.f);
-        lz = (float)restDelay; d = lz; dOld = lz; w = 0; xf = 0; xfOn = false; setPeriod(300.f);
-    }
-    void setPeriod(float p) { t0 = std::min(1500.f, std::max(40.f, p)); xfLen = std::min(160, std::max(32, (int)(0.5f * t0))); }
-    // Mémorise l'entrée sans calculer de décalage (instance au repos) : la mémoire reste à jour.
-    void feed(const float* in) {
-        for (int c = 0; c < nch; ++c) b[c][(size_t)w] = in[c];
-        w = (w + 1) & kMask; d = lz; xfOn = false;
-    }
-    void process(const float* in, float* out, float ratio) {
-        for (int c = 0; c < nch; ++c) b[c][(size_t)w] = in[c];
-        w = (w + 1) & kMask;
-        const int lzi = (int)lz;
-        const float cents = std::fabs(ratio - 1.f) * 1731.234f;
-        const float a = std::min(1.f, std::max(0.f, (cents - 0.5f) * 0.4f));
-        if (a <= 0.f) {   // décalage nul : sec exactement aligné, lecteur ramené au repos (inaudible, il n'est pas utilisé)
-            d = lz; xfOn = false;
-            for (int c = 0; c < nch; ++c) out[c] = b[c][(size_t)((w - 1 - lzi) & kMask)];
-            return;
-        }
-        const float rate = 1.f - ratio;
-        d += rate; if (xfOn) dOld += rate;
-        const float lo = std::max((float)kMinD, lz - 0.5f * t0) + (rate < 0.f ? -rate * (float)xfLen : 0.f);
-        if (!xfOn && (d < lo || d >= lo + t0)) splice(lo);
-        d = std::max(d, 2.f); dOld = std::max(dOld, 2.f);
-        float g = 1.f;
-        if (xfOn) { g = 0.5f - 0.5f * std::cos(kPi * (float)(xf + 1) / (float)xfCur); if (++xf >= xfCur) xfOn = false; }
-        for (int c = 0; c < nch; ++c) {
-            const float dry = b[c][(size_t)((w - 1 - lzi) & kMask)];
-            float sh = rd(c, d);
-            if (g < 1.f) { const float so = rd(c, dOld); sh = so + (sh - so) * g; }
-            out[c] = dry + a * (sh - dry);
-        }
-    }
-    float rd(int c, float D) const {   // lecture cubique (Catmull-Rom), D >= 2
-        const float p = (float)(w - 1) - D;
-        const int i = (int)std::floor(p);
-        const float f = p - (float)i;
-        const float* x = b[c].data();
-        const float y0 = x[(i - 1) & kMask], y1 = x[i & kMask], y2 = x[(i + 1) & kMask], y3 = x[(i + 2) & kMask];
-        return ((((0.5f * (y3 - y0) + 1.5f * (y1 - y2)) * f + (y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3)) * f) + 0.5f * (y2 - y0)) * f + y1;
-    }
-private:
-    float mid(int delay) const {
-        const size_t k = (size_t)((w - 1 - delay) & kMask);
-        return nch == 2 ? 0.5f * (b[0][k] + b[1][k]) : b[0][k];
-    }
-    void splice(float lo) {
-        int k = (int)std::lround((lo + 0.5f * t0 - d) / t0);
-        if (k == 0) k = d < lo ? 1 : -1;
-        const float dn = d + (float)k * t0;
-        const int R = std::min(24, std::max(4, (int)(t0 * 0.125f))), Lc = xfLen, D0 = (int)std::lround(d), N0 = (int)std::lround(dn);
-        float sc[2 * 24 + 3]; for (auto& v : sc) v = -2.f;
-        float eo = 1e-9f; for (int j = 0; j < Lc; ++j) { const float v = mid(D0 + j); eo += v * v; }
-        int best = 0; float bs = -3.f;
-        for (int dl = -R; dl <= R; ++dl) {
-            const int Dn = N0 + dl;
-            if (Dn < 3 || Dn + Lc >= kBuf - 8 || D0 + Lc >= kBuf - 8) continue;
-            float xy = 0.f, en = 1e-9f;
-            for (int j = 0; j < Lc; ++j) { const float yo = mid(D0 + j), yn = mid(Dn + j); xy += yo * yn; en += yn * yn; }
-            const float s = xy / std::sqrt(eo * en);
-            sc[dl + R + 1] = s;
-            if (s > bs) { bs = s; best = dl; }
-        }
-        if (bs < -2.f) best = 0;
-        float frac = 0.f;
-        if (best > -R && best < R) {
-            const float sm = sc[best + R], s0 = sc[best + R + 1], sp = sc[best + R + 2], den = sm - 2.f * s0 + sp;
-            if (sm > -1.5f && sp > -1.5f && den < -1e-6f) frac = std::max(-0.5f, std::min(0.5f, 0.5f * (sm - sp) / den));
-        }
-        dOld = d; d = d + (float)(N0 + best - D0) + frac;
-        xfCur = Lc; xf = 0; xfOn = true;
-    }
-};
+// Code partagé avec Voile, les un-potard, Looks et Atelier : Source/Dsp/Splicer.h (dsp::Splicer, inchangé, même son).
+using Splicer = dsp::Splicer;
 
 // ---------------------------------------------------------------- détection de hauteur YIN
 struct Biquad {
@@ -420,6 +338,8 @@ public:
         lowLat = P.lowLat; lat = lowLat ? latD : latQ;
         for (auto& d : dsh) d.init(win);
         for (auto& d : ddl) d.init((int)(sr * 0.05) + latQ + 16);
+        core.prepare(sr, latD, win / 2);   // Qualité : anticipation win/2 + formants STFT = latQ, exactement comme l'ancien moteur
+        core.setQuality(!lowLat); core.reset(); orbeOn = P.orbe;
         ke.reset(); ke.fam = -1;
         hopC = keTick = unv = 0; curNote = -1;
         shiftC = curMain = curH = tgtMain = tgtH = 0.f; stepMain = stepH = 0.f; itvS = 0.f; hvS = dblS = 0.f; mixS = P.mix;
@@ -433,13 +353,21 @@ public:
     int latencyDirect() const { return latD; }    // retard déclaré en mode Direct (<= 256)
     void set(const Params& p) {
         if (p.lowLat != lowLat) setLowLatency(p.lowLat);
+        if (p.orbe != orbeOn) {   // changement d'algorithme : mémoires repartent à zéro (sans allocation)
+            orbeOn = p.orbe; core.setQuality(!lowLat); core.reset(); setLowLatency(lowLat);
+            curMain = curH = tgtMain = tgtH = stepMain = stepH = shiftC = 0.f;
+        }
         P = p;
     }
+    // Position de timeline (échantillons) du début du bloc suivant, éditions de notes et capture (mode Orbe). Appelé avant process().
+    void setTimeline(double pos, bool playing, const ned::EditList* e, ned::Capture* cap) { tlPos = pos; tlPlay = playing; edits = e; capture = cap; }
+    const tc::TuneCore& orbeCore() const { return core; }
     // Change de mode sans allocation : la mémoire du mode entrant est remise à zéro (une coupure brève, pas de bruit résiduel).
     void setLowLatency(bool low) {
         lowLat = low; lat = low ? latD : latQ;
         if (low) { spl.init(2, latD); splH.init(2, latD); splD[0].init(1, latD); splD[1].init(1, latD); }
         else for (auto& c : ch) { c.fm.init(sr); c.fh.init(sr); c.sh.init(win); c.shH.init(win); }
+        core.setQuality(!low);
         for (auto& c : ch) c.dry.init(win / 2 + c.fm.latency() + 16);
         for (auto& d : dsh) d.init(win);
         for (auto& d : ddl) d.init((int)(sr * 0.05) + latQ + 16);
@@ -447,6 +375,7 @@ public:
 
     // Traite n échantillons stéréo sur place.
     void process(float* l, float* r, int n) {
+        if (P.orbe) { processOrbe(l, r, n); return; }
         float* io[2] = {l, r};
         for (int i = 0; i < n; ++i) {
             float x[2];
@@ -458,6 +387,7 @@ public:
             mixS += (P.mix - mixS) * 0.002f;
             const float ratio = std::exp2(curMain * (1.f / 1200.f));
             const bool hAct = hvS > 0.002f, dAct = dblS > 0.002f;
+            wake(hAct, dAct);
             const float rH = hAct ? std::exp2(curH * (1.f / 1200.f)) : 1.f;
             float sd[2] = {0.f, 0.f}, hw[2] = {0.f, 0.f}, ws[2];
             if (lowLat) {
@@ -502,6 +432,7 @@ public:
                 io[c][i] = cl(o, -8.f, 8.f);
             }
         }
+        tlPos += n;
     }
 
     Telemetry tel;
@@ -510,10 +441,160 @@ public:
     Params P;
 
 private:
-    struct Chan { voile::Shifter sh, shH; Formant fm, fh; voile::Delay dry; };
+    struct Chan { voile::HeadShifter sh, shH; Formant fm, fh; voile::Delay dry; };
     Splicer spl, splH, splD[2];
     bool lowLat = false;
     int latQ = 0, latD = 0;
+
+
+    // ------------------------------------------------------------ chemin « Orbe »
+    // Voix principale : TuneCore (analyse + correction + resynthèse à formants préservés). Harmonie et doublage : décaleurs
+    // existants, pilotés par la correction de TuneCore. Qualité : étage de formants STFT après TuneCore (latence totale = latQ).
+    void processOrbe(float* l, float* r, int n) {
+        int i = 0;
+        while (i < n) {
+            const int c = std::min(n - i, std::min(core.samplesToHop(), kChunk));
+            orbeParams(i + c);
+            std::memcpy(wl, l + i, sizeof(float) * (size_t)c); std::memcpy(wr, r + i, sizeof(float) * (size_t)c);
+            for (int j = 0; j < c; ++j) { if (!std::isfinite(wl[j])) wl[j] = 0.f; if (!std::isfinite(wr[j])) wr[j] = 0.f; }
+            float* in[2] = {l + i, r + i};
+            for (int j = 0; j < c; ++j) for (int k = 0; k < 2; ++k) if (!std::isfinite(in[k][j])) in[k][j] = 0.f;
+            core.process(wl, wr, c);
+            float* io[2] = {l + i, r + i};
+            for (int j = 0; j < c; ++j) {
+                float x[2] = {io[0][j], io[1][j]};
+                const float mid = 0.5f * (x[0] + x[1]);
+                curMain += stepMain; curH += stepH;
+                mixS += (P.mix - mixS) * 0.002f;
+                const bool hAct = hvS > 0.002f, dAct = dblS > 0.002f;
+                wake(hAct, dAct);
+                const float rH = hAct ? std::exp2(curH * (1.f / 1200.f)) : 1.f;
+                float sd[2] = {0.f, 0.f}, hw[2] = {0.f, 0.f};
+                if (lowLat) {
+                    if (dAct) {
+                        const float dc = 5.f + 10.f * P.dbl, m1 = mid; float d1, d2;
+                        splD[0].process(&m1, &d1, std::exp2((curMain + dc) * (1.f / 1200.f)));
+                        splD[1].process(&m1, &d2, std::exp2((curMain - dc) * (1.f / 1200.f)));
+                        ddl[0].push(d1); ddl[1].push(d2);
+                        const float A = ddl[0].read((float)(int)(sr * 0.011)), B = ddl[1].read((float)(int)(sr * 0.017));
+                        const float lev = 0.55f * dblS, wd = 0.5f + 0.5f * P.dbl;
+                        sd[0] = lev * (A + (1.f - wd) * B); sd[1] = lev * (B + (1.f - wd) * A);
+                    } else { splD[0].feed(&mid); splD[1].feed(&mid); }
+                    if (hAct) splH.process(x, hw, rH); else splH.feed(x);
+                } else if (dAct) {
+                    const float dc = 5.f + 10.f * P.dbl;
+                    const float d1 = dsh[0].process(mid, std::exp2((curMain + dc) * (1.f / 1200.f)));
+                    const float d2 = dsh[1].process(mid, std::exp2((curMain - dc) * (1.f / 1200.f)));
+                    ddl[0].push(d1); ddl[1].push(d2);
+                    const float A = ddl[0].read((float)(ch[0].fm.latency() + (int)(sr * 0.011))), B = ddl[1].read((float)(ch[0].fm.latency() + (int)(sr * 0.017)));
+                    const float lev = 0.55f * dblS, wd = 0.5f + 0.5f * P.dbl;
+                    sd[0] = lev * (A + (1.f - wd) * B); sd[1] = lev * (B + (1.f - wd) * A);
+                }
+                const float main[2] = {wl[j], wr[j]};
+                for (int k = 0; k < 2; ++k) {
+                    Chan& q = ch[k];
+                    q.dry.push(x[k]);
+                    float wet;
+                    if (lowLat) wet = main[k] + sd[k] + (hAct ? 0.8f * hvS * hw[k] : 0.f);
+                    else {
+                        wet = q.fm.process(main[k], sOrbe) + sd[k];
+                        if (hAct) wet += 0.8f * hvS * q.fh.process(q.shH.process(x[k], rH), sHarm);
+                    }
+                    float o = q.dry.read((float)lat) * (1.f - mixS) + wet * mixS;
+                    if (!std::isfinite(o)) o = 0.f;
+                    io[k][j] = cl(o, -8.f, 8.f);
+                }
+            }
+            i += c;
+            if (core.samplesToHop() == core.hopSize()) orbeHop(i);
+        }
+        tlPos += n;
+    }
+    // Réglages de TuneCore pour la trame qui se termine à l'échantillon `endInBlock` du bloc.
+    void orbeParams(int endInBlock) {
+        tc::Params q;
+        q.speedMs = P.speed; q.tolCents = P.tol; q.amount = P.amt; q.expr = P.expr; q.formants = P.formPres;
+        q.mask = orbeMask; q.offsetCents = orbeOff;
+        if (tlPlay && edits) {
+            const double pos = tlPos + endInBlock - core.latency();   // instant de timeline de l'audio analysé pour cette trame
+            if (const ned::Note* nt = edits->at(pos)) { q.editTarget = nt->target(); q.editAmount = nt->amount; q.editExpr = nt->expr; q.editSpeedMs = nt->speedMs; }
+        }
+        core.setParams(q);
+    }
+    void orbeHop(int endInBlock) {
+        const tc::State& s = core.state();
+        const bool voiced = s.voiced;
+        if (tlPlay && capture) capture->push(tlPos + endInBlock - core.latency(), voiced ? s.pitch : 0.f);
+        const float hopS = (float)(hop / sr), hopMs = hopS * 1000.f;
+        const auto& sc = scales()[std::clamp(P.scale, 0, kScales - 1)];
+        if (P.key < 0) {
+            if (sc.n == 12) { ke.locked = true; ke.root = 0; }
+            else {
+                if (ke.fam != (int)sc.minorLike) { ke.fam = (int)sc.minorLike; ke.locked = false; ke.cnt = 0; ke.cand = -1; }
+                ke.decay(keDecay);
+                if (voiced) ke.add(s.pitch, std::max(0.5f, s.conf), keAdd);
+                if (++keTick % keyEvery == 0) ke.update(sc.minorLike);
+            }
+        }
+        int mode = 2, root = -1, base = 0;
+        if (P.key >= 0) { mode = 0; root = P.key; base = scaleMask(root, P.scale); }
+        else if (ke.locked) { mode = 1; root = ke.root; base = scaleMask(root, P.scale); }
+        const int eff = mode == 2 ? 0 : ((base ^ P.flips) & 0xFFF);
+        orbeMask = eff;
+        unv = voiced ? 0 : unv + 1;
+        voicedT = voiced ? voicedT + hopS : (unv > nReset ? 0.f : voicedT);
+        vph += 2.f * kPi * P.vr * hopS; vph -= 2.f * kPi * std::floor(vph / (2.f * kPi));
+        const float vib = P.vd * std::sin(vph) * cl((voicedT - 0.15f) / 0.35f, 0.f, 1.f);
+        orbeOff = P.trans * 100.f + vib;
+        curNote = s.note >= 0.f ? (int)std::lround(s.note) : -1;
+        shiftC = voiced ? s.shift * 100.f : 0.f;
+        tgtMain = s.shift * 100.f + orbeOff;
+        int itv = 0; bool hOK = false;
+        const int bn = curNote;
+        auto ok = [&](int d) { return bn >= 0 && ((eff >> pcOf(bn + d)) & 1); };
+        switch (P.harm) {
+            case 1: if (bn >= 0 && eff) { itv = ok(4) && !ok(3) ? 4 : ok(3) ? 3 : 4; hOK = true; } break;
+            case 2: itv = (bn >= 0 && eff && !ok(7) && ok(6)) ? 6 : 7; hOK = true; break;
+            case 3: if (bn >= 0 && eff) { itv = ok(-4) && !ok(-3) ? -4 : ok(-3) ? -3 : -4; hOK = true; } break;
+            case 4: itv = 12; hOK = true; break;
+            case 5: itv = -12; hOK = true; break;
+            default: break;
+        }
+        const float hvT = (hOK && unv <= nSil) ? P.hv : 0.f;
+        const float sm = 1.f - std::exp(-hopMs / 12.f);
+        if (hvS < 0.01f) itvS = (float)itv; else if (hOK) itvS += ((float)itv - itvS) * sm;
+        hvS += (hvT - hvS) * sm;
+        dblS += ((P.dbl > 0.001f && unv <= nSil ? P.dbl : 0.f) - dblS) * sm;
+        tgtH = tgtMain + itvS * 100.f;
+        const float fu = std::exp2(P.form / 12.f), pH = std::exp2(tgtH / 1200.f);
+        sOrbe = cl(1.f / fu, 0.4f, 2.5f);   // TuneCore garde l'enveloppe (ou la laisse suivre la hauteur si formPres = 0) : reste le décalage voulu
+        sHarm = cl(pH / (P.formPres ? fu : pH * fu), 0.4f, 2.5f);
+        stepMain = (tgtMain - curMain) / (float)hop; stepH = (tgtH - curH) / (float)hop;
+        const int w = tel.wr.load(std::memory_order_relaxed) % Telemetry::N;
+        tel.det[w] = voiced ? s.pitch : 0.f;
+        tel.tgt[w] = (voiced && s.note >= 0.f) ? s.note : 0.f;
+        tel.out[w] = voiced ? s.pitch + s.shift + orbeOff * 0.01f : 0.f;
+        tel.mode = mode; tel.root = root; tel.mask = eff; tel.scale = P.scale; tel.flips = P.flips; tel.corr = voiced ? s.shift * 100.f : 0.f;
+        tel.wr.store(w + 1, std::memory_order_release);
+    }
+    static constexpr int kChunk = 256;
+    tc::TuneCore core;
+    bool orbeOn = false, tlPlay = false;
+    double tlPos = 0.0;
+    const ned::EditList* edits = nullptr;
+    ned::Capture* capture = nullptr;
+    int orbeMask = 0;
+    float orbeOff = 0.f, sOrbe = 1.f;
+    float wl[kChunk] = {}, wr[kChunk] = {};
+
+    // B1 : au réveil de l'harmonie ou du doublage, leurs mémoires (figées pendant le silence) sont vidées, sans allocation :
+    // sinon elles rejouent 20 à 40 ms de la phrase précédente (souffle, sifflante).
+    void wake(bool hAct, bool dAct) {
+        if (hAct && !wasH) for (auto& c : ch) { c.shH.init((int)c.shH.win); std::fill(c.fh.in.begin(), c.fh.in.end(), 0.f); std::fill(c.fh.acc.begin(), c.fh.acc.end(), 0.f); }
+        if (dAct && !wasD) { for (auto& d : dsh) d.init((int)d.win); for (auto& d : ddl) std::fill(d.b.begin(), d.b.end(), 0.f); }
+        wasH = hAct; wasD = dAct;
+    }
+    bool wasH = false, wasD = false;
 
     static int pickNote(float m, int mask, int cur) {
         int best = -1; float bd = 1e9f;
@@ -613,7 +694,7 @@ private:
     float keDecay = 0.9997f, keAdd = 1.f;
     int hop = 128, win = 1536, lat = 0, hopC = 0, keTick = 0, unv = 0, curNote = -1;
     std::array<Chan, 2> ch;
-    std::array<voile::Shifter, 2> dsh;
+    std::array<voile::HeadShifter, 2> dsh;
     std::array<voile::Delay, 2> ddl;
     float shiftC = 0.f, curMain = 0.f, curH = 0.f, tgtMain = 0.f, tgtH = 0.f, stepMain = 0.f, stepH = 0.f, itvS = 0.f, hvS = 0.f, dblS = 0.f, mixS = 1.f;
     float vph = 0.f, voicedT = 0.f, held = 0.f, sMain = 1.f, sHarm = 1.f;

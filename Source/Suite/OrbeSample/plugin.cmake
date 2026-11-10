@@ -16,7 +16,8 @@ juce_add_plugin(OrbeSample
     AU_MAIN_TYPE kAudioUnitType_MusicDevice
     COPY_PLUGIN_AFTER_BUILD FALSE)
 target_sources(OrbeSample PRIVATE ${ORBE_SAMPLE_SRC})
-target_compile_definitions(OrbeSample PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
+# JUCE_USE_MP3AUDIOFORMAT : décodeur MP3 de JUCE (sans lui, Windows et Linux ne lisent pas le MP3 ; Mac passe par CoreAudio)
+target_compile_definitions(OrbeSample PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_USE_MP3AUDIOFORMAT=1)
 target_link_libraries(OrbeSample PRIVATE juce::juce_audio_utils PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
 
 # Contrôle visuel : cmake --build . --target orbe_sample_snapshot (exécuter sous xvfb)

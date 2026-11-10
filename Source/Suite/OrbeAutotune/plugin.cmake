@@ -20,6 +20,10 @@ target_link_libraries(OrbeAutotune PRIVATE juce::juce_audio_utils PUBLIC juce::j
 # Test console du moteur (sans JUCE) : cmake --build . --target orbeautotune_test
 add_executable(orbeautotune_test EXCLUDE_FROM_ALL ${_atudir}/autotune_test.cpp)
 
+# Moteur « Orbe » (TuneCore.h) : mesures objectives et comparaison avec l'ancien moteur : cmake --build . --target tune_core_test
+add_executable(tune_core_test EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/tests/tune_core_test.cpp)
+target_compile_options(tune_core_test PRIVATE -O2)
+
 # Contrôle visuel : cmake --build . --target orbeautotune_snapshot (sous xvfb)
 juce_add_console_app(orbeautotune_snapshot PRODUCT_NAME "orbeautotune_snapshot")
 target_sources(orbeautotune_snapshot PRIVATE ${_atudir}/autotune_snapshot.cpp ${_atudir}/AutotuneProcessor.cpp ${_atudir}/AutotuneEditor.cpp)

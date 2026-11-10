@@ -67,6 +67,8 @@ private:
         }
     };
     static constexpr int kHist = 8;
+    static constexpr int kNb = 16;         // demi-largeur du voisinage de la garde de tonalité (bins)
+    static constexpr float kTonal = 2.f;   // un bin n'entre dans le suivi des minima qu'à 3 dB au plus au-dessus de ses voisins
 
     void setHum(int h, bool force) {
         if (h == humSet && !force) return;
@@ -99,10 +101,18 @@ private:
         auto& P = Pbuf;   // pré-alloué (constructeur) : écrasé intégralement ci-dessous
         for (int k = 0; k < kBins; ++k) P[(size_t)k] = re[k] * re[k] + im[k] * im[k];
 
-        // minima statistiques (suivi du plancher de bruit)
-        for (int k = 0; k < kBins; ++k) {
+        // minima statistiques (suivi du plancher de bruit), avec garde de tonalité : un partiel stable (note tenue, pad, 808)
+        // dure souvent plus que la fenêtre des minima et deviendrait son propre plancher. Le suivi ne voit donc chaque bin
+        // qu'au plus à kTonal × le premier quart de ses voisins (±kNb bins, lissés) : sur du bruit seul (bin ≈ voisins) rien ne
+        // change ; sur un pic tonal, le plancher reste celui du bruit qui l'entoure.
+        for (int k = 0; k < kBins; ++k)
             c.sm[(size_t)k] = c.count <= kHop ? P[(size_t)k] : 0.85f * c.sm[(size_t)k] + 0.15f * P[(size_t)k];
-            c.subMin[(size_t)k] = std::min(c.subMin[(size_t)k], c.sm[(size_t)k]);
+        for (int k = 0; k < kBins; ++k) {
+            const int lo = std::max(0, k - kNb), hi = std::min(kBins - 1, k + kNb), m = hi - lo + 1;
+            for (int j = 0; j < m; ++j) med[(size_t)j] = c.sm[(size_t)(lo + j)];
+            std::nth_element(med.begin(), med.begin() + m / 4, med.begin() + m);
+            const float q = std::min(c.sm[(size_t)k], kTonal * med[(size_t)(m / 4)]);
+            c.subMin[(size_t)k] = std::min(c.subMin[(size_t)k], q);
         }
         if (++c.subCount >= subLen) {
             std::copy(c.subMin.begin(), c.subMin.end(), c.hist.begin() + (long)c.histPos * kBins);
@@ -165,6 +175,7 @@ private:
     static float toDb(float pw) { return 10.f * std::log10(pw + 1e-20f) - 56.28f; }
 
     odsp::Fft fft;
+    std::vector<float> med = std::vector<float>(2 * kNb + 1, 0.f);   // tampon du quantile (fil audio, pré-alloué)
     std::vector<float> Pbuf, win, profile = std::vector<float>(kBins, 0.f), pending, learnAcc;
     Chan ch[2];
     Params p;

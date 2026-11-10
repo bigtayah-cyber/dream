@@ -5,6 +5,7 @@
 #include "../../Kit/Widgets.h"
 #include "OrbeDsp.h"
 #include "../../Kit/BypassFade.h"
+#include "../../Kit/Sanitize.h"
 
 namespace of {
 using juce::Colour, juce::Rectangle, juce::String;
@@ -80,6 +81,7 @@ protected:
         if (b.getNumChannels() < 2) return false;
         const bool st = getTotalNumInputChannels() >= 2;
         float* l = b.getWritePointer(0); float* r = b.getWritePointer(1);
+        kit::sanitize(l, b.getNumSamples()); if (st) kit::sanitize(r, b.getNumSamples());   // NaN/inf d'un plugin précédent : remplacés par 0 avant tout état interne
         fader.run(l, r, b.getNumSamples(), st, bypass != nullptr && bypass->get(),
                   [&](float* cl, float* cr, int c) { for (int p = 0; p < c; p += maxBlock) { const int k = juce::jmin(maxBlock, c - p); f(cl + p, st ? cr + p : nullptr, cl + p, cr + p, k); } });
         return true;

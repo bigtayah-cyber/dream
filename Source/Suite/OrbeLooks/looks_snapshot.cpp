@@ -1,4 +1,4 @@
-// Rend la face avant d'Orbe Looks dans un PNG. Usage : orbelooks_snapshot sortie.png [look 0-9] [largeur]
+// Rend la face avant d'Orbe Looks dans un PNG. Usage : orbelooks_snapshot sortie.png [look 0-26] [largeur]
 #include "LooksProcessor.h"
 #include "LooksEditor.h"
 int main(int argc, char** argv) {

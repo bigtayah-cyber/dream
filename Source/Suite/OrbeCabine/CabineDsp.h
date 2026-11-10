@@ -76,7 +76,8 @@ struct Os2 {
     }
 };
 
-inline float satShape(float x, float k) { return std::tanh(x * k) / std::tanh(k); }
+// pente 1 en zéro : aucun gain en petits signaux (l'ancienne forme tanh(kx)/tanh(k) ajoutait jusqu'à +20 dB à sat 10)
+inline float satShape(float x, float k) { return std::tanh(x * k) / k; }
 
 class Engine {
 public:
@@ -92,6 +93,7 @@ public:
         lfo[0] = lfo[1] = 0.f; dlyT = 0.f;
         gMk = gOut = gRev = gDly = gDbl = -1.f; last = Params{}; lastValid = false; outPk = 0.f; grNow = 0.f;
         sc = 1.f - std::exp(-1.f / (0.02f * sr));
+        lvC = 1.f - std::exp(-1.f / (0.3f * sr)); pPre = pSat = 0.f; satS = -1.f;
     }
     int latency() const { return Os2::kLatency; }
     void setBpm(double b) { bpm = (float)(b > 20.0 ? b : 120.0); }
@@ -107,6 +109,7 @@ public:
         if (dlyT <= 0.f) dlyT = dTarget;
         const float tMk = std::pow(10.f, P.mk / 20.f), tOut = std::pow(10.f, P.out / 20.f);
         if (gMk < 0) { gMk = tMk; gOut = tOut; gRev = P.rev; gDly = P.dly; gDbl = P.dbl; }
+        if (satS < 0.f) satS = P.sat;
         const float pw[2][2] = {{0.9930f, 0.1175f}, {0.1175f, 0.9930f}};  // pans -0.85 / +0.85, loi en cosinus
         float pk = 0.f, gmax = 0.f, ss = 0.f;
         for (int i = 0; i < n; ++i) {
@@ -116,9 +119,15 @@ public:
             float r = air[1].process(pres[1].process(mud[1].process(hp[1].process(xr))));
             if (lpOn) { l = lp[0].process(l); r = lp[1].process(r); }
             // saturation tanh sur-échantillonnée 2× (le FIR tourne toujours : latence constante)
+            // SATURATION lissée (20 ms) puis compensation de niveau (rapport des puissances avant/après sur 300 ms, borné à [1, 1 + sat]) :
+            // le potard change la couleur, pas le volume
+            satS += (P.sat - satS) * sc;
             os[0].upsample(l, ul[0], ul[1]); os[1].upsample(r, ur[0], ur[1]);
-            if (P.sat > 0.01f) for (int k = 0; k < 2; ++k) { ul[k] = satShape(ul[k], P.sat); ur[k] = satShape(ur[k], P.sat); }
+            const bool satOn = satS > 0.01f;
+            if (satOn) for (int k = 0; k < 2; ++k) { ul[k] = satShape(ul[k], satS); ur[k] = satShape(ur[k], satS); }
             float a = os[0].downsample(ul[0], ul[1]), b = os[1].downsample(ur[0], ur[1]);
+            pPre += (l * l + r * r - pPre) * lvC; pSat += (a * a + b * b - pSat) * lvC;
+            if (satOn) { const float c = std::clamp(std::sqrt((pPre + 1e-12f) / (pSat + 1e-12f)), 1.f, 1.f + satS); a *= c; b *= c; }
             const float g = comp.gain(a, b);
             gmax = std::max(gmax, comp.gr);
             gMk += (tMk - gMk) * sc; gOut += (tOut - gOut) * sc; gRev += (P.rev - gRev) * sc; gDly += (P.dly - gDly) * sc; gDbl += (P.dbl - gDbl) * sc;
@@ -170,6 +179,7 @@ private:
         last = p; lastValid = true;
     }
     float sr = 48000.f, bpm = 120.f, sc = 0.001f, dlyT = 0.f, lfo[2] = {0, 0}, gMk = -1, gOut = 1, gRev = 0, gDly = 0, gDbl = 0, outPk = 0, outMs = 0, grNow = 0;
+    float lvC = 1e-4f, pPre = 0.f, pSat = 0.f, satS = -1.f;   // compensation de niveau et lissage de la saturation
     int revTail = 0;
     bool lpOn = false, lastValid = false;
     Params P, last;

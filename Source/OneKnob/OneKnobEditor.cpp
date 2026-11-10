@@ -48,8 +48,7 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
     setLookAndFeel(&look);
     const auto& vc = OneKnobProcessor::voicing();
     const auto cfg = faceCfg(vi);
-    onek::Mapped m; m.eng.tension = 0; vc.map(1.f, m);
-    usesPitch = m.eng.tension > 0.01f;
+    usesPitch = vc.pitch;
 
     auto setupKnob = [&](juce::Slider& s, KnobStyle st, juce::uint32 cap, bool scale, const String& tip) {
         s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
@@ -127,7 +126,14 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
     autoGainB.painter = pushPainter("Auto-gain", pal.ledAmber);
     autoGainB.setTooltip(u8("Auto-gain : la sortie garde le niveau d'entrée quel que soit le potard (compensation lente, ~0,5 s). Coupe-le pour juger le gain réel."));
     autoGainAtt = std::make_unique<ButtonAtt>(proc.apvts, "autogain", autoGainB);
-    for (auto* b : {&autoInB, &autoGainB}) addChildComponent(*b);
+    optB.painter = pushPainter(vc.optName, pal.ledGreen);
+    optB.setTooltip(u8(vc.optTip));
+    optAtt = std::make_unique<ButtonAtt>(proc.apvts, "opt", optB);
+    engineB.painter = pushPainter("Son classique", pal.ledAmber);
+    engineB.setTooltip(u8("Son classique : l'ancien moteur, tel qu'il sonnait avant la refonte (même latence). "
+                          "Les projets enregistrés avant la refonte se rouvrent dessus ; éteins-le pour passer au nouveau son."));
+    engineAtt = std::make_unique<ButtonAtt>(proc.apvts, "engine", engineB);
+    for (auto* b : {&autoInB, &autoGainB, &optB, &engineB}) addChildComponent(*b);
 
     advBtn.painter = [this](juce::Graphics& g, FaceButton& b, bool hover, bool down) {
         const auto r = b.getLocalBounds().toFloat();
@@ -154,6 +160,7 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
     scaleAtt = std::make_unique<ComboAtt>(proc.apvts, "scale", scaleBox);
     keyBox.setTooltip(u8("Tonalité. Auto : détectée sur ta voix, et AUCUNE correction vers une note tant qu'elle n'est pas fiable (l'afficheur clignote). Ou impose la tonique."));
     scaleBox.setTooltip(u8("Gamme. Auto : majeur ou mineur détecté. Ou impose majeur / mineur."));
+    if (vi == 2) keyBox.setTooltip(u8("Tonalité. Auto : hard-tune CHROMATIQUE (toutes les notes, effet immédiat). Ou impose la tonique : la voix est plaquée sur sa gamme."));
     keyBox.setVisible(usesPitch); scaleBox.setVisible(usesPitch);
 
     // taille et volet mémorisés dans l'état du projet
@@ -174,7 +181,7 @@ void OneKnobEditor::setPanel(bool open, bool resize) {
     const float h = kH + (open ? kPanel : 0.f);
     setResizeLimits(240, juce::roundToInt(240.f * h / kW), 600, juce::roundToInt(600.f * h / kW));
     getConstrainer()->setFixedAspectRatio(kW / h);
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&trimS, &toneS, &mixS, &outS, &specS, &autoInB, &autoGainB}) c->setVisible(open);
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&trimS, &toneS, &mixS, &outS, &specS, &autoInB, &autoGainB, &optB, &engineB}) c->setVisible(open);
     if (resize) setSize(getWidth(), juce::roundToInt((float)getWidth() * h / kW));
 }
 
@@ -208,6 +215,8 @@ void OneKnobEditor::resized() {
     for (int i = 0; i < 5; ++i) sm[i]->setBounds(S(xs[i] - 24, kH + 20, 48, 48).toNearestInt());
     autoInB.setBounds(Si(22, kH + 96, 130, 22));
     autoGainB.setBounds(Si(162, kH + 96, 110, 22));
+    optB.setBounds(Si(22, kH + 124, 130, 22));
+    engineB.setBounds(Si(162, kH + 124, 120, 22));
     proc.apvts.state.setProperty("uiW", getWidth(), nullptr);
 }
 

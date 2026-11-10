@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "AutotuneDsp.h"
+#include "NoteEdit.h"
 #include "../../Kit/BypassFade.h"
 
 class AutotuneProcessor : public juce::AudioProcessor {
@@ -34,13 +35,43 @@ public:
     void toggleNote(int pc);           // inverse la note par rapport à la gamme (masque éditable)
     void clearNotes();
     const atn::Telemetry& tel() const { return engine.tel; }
+    bool flatsPref() const { return raw("accid") > 0.5f; }
+    bool orbeOn() const { return raw("algo") > 0.5f; }
+
+    // ---- édition note par note (fil de l'interface uniquement)
+    ned::Capture capture;
+    const std::vector<ned::Note>& notes() const { return notesUi; }
+    const std::vector<ned::Frame>& curve() const { return curveUi; }
+    void setNotes(std::vector<ned::Note> v, bool undoable = true);   // publie aussi vers le fil audio
+    bool undo(); bool redo();
+    bool canUndo() const { return histPos > 0; }
+    bool canRedo() const { return histPos + 1 < (int)hist.size(); }
+    void armCapture();
+    void stopCapture();
+    bool pollCapture();                          // vrai quand une capture vient d'être découpée en notes
+    double playPos() const { return lastPos.load(); }
+    bool isPlaying() const { return lastPlaying.load(); }
+    double sampleRateNow() const { return getSampleRate() > 0 ? getSampleRate() : 44100.0; }
 
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout();
     void setPlain(const char* id, float v);
+    void publishEdits();
+    void initRaw();
+    enum RawId { rSpeed, rTol, rAmt, rTrans, rForm, rFormPres, rVd, rVr, rHarm, rHv, rDbl, rMix, rLat, rKey, rScale, rAlgo, rExpr, rNum };
+    std::atomic<float>* rp[rNum] = {};
+    std::atomic<float>* rx[12] = {};
     atn::Engine engine;
+    juce::SpinLock editLock;
+    std::unique_ptr<ned::EditList> editLive = std::make_unique<ned::EditList>();
+    std::vector<ned::Note> notesUi;
+    std::vector<ned::Frame> curveUi;
+    std::vector<std::vector<ned::Note>> hist;
+    int histPos = -1;
+    std::atomic<double> lastPos{0.0};
+    std::atomic<bool> lastPlaying{false};
     atn::BypassDelay byp;
     bypassfx::Fader fader, faderIdle;   // l'un pour le mode actif, l'autre (latence de l'autre mode) tenu chaud pour basculer sans trou
     bool faderIsLow = false;

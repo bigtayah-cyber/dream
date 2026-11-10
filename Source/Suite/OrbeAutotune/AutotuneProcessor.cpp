@@ -34,6 +34,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutotuneProcessor::makeLayou
     for (int i = 0; i < 12; ++i) l.add(std::make_unique<AudioParameterChoice>(ParameterID{"x" + String(i), 1}, u8("Note ") + atn::noteNames()[i] + u8(" inversée"), StringArray{"Non", "Oui"}, 0));   // choix à 2 valeurs : valeur toujours calée sur 0/1 (restauration d'état fiable)
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"latmode", 1}, u8("Latence"), StringArray{"Direct", u8("Qualité")}, 0));   // Direct : <= 256 éch. ; Qualité : formants, latence d'origine
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"bypass", 1}, "Bypass", false));
+    // ---- ajoutés en fin (les IDs précédents ne bougent pas) ; un ancien projet sans « algo » est rechargé en Classique
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"algo", 1}, u8("Moteur"), StringArray{"Classique", "Orbe"}, 1));
+    flt("expr", "Expression", 0.f, 1.f, 0.01f, d.expr, pct);
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"accid", 1}, u8("Altérations"), StringArray{u8("Dièses (#)"), u8("Bémols (b)")}, 0));
     return l;
 }
 
@@ -41,6 +45,15 @@ AutotuneProcessor::AutotuneProcessor()
     : AudioProcessor(BusesProperties().withInput("Input", juce::AudioChannelSet::stereo(), true).withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "ORBEAUTOTUNE", makeLayout()) {
     bypass = dynamic_cast<juce::AudioParameterBool*>(apvts.getParameter("bypass"));
+    initRaw();
+    hist.push_back({}); histPos = 0;
+}
+
+// G4 : pointeurs de paramètres préchargés (aucune chaîne construite dans le fil audio).
+void AutotuneProcessor::initRaw() {
+    static const char* ids[rNum] = {"speed", "tol", "amt", "trans", "form", "formPres", "vd", "vr", "harm", "hv", "dbl", "mix", "latmode", "key", "scale", "algo", "expr"};
+    for (int i = 0; i < rNum; ++i) rp[i] = apvts.getRawParameterValue(ids[i]);
+    for (int i = 0; i < 12; ++i) rx[i] = apvts.getRawParameterValue("x" + String(i));
 }
 
 bool AutotuneProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
@@ -51,11 +64,13 @@ bool AutotuneProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
 
 atn::Params AutotuneProcessor::readParams() const {
     atn::Params p;
-    p.speed = raw("speed"); p.tol = raw("tol"); p.amt = raw("amt"); p.trans = raw("trans"); p.form = raw("form"); p.formPres = raw("formPres") > 0.5f;
-    p.vd = raw("vd"); p.vr = raw("vr"); p.harm = juce::roundToInt(raw("harm")); p.hv = raw("hv"); p.dbl = raw("dbl"); p.mix = raw("mix");
-    p.lowLat = juce::roundToInt(raw("latmode")) == 0;
-    p.key = juce::roundToInt(raw("key")) - 1; p.scale = juce::roundToInt(raw("scale"));
-    for (int i = 0; i < 12; ++i) if (raw(("x" + String(i)).toRawUTF8()) > 0.5f) p.flips |= 1 << i;
+    auto v = [this](RawId i) { return rp[i]->load(std::memory_order_relaxed); };
+    p.speed = v(rSpeed); p.tol = v(rTol); p.amt = v(rAmt); p.trans = v(rTrans); p.form = v(rForm); p.formPres = v(rFormPres) > 0.5f;
+    p.vd = v(rVd); p.vr = v(rVr); p.harm = juce::roundToInt(v(rHarm)); p.hv = v(rHv); p.dbl = v(rDbl); p.mix = v(rMix);
+    p.lowLat = juce::roundToInt(v(rLat)) == 0;
+    p.key = juce::roundToInt(v(rKey)) - 1; p.scale = juce::roundToInt(v(rScale));
+    p.orbe = v(rAlgo) > 0.5f; p.expr = v(rExpr);
+    for (int i = 0; i < 12; ++i) if (rx[i]->load(std::memory_order_relaxed) > 0.5f) p.flips |= 1 << i;
     return p;
 }
 
@@ -85,7 +100,8 @@ void AutotuneProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     latLow = engine.latencyDirect(); latQual = engine.latencyQuality();
     byp.init(juce::jmax(latLow, latQual));
     byp.lat = engine.latency();
-    scratch.setSize(1, juce::jmax(512, samplesPerBlock));
+    scratch.setSize(1, juce::jmax(8192, samplesPerBlock));   // G4 : FL envoie parfois des blocs plus grands qu'annoncé
+    capture.hop = engine.orbeCore().hopSize();
     faderIsLow = engine.latency() == latLow && juce::roundToInt(raw("latmode")) == 0;
     fader.prepare(sampleRate, engine.latency(), juce::jmax(4096, samplesPerBlock));
     faderIdle.prepare(sampleRate, faderIsLow ? latQual : latLow, juce::jmax(4096, samplesPerBlock));
@@ -108,6 +124,13 @@ void AutotuneProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     if (scratch.getNumSamples() < n) scratch.setSize(1, n);
     const atn::Params prm = readParams();
     engine.set(prm);
+    // timeline de l'hôte : éditions de notes et capture (mode Orbe)
+    double pos = 0.0; bool playing = false;
+    if (auto* ph = getPlayHead())
+        if (auto info = ph->getPosition()) { if (auto ts = info->getTimeInSamples()) { pos = (double)*ts; playing = info->getIsPlaying(); } }
+    lastPos.store(pos, std::memory_order_relaxed); lastPlaying.store(playing, std::memory_order_relaxed);
+    const juce::SpinLock::ScopedTryLockType tl(editLock);   // jamais bloquant : si l'interface publie, ce bloc joue sans éditions
+    engine.setTimeline(pos, playing, (tl.isLocked() && editLive->n > 0) ? editLive.get() : nullptr, &capture);
     if (prm.lowLat != faderIsLow) {   // changement de mode : nouvelle latence déclarée, les deux fondus de contournement échangent leur rôle
         std::swap(fader, faderIdle);
         faderIsLow = prm.lowLat; byp.lat = engine.latency();
@@ -128,11 +151,68 @@ void AutotuneProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 
 void AutotuneProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto st = apvts.copyState(); st.setProperty("prog", prog, nullptr);
+    if (!notesUi.empty() || !curveUi.empty()) {   // notes éditées et courbe capturée, sauvegardées avec le projet
+        juce::ValueTree ed("NOTEEDIT");
+        const auto n = ned::packNotes(notesUi), c = ned::packCurve(curveUi, capture.hop);
+        ed.setProperty("notes", juce::MemoryBlock(n.data(), n.size()).toBase64Encoding(), nullptr);
+        ed.setProperty("curve", juce::MemoryBlock(c.data(), c.size()).toBase64Encoding(), nullptr);
+        st.appendChild(ed, nullptr);
+    }
     if (auto xml = st.createXml()) copyXmlToBinary(*xml, dest);
 }
 void AutotuneProcessor::setStateInformation(const void* data, int size) {
     if (auto xml = getXmlFromBinary(data, size))
-        if (xml->hasTagName(apvts.state.getType())) { auto st = juce::ValueTree::fromXml(*xml); prog = juce::jlimit(0, atn::kPresets - 1, (int)st.getProperty("prog", prog)); apvts.replaceState(st); }
+        if (xml->hasTagName(apvts.state.getType())) {
+            auto st = juce::ValueTree::fromXml(*xml); prog = juce::jlimit(0, atn::kPresets - 1, (int)st.getProperty("prog", prog));
+            std::vector<ned::Note> nv; curveUi.clear();
+            const auto ed = st.getChildWithName("NOTEEDIT");
+            if (ed.isValid()) {
+                juce::MemoryBlock mb;
+                if (mb.fromBase64Encoding(ed.getProperty("notes").toString())) ned::unpackNotes((const uint8_t*)mb.getData(), mb.getSize(), nv);
+                juce::MemoryBlock mc;
+                if (mc.fromBase64Encoding(ed.getProperty("curve").toString())) ned::unpackCurve((const uint8_t*)mc.getData(), mc.getSize(), curveUi);
+                st.removeChild(ed, nullptr);
+            }
+            bool hasAlgo = false;
+            for (const auto& c : st) if (c.getProperty("id").toString() == "algo") hasAlgo = true;
+            apvts.replaceState(st);
+            if (!hasAlgo) setPlain("algo", 0.f);   // projet d'avant le moteur Orbe : son identique (Classique)
+            hist.clear(); hist.push_back({}); histPos = 0;
+            setNotes(std::move(nv), false);
+        }
+}
+
+// ---------------------------------------------------------------- édition note par note
+void AutotuneProcessor::publishEdits() {
+    const juce::SpinLock::ScopedLockType sl(editLock);
+    editLive->assign(notesUi);
+}
+void AutotuneProcessor::setNotes(std::vector<ned::Note> v, bool undoable) {
+    std::sort(v.begin(), v.end(), [](const ned::Note& a, const ned::Note& b) { return a.start < b.start; });
+    if (v.size() > (size_t)ned::kMaxNotes) v.resize((size_t)ned::kMaxNotes);
+    notesUi = std::move(v);
+    if (undoable) {
+        hist.resize((size_t)histPos + 1); hist.push_back(notesUi);
+        if (hist.size() > 64) hist.erase(hist.begin());
+        histPos = (int)hist.size() - 1;
+    } else if (histPos >= 0) hist[(size_t)histPos] = notesUi;
+    publishEdits();
+}
+bool AutotuneProcessor::undo() { if (!canUndo()) return false; notesUi = hist[(size_t)--histPos]; publishEdits(); return true; }
+bool AutotuneProcessor::redo() { if (!canRedo()) return false; notesUi = hist[(size_t)++histPos]; publishEdits(); return true; }
+void AutotuneProcessor::armCapture() { capture.armed.store(0); capture.n.store(0); capture.armed.store(1); }
+void AutotuneProcessor::stopCapture() { if (capture.armed.load() == 2) capture.armed.store(3); else if (capture.armed.load() == 1) capture.armed.store(0); }
+bool AutotuneProcessor::pollCapture() {
+    if (capture.armed.load(std::memory_order_acquire) != 3) return false;
+    const int n = capture.n.load(std::memory_order_acquire);
+    curveUi.assign(capture.f.begin(), capture.f.begin() + n);
+    ned::despike(curveUi);
+    capture.armed.store(0);
+    auto nv = ned::segment(curveUi.data(), (int)curveUi.size(), capture.hop, sampleRateNow());
+    // les notes déjà éditées qui recouvrent une nouvelle note lui transmettent leur réglage (nouvelle prise du même passage)
+    for (auto& q : nv) for (const auto& o : notesUi) if (o.edited && o.start < q.end && q.start < o.end) { q.shift = std::round((o.target() - q.center) * 100.f); q.amount = o.amount; q.expr = o.expr; q.speedMs = o.speedMs; q.edited = 1; break; }
+    setNotes(std::move(nv), true);
+    return true;
 }
 
 juce::AudioProcessorEditor* AutotuneProcessor::createEditor() { return new AutotuneEditor(*this); }

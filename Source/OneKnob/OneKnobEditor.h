@@ -40,7 +40,7 @@ public:
     void resized() override;
     static kit::Palette palette(int voicingIndex);
 
-    static constexpr float kW = 300.f, kH = 560.f, kPanel = 140.f;  // face fermée 300 × 560, volet ouvert + 140
+    static constexpr float kW = 300.f, kH = 560.f, kPanel = 168.f;  // face fermée 300 × 560, volet ouvert + 140
 
 private:
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -70,10 +70,10 @@ private:
     int tick = 0;
 
     juce::Slider knobS, trimS, toneS, mixS, outS, specS;
-    FaceButton inSw, advBtn, autoInB, autoGainB;
+    FaceButton inSw, advBtn, autoInB, autoGainB, optB, engineB;
     juce::ComboBox keyBox, scaleBox;
     std::unique_ptr<ComboAtt> keyAtt, scaleAtt;
     std::unique_ptr<SliderAtt> knobAtt, trimAtt, toneAtt, mixAtt, outAtt, specAtt;
-    std::unique_ptr<ButtonAtt> inAtt, autoInAtt, autoGainAtt;
+    std::unique_ptr<ButtonAtt> inAtt, autoInAtt, autoGainAtt, optAtt, engineAtt;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OneKnobEditor)
 };

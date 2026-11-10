@@ -198,7 +198,7 @@ public:
         for (auto& v : eqLast2) v = -99.f;
         comp.prepare(sr); dryD[0].init(Os2::kLatency + 4); dryD[1].init(Os2::kLatency + 4);
         lim.prepare(sr); kIn.prepare(sr); kOut.prepare(sr);
-        sc = 1.f - std::exp(-1.f / (0.02f * sr)); mixS = 0.f; wid = 1.f; coefValid = false; side.highpass(sr, 10.f, 0.7071f); sideF = 10.f;
+        sc = 1.f - std::exp(-1.f / (0.02f * sr)); mixS = 0.f; lvC = 1.f - std::exp(-1.f / (0.3f * sr)); pPre = pSat = 0.f; wid = 1.f; coefValid = false; side.highpass(sr, 10.f, 0.7071f); sideF = 10.f;
         inPk = outPk = 0.f; grComp = 0.f;
     }
     int latency() const { return Os2::kLatency + lim.latency(); }
@@ -214,7 +214,7 @@ public:
     void process(float* l, float* r, int n) {
         update();
         lim.resetMeter();
-        const float tMix = P.satOn ? P.satMix : 0.f, tW = P.stOn ? P.width : 1.f, k = 1.f + P.drive * 9.f, ik = 1.f / std::tanh(k);
+        const float tMix = P.satOn ? P.satMix : 0.f, tW = P.stOn ? P.width : 1.f, k = 1.f + P.drive * 9.f, ik = 1.f / k;
         float ip = 0.f, op = 0.f, gm = 0.f;
         for (int i = 0; i < n; ++i) {
             float a = l[i], b = r[i];
@@ -223,15 +223,20 @@ public:
             for (int j = 0; j < kBands; ++j) { a = eq[0][j].process(a); b = eq[1][j].process(b); }
             const float g = comp.gain(a, b); gm = std::max(gm, comp.gr);
             a *= g; b *= g;
-            // saturation tanh 2× avec mélange (dry*(1-0,6 mix) + wet*mix, comme le prototype)
+            // saturation tanh 2×, pente 1 en zéro (tanh(kx)/k : aucun gain en petits signaux), puis compensation de niveau
+            // (rapport des puissances avant/après sur 300 ms, borné à [1, 1 + k]) : DRIVE change la couleur, pas le volume.
+            // Mélange à gain unité dry*(1-mix) + wet*mix (l'ancien dry*(1-0,6 mix) du prototype ajoutait jusqu'à +20 dB).
             float ua[2], ub[2];
             os[0].upsample(a, ua[0], ua[1]); os[1].upsample(b, ub[0], ub[1]);
             for (int q = 0; q < 2; ++q) { ua[q] = std::tanh(k * ua[q]) * ik; ub[q] = std::tanh(k * ub[q]) * ik; }
-            const float wa = os[0].downsample(ua[0], ua[1]), wb = os[1].downsample(ub[0], ub[1]);
+            float wa = os[0].downsample(ua[0], ua[1]), wb = os[1].downsample(ub[0], ub[1]);
+            pPre += (a * a + b * b - pPre) * lvC; pSat += (wa * wa + wb * wb - pSat) * lvC;
+            const float comp = std::clamp(std::sqrt((pPre + 1e-12f) / (pSat + 1e-12f)), 1.f, 1.f + k);
+            wa *= comp; wb *= comp;
             dryD[0].push(a); dryD[1].push(b);
             const float da = dryD[0].read((float)Os2::kLatency), db = dryD[1].read((float)Os2::kLatency);
             mixS += (tMix - mixS) * sc; wid += (tW - wid) * sc;
-            a = da * (1.f - 0.6f * mixS) + wa * mixS; b = db * (1.f - 0.6f * mixS) + wb * mixS;
+            a = da * (1.f - mixS) + wa * mixS; b = db * (1.f - mixS) + wb * mixS;
             // M/S : largeur, côté filtré passe-haut (basses en mono)
             const float m = 0.5f * (a + b), s = side.process(0.5f * (a - b) * wid);
             a = m + s; b = m - s;
@@ -255,6 +260,7 @@ private:
         if (f != sideF) { side.highpass(sr, f, 0.7071f); sideF = f; }
         lim.set(P.limOn, P.lGain, P.ceil, P.lRel);
     }
+    float lvC = 1e-4f, pPre = 0.f, pSat = 0.f;   // compensation de niveau de la saturation
     float sr = 48000.f, sc = 0.001f, mixS = 0, wid = 1, sideF = 10, inPk = 0, outPk = 0, grComp = 0, eqLast[2], eqLast2[kBands];
     bool coefValid = false;
     Params P;

@@ -1,6 +1,7 @@
 #include "CabineProcessor.h"
 #include "CabineEditor.h"
 #include "../../Kit/Kit.h"
+#include "../../Kit/Sanitize.h"
 
 using kit::u8;
 namespace {
@@ -111,6 +112,7 @@ void CabineProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     float* l = buffer.getWritePointer(0);
     float* r = buffer.getWritePointer(1);
     const int n = buffer.getNumSamples();
+    kit::sanitize(l, n); if (stereoIn) kit::sanitize(r, n);   // NaN/inf d'un plugin précédent : remplacés par 0
     float pk = 0.f, gr = 0.f, ms = 0.f;
     fader.run(l, r, n, stereoIn, bypass != nullptr && bypass->get(), [&](float* cl, float* cr, int c) {   // bypass honoré : entrée retardée + fondu de 10 ms
         engine.process(cl, stereoIn ? cr : nullptr, cl, cr, c);

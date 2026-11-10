@@ -36,6 +36,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout VoileProcessor::makeLayout()
           juce::StringArray{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}, 0));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"scale", 1}, "Gamme",
           juce::StringArray{"Chromatique", "Majeur", "Mineur"}, 1));
+    // ajouté en dernier : les identifiants existants ne changent pas
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"bypass", 1}, "Bypass", juce::StringArray{"Off", "On"}, 0));
     return l;
 }
 
@@ -43,7 +45,9 @@ VoileProcessor::VoileProcessor()
     : AudioProcessor(BusesProperties()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts(*this, nullptr, "VOILE", makeLayout()) {}
+      apvts(*this, nullptr, "VOILE", makeLayout()) {
+    bypass = apvts.getParameter("bypass");
+}
 
 bool VoileProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
     return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() &&
@@ -51,29 +55,22 @@ bool VoileProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
             l.getMainInputChannelSet() == juce::AudioChannelSet::stereo());
 }
 
-void VoileProcessor::prepareToPlay(double sampleRate, int) {
+void VoileProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     engine.prepare(sampleRate);
-    bypassL.init(engine.latency() + 8);
-    bypassR.init(engine.latency() + 8);
+    scopeSr = sampleRate > 1000.0 ? sampleRate : 48000.0;
+    fader.prepare(sampleRate, engine.latency(), juce::jmax(4096, samplesPerBlock));
     setLatencySamples(engine.latency());
 }
 
-void VoileProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
-    if (buffer.getNumChannels() < 2) return;
-    const int nIn = getTotalNumInputChannels();
-    const float d = (float)engine.latency();
-    float* l = buffer.getWritePointer(0);
-    float* r = buffer.getWritePointer(1);
-    for (int i = 0; i < buffer.getNumSamples(); ++i) {
-        const float x0 = l[i], x1 = nIn >= 2 ? r[i] : x0;
-        bypassL.push(x0);
-        bypassR.push(x1);
-        l[i] = bypassL.read(d);
-        r[i] = bypassR.read(d);
-    }
-}
+// Le paramètre « bypass » est déclaré : JUCE passe alors par processBlock. Si un hôte appelle tout de même processBlockBypassed,
+// le moteur continue de tourner (sortie sèche retardée) : au retour, pas de vieille queue de reverb ou de delay figée.
+void VoileProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) { run(buffer, true); }
 
 void VoileProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
+    run(buffer, bypass != nullptr && bypass->getValue() >= 0.5f);
+}
+
+void VoileProcessor::run(juce::AudioBuffer<float>& buffer, bool bypassed) {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     const int nIn = getTotalNumInputChannels();
@@ -97,9 +94,28 @@ void VoileProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
 
     float* l = buffer.getWritePointer(0);
     float* r = buffer.getWritePointer(1);
-    engine.process(l, nIn >= 2 ? r : nullptr, l, r, n);
+    kit::sanitize(l, n);   // un NaN/inf venu d'un plugin précédent n'entre jamais dans le moteur (sinon NaN pour toujours)
+    if (nIn >= 2) kit::sanitize(r, n);
+    fader.run(l, r, n, nIn >= 2, bypassed, [&](float* cl, float* cr, int c) { engine.process(cl, nIn >= 2 ? cr : nullptr, cl, cr, c); });
     level.store(engine.level());
     shift.store(engine.shiftSemis());
+
+    // historique d'affichage : lecture de l'état existant du moteur, rien n'est recalculé ni modifié
+    float sung = 0.f; int tgt = -1;
+    const bool ok = !bypassed && engine.voiceReadout(sung, tgt);
+    const float out = ok ? sung + engine.shiftSemis() : 0.f;
+    scopeAcc += (double)n / scopeSr;
+    for (int guard = 0; scopeAcc >= Scope::period && guard < Scope::N; ++guard) {
+        scopeAcc -= Scope::period;
+        const int w = scope.wr.load(std::memory_order_relaxed);
+        scope.sung[w].store(ok ? sung : 0.f, std::memory_order_relaxed);
+        scope.out[w].store(out, std::memory_order_relaxed);
+        scope.tgt[w].store(ok ? (float)tgt : 0.f, std::memory_order_relaxed);
+        scope.lvl[w].store(engine.level(), std::memory_order_relaxed);
+        scope.wr.store((w + 1) % Scope::N, std::memory_order_release);
+    }
+    scope.key.store(engine.detectedKey(), std::memory_order_relaxed);
+    scope.scale.store(engine.detectedScale(), std::memory_order_relaxed);
 }
 
 int VoileProcessor::getNumPrograms() { return kNumPresets; }

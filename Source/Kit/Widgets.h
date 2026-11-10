@@ -50,7 +50,7 @@ inline Palette familyPalette(Family f, Colour accent) { return f == Family::Rack
 namespace serial {
 inline constexpr const char* voile = "DW-100";
 inline constexpr const char* cabine = "DW-601", *master = "DW-602", *looks = "DW-603", *atelier = "DW-604";
-inline constexpr const char* denoiser = "DW-701", *eq = "DW-702", *deesser = "DW-703", *autotune = "DW-704";
+inline constexpr const char* denoiser = "DW-701", *eq = "DW-702", *deesser = "DW-703", *autotune = "DW-704", *galet = "DW-705", *accroc = "DW-706";
 inline constexpr const char* synth = "DW-801", *b808 = "DW-802", *beat = "DW-803", *pads = "DW-804", *sample = "DW-805";
 inline constexpr const char* detect = "DW-901", *mix = "DW-902", *fredonne = "DW-903";
 }  // namespace serial

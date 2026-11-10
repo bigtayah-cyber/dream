@@ -5,6 +5,7 @@
 #include "../../Kit/Widgets.h"
 #include "Looks.h"
 #include "../../Kit/BypassFade.h"
+#include "../../Kit/Sanitize.h"
 
 namespace oc {
 
@@ -21,6 +22,7 @@ struct Host {
         if (ph) if (auto pos = ph->getPosition()) if (auto bpm = pos->getBpm()) chain.setBpm(*bpm);
         chain.setAutoLevel(autoLevel); chain.set(s);
         float* l = b.getWritePointer(0); float* r = b.getWritePointer(1);
+        kit::sanitize(l, b.getNumSamples()); if (stereoIn) kit::sanitize(r, b.getNumSamples());   // NaN/inf d'un plugin précédent : remplacés par 0
         fader.run(l, r, b.getNumSamples(), stereoIn, bypass, [&](float* cl, float* cr, int c) { chain.process(cl, stereoIn ? cr : nullptr, cl, cr, c); });
         peak.store(chain.outPeak()); level.store(std::sqrt(chain.outMeanSquare())); reduction.store(chain.gainReduction()); shift.store(chain.shiftSemis());
         keyPc.store(chain.keyKnown() ? chain.detectedKey() : -1); keyScale.store(chain.detectedScale());

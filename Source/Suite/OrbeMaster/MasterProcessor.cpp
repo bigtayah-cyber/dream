@@ -45,6 +45,10 @@ MasterProcessor::MasterProcessor()
     : AudioProcessor(BusesProperties().withInput("Input", juce::AudioChannelSet::stereo(), true).withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "ORBEMASTER", makeLayout()) {
     bypass = dynamic_cast<juce::AudioParameterBool*>(apvts.getParameter("bypass"));
+    for (int i = 0; i < mas::kBands; ++i) pp[(size_t)i] = apvts.getRawParameterValue("eq" + String(i));
+    const char* ids[] = {"eqOn", "compOn", "cAmt", "cRatio", "cAtt", "cGain", "satOn", "drive", "satMix", "stOn", "width", "mono", "monoHz", "limOn", "lGain", "ceil", "lRel"};
+    static_assert(sizeof(ids) / sizeof(ids[0]) == kNumP - kEqOn, "liste des identifiants");
+    for (int i = kEqOn; i < kNumP; ++i) { pp[(size_t)i] = apvts.getRawParameterValue(ids[i - kEqOn]); jassert(pp[(size_t)i] != nullptr); }
 }
 
 bool MasterProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
@@ -54,11 +58,12 @@ bool MasterProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
 
 mas::Params MasterProcessor::readParams() const {
     mas::Params p;
-    for (int i = 0; i < mas::kBands; ++i) p.eq[i] = raw(("eq" + String(i)).toRawUTF8());
-    p.eqOn = raw("eqOn") > 0.5f; p.compOn = raw("compOn") > 0.5f; p.cAmt = raw("cAmt"); p.cRatio = raw("cRatio"); p.cAtt = raw("cAtt"); p.cGain = raw("cGain");
-    p.satOn = raw("satOn") > 0.5f; p.drive = raw("drive"); p.satMix = raw("satMix");
-    p.stOn = raw("stOn") > 0.5f; p.width = raw("width"); p.mono = raw("mono") > 0.5f; p.monoHz = raw("monoHz");
-    p.limOn = raw("limOn") > 0.5f; p.lGain = raw("lGain"); p.ceil = raw("ceil"); p.lRel = raw("lRel");
+    auto v = [this](int i) { return pp[(size_t)i]->load(); };
+    for (int i = 0; i < mas::kBands; ++i) p.eq[i] = v(i);
+    p.eqOn = v(kEqOn) > 0.5f; p.compOn = v(kCompOn) > 0.5f; p.cAmt = v(kCAmt); p.cRatio = v(kCRatio); p.cAtt = v(kCAtt); p.cGain = v(kCGain);
+    p.satOn = v(kSatOn) > 0.5f; p.drive = v(kDrive); p.satMix = v(kSatMix);
+    p.stOn = v(kStOn) > 0.5f; p.width = v(kWidth); p.mono = v(kMono) > 0.5f; p.monoHz = v(kMonoHz);
+    p.limOn = v(kLimOn) > 0.5f; p.lGain = v(kLGain); p.ceil = v(kCeil); p.lRel = v(kLRel);
     return p;
 }
 
@@ -87,6 +92,7 @@ void MasterProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     float* l = buffer.getWritePointer(0);
     float* r = buffer.getWritePointer(1);
     const int n = buffer.getNumSamples();
+    kit::sanitize(l, n); kit::sanitize(r, n);   // NaN/inf d'un plugin précédent : remplacés par 0 avant tout état interne
     if (getTotalNumInputChannels() < 2) juce::FloatVectorOperations::copy(r, l, n);
     float ip = 0.f, op = 0.f, gc = 0.f, gl = 0.f;
     fader.run(l, r, n, true, bypass != nullptr && bypass->get(), [&](float* cl, float* cr, int c) {   // bypass honoré : entrée retardée + fondu de 10 ms

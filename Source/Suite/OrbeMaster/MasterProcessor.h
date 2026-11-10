@@ -3,6 +3,8 @@
 #include <atomic>
 #include "MasterDsp.h"
 #include "../../Kit/BypassFade.h"
+#include "../../Kit/Sanitize.h"
+#include <array>
 
 class MasterProcessor : public juce::AudioProcessor {
 public:
@@ -39,6 +41,10 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout();
+    // pointeurs de paramètres résolus une fois dans le constructeur : readParams() (appelé à chaque bloc) ne construit
+    // aucune chaîne et ne fait aucune recherche par nom dans le fil audio
+    enum { kEqOn = mas::kBands, kCompOn, kCAmt, kCRatio, kCAtt, kCGain, kSatOn, kDrive, kSatMix, kStOn, kWidth, kMono, kMonoHz, kLimOn, kLGain, kCeil, kLRel, kNumP };
+    std::array<std::atomic<float>*, kNumP> pp{};
     mas::Engine engine;
     mas::BypassDelay byp;
     bypassfx::Fader fader;

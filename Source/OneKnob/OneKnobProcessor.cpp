@@ -1,5 +1,6 @@
 #include "OneKnobProcessor.h"
 #include "OneKnobEditor.h"
+#include "../Kit/Sanitize.h"
 
 juce::AudioProcessorValueTreeState::ParameterLayout OneKnobProcessor::makeLayout() {
     using juce::AudioParameterBool, juce::AudioParameterFloat, juce::NormalisableRange, juce::ParameterID;
@@ -29,6 +30,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout OneKnobProcessor::makeLayout
     l.add(std::make_unique<AudioParameterFloat>(ParameterID{"spec", 1}, juce::String::fromUTF8(voicing().specName), NormalisableRange<float>(0.f, 100.f, 1.f),
                                                 voicing().specDefault * 100.f, pct));
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"autogain", 1}, "Auto-gain", true));
+    // ajoutés en fin de liste (refonte, version d'état 2) : des choix, jamais des booléens
+    l.add(std::make_unique<juce::AudioParameterChoice>(ParameterID{"opt", 1}, juce::String::fromUTF8(voicing().optName),
+                                                       juce::StringArray{"Non", "Oui"}, voicing().optDefault > 0.5f ? 1 : 0));
+    l.add(std::make_unique<juce::AudioParameterChoice>(ParameterID{"engine", 1}, "Moteur", juce::StringArray{"Actuel", "Classique"}, 0,
+                                                       juce::AudioParameterChoiceAttributes().withAutomatable(false)));
     return l;
 }
 
@@ -42,6 +48,7 @@ OneKnobProcessor::OneKnobProcessor()
     pTrim = apvts.getRawParameterValue("trim"); pAutoIn = apvts.getRawParameterValue("autoin"); pTone = apvts.getRawParameterValue("tone");
     pMix = apvts.getRawParameterValue("mix"); pOut = apvts.getRawParameterValue("out"); pSpec = apvts.getRawParameterValue("spec");
     pAutoGain = apvts.getRawParameterValue("autogain");
+    pOpt = apvts.getRawParameterValue("opt"); pEngine = apvts.getRawParameterValue("engine");
 }
 
 bool OneKnobProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
@@ -53,17 +60,23 @@ void OneKnobProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     maxBlock = juce::jmax(512, samplesPerBlock);
     sr = sampleRate;
     vu.reset();
+    chain.select(index());
+    chain.setClassic(pEngine->load() > 0.5f);
     chain.prepare(sampleRate, maxBlock);
-    bypassL.init(chain.latency() + 8);
-    bypassR.init(chain.latency() + 8);
-    fader.prepare(sampleRate, chain.latency(), maxBlock);
-    setLatencySamples(chain.latency());
+    // retards dimensionnés pour la plus grande latence possible (moteur Classique ou actuel) : la bascule ne réalloue rien
+    maxLat = chain.maxLatency();
+    bypassL.init(maxLat + 8);
+    bypassR.init(maxLat + 8);
+    fader.prepare(sampleRate, maxLat, maxBlock);
+    lastLat = chain.latency();
+    fader.prepare(sampleRate, lastLat, maxBlock);
+    setLatencySamples(lastLat);
 }
 
 void OneKnobProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
     if (buffer.getNumChannels() < 2) return;
     const bool stereoIn = getTotalNumInputChannels() >= 2;
-    const float d = (float)chain.latency();
+    const float d = (float)lastLat;
     float* l = buffer.getWritePointer(0);
     float* r = buffer.getWritePointer(1);
     for (int i = 0; i < buffer.getNumSamples(); ++i) {
@@ -77,6 +90,8 @@ void OneKnobProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Midi
     juce::ScopedNoDenormals nd;
     if (buffer.getNumChannels() < 2) return;
     const bool stereoIn = getTotalNumInputChannels() >= 2;
+    // G2 : un NaN/inf venu d'un plugin précédent est remplacé par 0 (sinon il empoisonne filtres, reverbs et compresseurs)
+    for (int c = 0; c < 2; ++c) kit::sanitize(buffer.getWritePointer(c), buffer.getNumSamples());
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
             if (auto bpm = pos->getBpm()) chain.setBpm(*bpm);
@@ -86,7 +101,9 @@ void OneKnobProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Midi
     onek::Extras ex;
     ex.trimDb = pTrim->load(); ex.autoIn = pAutoIn->load() > 0.5f; ex.toneDb = pTone->load(); ex.mix = pMix->load() / 100.f;
     ex.outDb = pOut->load(); ex.special = pSpec->load() / 100.f; ex.autoGain = pAutoGain->load() > 0.5f;
+    ex.option = pOpt->load() > 0.5f ? 1.f : 0.f;
     chain.setExtras(ex);
+    chain.setClassic(pEngine->load() > 0.5f);
     float* l = buffer.getWritePointer(0);
     float* r = buffer.getWritePointer(1);
     const int n = buffer.getNumSamples();
@@ -97,6 +114,11 @@ void OneKnobProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Midi
         chain.process(cl, stereoIn ? cr : nullptr, cl, cr, c);
         peak = juce::jmax(peak, chain.outLevel());
     });
+    if (chain.latency() != lastLat) {   // bascule Actuel <-> Classique terminée : nouvelle latence annoncée à l'hôte
+        lastLat = chain.latency();
+        fader.prepare(sr, lastLat, maxBlock);   // sans allocation : dimensionné pour maxLat au prepareToPlay
+        setLatencySamples(lastLat);
+    }
     {   // VU de sortie : RMS du bloc (après bypass), balistique 300 ms
         double s2 = 0;
         for (int i = 0; i < n; ++i) s2 += 0.5 * ((double)l[i] * l[i] + (double)r[i] * r[i]);
@@ -113,11 +135,19 @@ void OneKnobProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Midi
 }
 
 void OneKnobProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, dest);
+    auto st = apvts.copyState();
+    st.setProperty("stateVersion", onek::kStateVersion, nullptr);
+    if (auto xml = st.createXml()) copyXmlToBinary(*xml, dest);
 }
 void OneKnobProcessor::setStateInformation(const void* data, int size) {
     if (auto xml = getXmlFromBinary(data, size))
-        if (xml->hasTagName(apvts.state.getType())) apvts.replaceState(juce::ValueTree::fromXml(*xml));
+        if (xml->hasTagName(apvts.state.getType())) {
+            const int version = xml->getIntAttribute("stateVersion", 0);
+            apvts.replaceState(juce::ValueTree::fromXml(*xml));
+            // projet enregistré avant la refonte : on le rouvre avec l'ancien son (moteur Classique, ancienne latence)
+            if (auto* e = apvts.getParameter("engine"))
+                if (onek::classicForStateVersion(version)) e->setValueNotifyingHost(1.f);
+        }
 }
 
 juce::AudioProcessorEditor* OneKnobProcessor::createEditor() { return new OneKnobEditor(*this); }

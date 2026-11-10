@@ -103,6 +103,7 @@ void OrbeProcessor::parameterChanged(const String& id, float) {
 
 void OrbeProcessor::timerCallback() {
     if (const int f = dirty.exchange(0)) applyDirty(f);
+    else if (publishReq) publish();
 }
 
 void OrbeProcessor::setStateInformation(const void* data, int size) {
@@ -249,9 +250,13 @@ void OrbeProcessor::publish() {
     };
     add(song.nChords, 0); add(song.nLead, 1); add(song.nBass, 2); add(song.nDrums, 3);
     std::sort(r->ev.begin(), r->ev.end(), [](const OrbeEv& a, const OrbeEv& b) { return a.t < b.t; });
-    owners.push_back(r);
+    publishReq = false;
+    const auto now = juce::Time::getMillisecondCounter();
+    if (!owners.empty()) owners.back().replacedMs = now;
+    owners.push_back({r, 0});
     live.store(r.get(), std::memory_order_release);
-    if (owners.size() > 16) owners.erase(owners.begin(), owners.end() - 16);
+    // libère les instantanés remplacés depuis plus de 2 s (le dernier, en service, est toujours gardé)
+    owners.erase(std::remove_if(owners.begin(), owners.end() - 1, [now](const Owned& o) { return now - o.replacedMs > 2000u; }), owners.end() - 1);
 }
 
 juce::File OrbeProcessor::writeMidiFile(bool c, bool l, bool b, bool d) {
@@ -314,18 +319,30 @@ void OrbeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     int pos = 0;
     float* Lc = buffer.getWritePointer(0);
     float* Rc = buffer.getWritePointer(1);
+    // MASTER ne règle que l'aperçu généré : dans Orbe FX, l'audio entrant traverse inchangé
+    const float master = prMaster->load();
+    static const int chans[4] = {1, 2, 3, 10};
     for (int i = 0; i < nt; ++i) {
-        if (trigs[i].off > pos) { synth.render(Lc + pos, Rc + pos, trigs[i].off - pos); pos = trigs[i].off; }
+        if (trigs[i].off > pos) { synth.render(Lc + pos, Rc + pos, trigs[i].off - pos, master); pos = trigs[i].off; }
         synth.trigger(trigs[i].track, trigs[i].note, trigs[i].vel, trigs[i].gate, trigs[i].gl);
-        if (midiOut && nPend < 128) {
-            static const int chans[4] = {1, 2, 3, 10};
-            const int ch = chans[trigs[i].track];
-            const int g = trigs[i].track == 3 ? (int)(0.1 * sr) : trigs[i].gate;
-            midi.addEvent(juce::MidiMessage::noteOn(ch, trigs[i].note, juce::jlimit(0.01f, 1.f, trigs[i].vel)), trigs[i].off);
-            pend[nPend++] = {trigs[i].note, ch, trigs[i].off + g};
+        if (midiOut) {
+            const int ch = chans[trigs[i].track], note = trigs[i].note;
+            // même note encore tenue sur ce canal (note commune entre deux accords, legato, chevauchement d'humanisation) :
+            // son note-off part d'abord, au plus tard sur l'échantillon du nouveau note-on, et AVANT lui dans le tampon
+            for (int j = 0; j < nPend; ++j)
+                if (pend[j].note == note && pend[j].ch == ch) {
+                    midi.addEvent(juce::MidiMessage::noteOff(ch, note), juce::jlimit(0, n - 1, std::min(pend[j].left, trigs[i].off)));
+                    pend[j] = pend[--nPend];
+                    break;
+                }
+            if (nPend < 128) {
+                const int g = trigs[i].track == 3 ? (int)(0.1 * sr) : trigs[i].gate;
+                midi.addEvent(juce::MidiMessage::noteOn(ch, note, juce::jlimit(0.01f, 1.f, trigs[i].vel)), trigs[i].off);
+                pend[nPend++] = {note, ch, trigs[i].off + g};
+            }
         }
     }
-    if (pos < n) synth.render(Lc + pos, Rc + pos, n - pos);
+    if (pos < n) synth.render(Lc + pos, Rc + pos, n - pos, master);
 
     for (int i = 0; i < nPend;) {
         if (pend[i].left < n) {
@@ -334,7 +351,6 @@ void OrbeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         } else { pend[i].left -= n; ++i; }
     }
 
-    buffer.applyGain(prMaster->load());
     if (running) {
         if (!hostPlaying) { internalPos = std::fmod(internalPos + (double)n * sps, L); }
         playStep.store((float)std::fmod(p0, L));

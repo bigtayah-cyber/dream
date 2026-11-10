@@ -10,6 +10,16 @@
 
 namespace osamp {
 
+// Formats proposés au sélecteur et au glisser-déposer : seulement ceux que loadFile sait décoder sur cette plateforme.
+// MP3 : décodeur JUCE (JUCE_USE_MP3AUDIOFORMAT=1 dans plugin.cmake) ; M4A et CAF : CoreAudio, donc Mac seulement.
+#if JUCE_MAC || JUCE_IOS
+inline const char* audioWildcards() { return "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.m4a;*.caf"; }
+inline const char* audioExtensions() { return "wav;aif;aiff;flac;ogg;mp3;m4a;caf"; }
+#else
+inline const char* audioWildcards() { return "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3"; }
+inline const char* audioExtensions() { return "wav;aif;aiff;flac;ogg;mp3"; }
+#endif
+
 // Publication d'un objet immuable : le thread audio lit un pointeur brut, les autres threads gardent les propriétaires.
 // Les anciens objets restent vivants 30 s, largement plus que n'importe quelle voix.
 template <class T>

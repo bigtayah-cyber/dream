@@ -53,10 +53,10 @@ private:
     kit::VuBallistics vu;
     double sr = 48000.0;
     std::atomic<float>* pChar = nullptr, *pKey = nullptr, *pScale = nullptr, *pTrim = nullptr, *pAutoIn = nullptr, *pTone = nullptr,
-                      *pMix = nullptr, *pOut = nullptr, *pSpec = nullptr, *pAutoGain = nullptr;
+                      *pMix = nullptr, *pOut = nullptr, *pSpec = nullptr, *pAutoGain = nullptr, *pOpt = nullptr, *pEngine = nullptr;
     voile::Delay bypassL, bypassR;
     bypassfx::Fader fader;
     juce::AudioParameterBool* bypass = nullptr;
-    int maxBlock = 2048;
+    int maxBlock = 2048, lastLat = 0, maxLat = 0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OneKnobProcessor)
 };

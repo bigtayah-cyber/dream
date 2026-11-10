@@ -71,6 +71,34 @@ int main(int argc, char** argv) {
     const float ceilLin = std::pow(10.f, -1.f / 20.f) + 1e-4f;
     const int NL = oc::numLooks();
 
+    { // catalogue : les 10 looks d'origine gardent leur index (état sauvegardé), les nouveaux suivent ; textes tenant dans l'afficheur
+        static const char* const orig[10] = {"Turbine", "Béton", "Nacre", "Verre Pilé", "Cave", "Combiné", "Alcôve", "Braise", "Sépia", "Satin"};
+        CHECK(NL >= 24 && NL <= 30, "nombre de looks inattendu : %d", NL);
+        for (int k = 0; k < 10; ++k) CHECK(!std::strcmp(oc::looks()[(size_t)k].name, orig[k]), "look d'origine déplacé ou renommé à l'index %d", k);
+        auto nChars = [](const char* s) { int n = 0; for (; *s; ++s) n += (*s & 0xC0) != 0x80; return n; };
+        for (int k = 0; k < NL; ++k) {
+            const auto& L = oc::looks()[(size_t)k];
+            CHECK(L.name && L.tag && L.cat && *L.name && *L.tag, "look %d : nom, description ou catégorie vide", k);
+            CHECK(nChars(L.name) <= 14, "nom trop long (afficheur) : %s", L.name); CHECK(nChars(L.tag) <= 46, "description trop longue (afficheur) : %s", L.tag);
+            for (int j = 0; j < k; ++j) CHECK(std::strcmp(L.name, oc::looks()[(size_t)j].name), "nom en double : %s", L.name);
+            for (float d : L.def) CHECK(d >= 0.f && d <= 1.f, "macro par défaut hors 0..1 : %s", L.name);
+            CHECK(L.trimDb <= 0.f && L.trimDb >= -16.f && L.bias >= 0.f && L.bias <= 4.f, "trim/biais hors bornes : %s", L.name);
+            if (k >= 10) CHECK(std::strcmp(L.cat, "Classiques"), "nouveau look sans catégorie : %s", L.name);
+            for (const char* q = L.name; *q; ++q) CHECK((unsigned char)*q >= 32, "caractère de contrôle dans %s", L.name);
+        }
+        // latence déclarée : identique pour tous les looks et à toutes les fréquences ; mix 0 = entrée exactement retardée de cette latence
+        for (double sr : {44100.0, 48000.0, 96000.0}) {
+            oc::Chain ref; ref.prepare(sr); const int lat = ref.latency();
+            const size_t N = (size_t)(sr * 0.9); std::vector<float> s(N); for (size_t i = 0; i < N; ++i) s[i] = 0.3f * std::sin(2 * oc::kPi * 440.f * (float)i / (float)sr) + 0.1f * std::sin(2 * oc::kPi * 2713.f * (float)i / (float)sr);
+            for (int k = 0; k < NL; ++k) {
+                oc::Chain c; c.prepare(sr); oc::S m0 = oc::lookDefaults(k); m0.mix = 0; m0.out = 0; c.set(m0);
+                std::vector<float> oL, oR; run(c, s, s, oL, oR);
+                double e = 0; int n = 0; for (size_t i = (size_t)(sr * 0.5); i < N; ++i) { const double v = oL[i] - s[i - (size_t)lat]; e += v * v; ++n; }
+                CHECK(c.latency() == lat, "latence variable selon le look %s (%d != %d)", oc::looks()[(size_t)k].name, c.latency(), lat);
+                CHECK(e / n < 1e-8, "mix 0 != entrée retardée de la latence déclarée : %s à %g Hz (%.2e)", oc::looks()[(size_t)k].name, sr, e / n);
+            }
+        }
+    }
     // 1. NaN / pic borné : chaque look, macros par défaut et extrêmes, 3 fréquences d'échantillonnage
     for (double sr : {44100.0, 48000.0, 96000.0}) {
         std::mt19937 rng(5); std::uniform_real_distribution<float> u(-1.f, 1.f);
@@ -144,19 +172,31 @@ int main(int argc, char** argv) {
             std::printf("auto-key (d) positif : tonalité connue=%d, erreur résiduelle à la grille %.0f cents (entrée : 38)\n", c.keyKnown(), nn ? err / nn * 100 : -1);
             CHECK(c.keyKnown() && nn > 50 && err / nn < 0.20, "correction attendue absente quand la tonalité est fiable");
         }
-        // 6. niveaux : chaque look doit rester à ±2 dB du niveau d'entrée (Looks : niveau auto ; Atelier : correction statique)
+        // 6. niveaux : chaque look reste à ±2 dB (looks d'origine) ou ±3 dB (nouveaux) du niveau d'entrée, sans NaN ni crête au-dessus du plafond (Looks : niveau auto ; Atelier : correction statique)
         const float inDb = rmsDb(take.l, take.r);
+        std::vector<float> sn((size_t)(sr * 3)); for (size_t i = 0; i < sn.size(); ++i) sn[i] = 0.5012f * std::sin(2 * oc::kPi * 220.f * (float)i / sr);   // sinus à -6 dBFS
+        float worstV = 0.f, worstS = 0.f;
         for (int mode = 0; mode < 2; ++mode) {
             std::printf("niveau %s (entrée %.1f dB) :", mode ? "Atelier (trim)" : "Looks (auto)", inDb);
             for (int k = 0; k < NL; ++k) {
+                const char* nm = oc::looks()[(size_t)k].name; const float tol = k < 10 ? 2.f : 3.f;
                 oc::Chain c; c.prepare(sr); c.setAutoLevel(mode == 0); oc::S s = oc::lookDefaults(k); if (mode == 0) s.out = 0; c.set(s);
                 std::vector<float> oL, oR; run(c, take.l, take.r, oL, oR);
                 const float d = rmsDb(oL, oR, (size_t)(sr * 1.5f)) - rmsDb(take.l, take.r, (size_t)(sr * 1.5f));
-                std::printf(" %s %+.1f", oc::looks()[(size_t)k].name, d);
-                CHECK(std::fabs(d) <= 2.f, "niveau hors ±2 dB : %s %s %+.1f", mode ? "Atelier" : "Looks", oc::looks()[(size_t)k].name, d);
+                float pk = 0; bool ok = true; for (size_t i = 0; i < oL.size(); ++i) { ok &= std::isfinite(oL[i]) && std::isfinite(oR[i]); pk = std::max(pk, std::max(std::fabs(oL[i]), std::fabs(oR[i]))); }
+                std::printf(" %s %+.1f", nm, d); worstV = std::max(worstV, std::fabs(d));
+                CHECK(std::fabs(d) <= tol, "niveau hors ±%.0f dB : %s %s %+.1f", tol, mode ? "Atelier" : "Looks", nm, d);
+                CHECK(ok, "NaN sur la prise : %s %s", mode ? "Atelier" : "Looks", nm); CHECK(pk <= ceilLin, "crête %.2f dBFS > -1 dBFS sur la prise : %s", 20 * std::log10(pk), nm);
+                // sinus à -6 dBFS : ni NaN ni crête > -1 dBFS (les deux modes) ; niveau auto à ±3 dB (le trim statique de l'Atelier est réglé pour une voix, pas pour un sinus)
+                oc::Chain c2; c2.prepare(sr); c2.setAutoLevel(mode == 0); c2.set(s); std::vector<float> pL, pR; run(c2, sn, sn, pL, pR);
+                float ps = 0; bool oks = true; for (size_t i = 0; i < pL.size(); ++i) { oks &= std::isfinite(pL[i]) && std::isfinite(pR[i]); ps = std::max(ps, std::max(std::fabs(pL[i]), std::fabs(pR[i]))); }
+                const float ds = rmsDb(pL, pR, (size_t)(sr * 1.5f)) - rmsDb(sn, sn, (size_t)(sr * 1.5f));
+                CHECK(oks, "NaN sur le sinus : %s", nm); CHECK(ps <= ceilLin, "crête %.2f dBFS > -1 dBFS sur le sinus : %s %s", 20 * std::log10(ps), mode ? "Atelier" : "Looks", nm);
+                if (mode == 0) { worstS = std::max(worstS, std::fabs(ds)); CHECK(std::fabs(ds) <= 3.f, "niveau du sinus hors ±3 dB : %s %+.1f", nm, ds); }
             }
             std::printf("\n");
         }
+        std::printf("écart de niveau maximal sur la prise %.1f dB ; sinus -6 dBFS (Looks auto) %.1f dB\n", worstV, worstS);
     }
     { // chantier 12 : saturation suréchantillonnée. Sinus 5 kHz poussé à fond (drive 1, biais 0,5) : repliement < -70 dB ; latence déclarée tenue
         for (double sr : {44100.0, 48000.0, 96000.0}) {

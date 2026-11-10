@@ -55,13 +55,15 @@ public:
         hpClick.highpass(sr, 2500.f, 1.f);
         // saturation suréchantillonnée ×8 (×4 à 88,2/96 kHz) ; l'enveloppe et le clic sont retardés d'autant (voix entière retardée)
         sat.init(voile::Oversampler::stagesFor(sampleRate, 3)); adx = adS = 0.0;
-        envDel.init(sat.latency() + 4); clkDel.init(sat.latency() + 4);
+        clkDel.init(sat.latency() + 4); normDel.init(sat.latency() + 4);
+        dfDrive = -1.f;
         relC = std::exp(-1.f / (0.012f * sr));
         stealC = std::exp(-1.f / (0.0007f * sr));
         bendCoef = 1.f - std::exp(-1.f / (0.004f * sr));
     }
     void setParams(const Params& p) {
         P = p;
+        if (P.drive != dfDrive || P.sat != dfSat || P.tone != dfTone) buildDescribing();
         if (std::fabs(P.cut - lastCut) > 1e-5f) {
             lastCut = P.cut;
             lp.lowpass(sr, std::min(120.f * std::pow(100.f, P.cut), 0.45f * sr), 0.6f);
@@ -120,8 +122,37 @@ private:
     uint32_t rng = 1;
     onek::Biquad lp, hpClick;
     voile::Oversampler sat;
-    voile::Delay envDel, clkDel;
+    voile::Delay clkDel, normDel;
     double adx = 0.0, adS = 0.0;
+    // Gain RMS de la saturation selon le niveau relatif e = env/crête (table sur e, 0..1) : h(e) = RMS(shape(m·K·e²)) / e².
+    static constexpr int kDf = 96;
+    float df[kDf + 1] = {};
+    float dfDrive = -1.f, dfTone = -1.f;
+    int dfSat = -1;
+
+    // Recalculée seulement quand drive, sat ou tone changent (97 x 32 évaluations, sans allocation). m = l'onde réelle
+    // (sinus + triangle d'octave). Le gain RMS (et non celui du fondamental) reste défini pour la saturation repliée.
+    void buildDescribing() {
+        dfDrive = P.drive; dfSat = P.sat; dfTone = P.tone;
+        const float K = (1.f + P.drive * 7.f) * 0.8f;
+        constexpr int N = 32;
+        for (int j = 0; j <= kDf; ++j) {
+            const float e = std::max(1e-3f, (float)j / (float)kDf), u = e * e;
+            double acc = 0.0;
+            for (int i = 0; i < N; ++i) {
+                const float th = ((float)i + 0.5f) / (float)N, ph2 = 2.f * th - std::floor(2.f * th);
+                const float m = std::sin(2.f * kPi * th) + P.tone * 0.55f * tri(ph2);
+                const double v = shape(m * K * u);
+                acc += v * v;
+            }
+            df[j] = std::max(1e-6f, (float)std::sqrt(acc / N) / u);
+        }
+    }
+    float rmsGain(float e) const {
+        const float p = std::max(0.f, std::min(1.f, e)) * (float)kDf;
+        const int i = std::min(kDf - 1, (int)p);
+        return df[i] + (df[i + 1] - df[i]) * (p - (float)i);
+    }
 
     float noise() { rng = rng * 1664525u + 1013904223u; return (float)(int32_t)rng / 2147483648.f; }
     void push(int note) {
@@ -185,17 +216,20 @@ private:
         V.p1 += f / sr; V.p1 -= std::floor(V.p1);
         V.p2 += 2.f * f / sr; V.p2 -= std::floor(V.p2);
         const float mix = std::sin(2.f * kPi * V.p1) + P.tone * 0.55f * tri(V.p2);
-        const float k = 1.f + P.drive * 7.f, pre = mix * k * 0.8f;
-        // saturation suréchantillonnée (demi-bandes à phase linéaire, repliement < -70 dB à 5 kHz)
-        const float y = sat.process(pre, [this](float x) { return shapeAdaa(x); });
         // enveloppe
         const float tgt = V.peak * 1e-4f;
         if (V.rel) V.env *= V.relC;
         else if (V.age < V.attackN) V.env = V.peak * (float)(V.age + 1) / (float)V.attackN;
         else if (V.age < V.holdN) V.env = V.peak;
         else V.env = tgt + (V.env - tgt) * V.dc;
-        envDel.push(V.env);
-        float o = lp.process(y) * envDel.read((float)sat.latency());
+        // Saturation APRÈS l'enveloppe (audit 2, point 7) : l'entrée du saturateur suit u = (env/crête)^2, donc le taux d'harmoniques
+        // suit le niveau (« bloom » : attaque grasse, queue qui redevient sinus ; le carré compense le drive interne déjà très fort).
+        // Le niveau est ramené par le gain RMS h(e) de la courbe : sortie = shape(m·K·u)·crête·h(1)/(e·h(e)), e = env/crête. À e = 1, son
+        // identique à l'ancien moteur ; ensuite, même contour de niveau RMS qu'avant (la longueur perçue ne change pas).
+        const float K = (1.f + P.drive * 7.f) * 0.8f, e = V.peak > 0.f ? std::min(1.f, V.env / V.peak) : 0.f, u = e * e;
+        const float y = sat.process(mix * K * u, [this](float x) { return shapeAdaa(x); });
+        normDel.push(V.peak * rmsGain(1.f) / (std::max(e, 1e-3f) * rmsGain(e)));
+        float o = lp.process(y) * normDel.read((float)sat.latency());
         float clk = 0.f;
         if (V.age < V.clkN) {  // clic : bruit filtré + balayage grave, hors enveloppe et hors filtre
             if (V.age < (uint32_t)(0.025f * sr)) { clk += V.ng * hpClick.process(noise()); V.ng *= V.ngm; }

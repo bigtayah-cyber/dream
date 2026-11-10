@@ -103,11 +103,11 @@ PadsEditor::PadsEditor(PadsProcessor& p)
     sensAtt = std::make_unique<SliderAtt>(ap, "sens", sens);
     sens.setTooltip(u8("Sensibilité de la détection des attaques"));
     for (auto* b : {&importB, &demoB, &clearB}) addAndMakeVisible(b);
-    importB.setTooltip(u8("Charger un sample (WAV, AIFF, FLAC, OGG) : il est enregistré dans le projet"));
+    importB.setTooltip(u8("Charger un sample (WAV, AIFF, FLAC, OGG, MP3) : il est enregistré dans le projet"));
     demoB.setTooltip(u8("Recharger le sample de démonstration généré par le plugin"));
     clearB.setTooltip(u8("Supprimer tous les repères sauf le premier"));
     importB.onClick = [this] {
-        chooser = std::make_unique<juce::FileChooser>(u8("Choisir un sample"), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.m4a;*.caf");
+        chooser = std::make_unique<juce::FileChooser>(u8("Choisir un sample"), juce::File(), osamp::audioWildcards());
         juce::Component::SafePointer<PadsEditor> self(this);
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                              [safe = self](const juce::FileChooser& fc) { if (safe && fc.getResult().existsAsFile()) safe->loadFile(fc.getResult()); });
@@ -133,7 +133,7 @@ PadsEditor::PadsEditor(PadsProcessor& p)
     selectPad(proc.sel.load());
 
     help.install(*this, "Orbe Pads", {u8("Sampler à 16 pads : un sample découpé en tranches, jouées par les pads ou en MIDI (à partir de C1)."),
-        u8("- Importer charge un sample (WAV, AIFF, FLAC, OGG) enregistré dans le projet ; Démo recharge le sample d'exemple."),
+        u8("- Importer charge un sample (WAV, AIFF, FLAC, OGG, MP3) enregistré dans le projet ; Démo recharge le sample d'exemple."),
         u8("- Découpe : Attaques (réglage de sensibilité), Grille (divisions égales) ou Manuel."),
         u8("- En manuel : clic sur la forme d'onde pour ajouter un repère, glisser pour le déplacer, double-clic ou clic droit pour le supprimer."),
         u8("- Clic sur un pad : le sélectionne et le joue (Maj : plus doux). Les réglages de droite s'appliquent au pad sélectionné.")});
@@ -163,7 +163,7 @@ void PadsEditor::selectPad(int i) {
 }
 
 bool PadsEditor::isInterestedInFileDrag(const juce::StringArray& f) {
-    for (auto& s : f) if (juce::File(s).hasFileExtension("wav;aif;aiff;flac;ogg;mp3;m4a;caf")) return true;
+    for (auto& s : f) if (juce::File(s).hasFileExtension(osamp::audioExtensions())) return true;
     return false;
 }
 

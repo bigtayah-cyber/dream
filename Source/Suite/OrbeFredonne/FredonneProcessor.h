@@ -40,7 +40,7 @@ public:
     void loadAudio(const float* mono, int n, double rate);   // outils de test : analyse un signal existant
     juce::File writeMidiFile();
     int state() const { return st.load(); }
-    double recSeconds() const { return double(recLen.load(std::memory_order_acquire)) / sr; }
+    double recSeconds() const { return double(recLen.load(std::memory_order_acquire)) / recSr; }
     std::shared_ptr<const Take> take() const { return std::atomic_load(&takeP); }
     double effectiveBpm() const;
     oa::SegParams segParams() const;
@@ -58,6 +58,7 @@ private:
     std::atomic<float> *pPlay = nullptr, *pMonitor = nullptr, *pFollow = nullptr, *pBpm = nullptr;   // accès direct pour le fil audio
 
     double sr = 48000.0;
+    double recSr = 48000.0;   // fréquence à laquelle `rec` a été capté (peut différer de sr après un changement de l'hôte)
     std::atomic<int> st{Idle}, recLen{0};
     std::vector<float> rec; int recMax = 0;
     float pre[4096] = {}; int preIdx = 0;
