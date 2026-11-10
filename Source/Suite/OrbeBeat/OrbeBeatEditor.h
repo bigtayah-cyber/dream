@@ -53,7 +53,8 @@ private:
 
     OrbeBeatGrid grid;
     juce::ComboBox kitBox, keyBox;
-    std::unique_ptr<kit::v3::GridSeg> patSeg, stepsSeg, chainSeg, midiSeg, modeSeg;
+    std::unique_ptr<kit::v3::GridSeg> patSeg, stepsSeg, chainSeg, midiSeg, modeSeg, accSeg;   // accSeg : # / b
+    bool flat_ = false;
     kit::v3::bridge::PushKey genB{kit::u8("Générer")}, varyB{"Varier"}, clearB{"Vider"}, auditionB{kit::u8("Écouter")};
     kit::v3::bridge::PushKey toolB[4];
     juce::ToggleButton seqB;

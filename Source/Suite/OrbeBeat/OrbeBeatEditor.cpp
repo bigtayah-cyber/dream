@@ -9,7 +9,7 @@ using obeat::kLanes;
 namespace v3 = kit::v3;
 namespace {
 Colour laneColour(int i) { return Colour(obeat::lanes()[i].rgb); }
-String letter(int midi) { return suiteui::noteName(midi).removeCharacters("0123456789-"); }
+String letter(int midi, bool flat) { return kit::v3::notes::letter(midi, flat); }
 }  // namespace
 
 // ---------------- grille ----------------
@@ -70,7 +70,7 @@ void OrbeBeatGrid::paint(juce::Graphics& g) {
                 g.setColour(Colours::white.withAlpha(0.25f * a)); g.fillRect(b.getX() + 2.f * u, b.getY() + 1.f, b.getWidth() - 4.f * u, 1.f);
             }
             g.setColour(Colour(0xFF0A0A0D).withAlpha(0.85f)); g.setFont(mono(juce::jmin(10.5f * u, cw * 0.38f)));
-            const String t = li == obeat::B ? letter(proc.noteOfDegree(obeat::degOf(c))) : rep > 1 ? (rep == 3 ? String("3") : String(juce::CharPointer_UTF8("\xC3\x97")) + String(rep)) : String();
+            const String t = li == obeat::B ? letter(proc.noteOfDegree(obeat::degOf(c)), kit::v3::notes::flatPref(proc.apvts)) : rep > 1 ? (rep == 3 ? String("3") : String(juce::CharPointer_UTF8("\xC3\x97")) + String(rep)) : String();
             if (t.isNotEmpty()) g.drawText(t, r.reduced(3.f * u, 0).toNearestInt(), Justification::centredLeft);
         }
     }
@@ -84,7 +84,8 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
     setLookAndFeel(&look);
     auto& ap = proc.apvts;
     for (int i = 0; i < obeat::kKits; ++i) kitBox.addItem(obeat::kits()[i].label, i + 1);
-    for (int i = 0; i < 12; ++i) keyBox.addItem(suiteui::noteName(i + 12).removeCharacters("0123456789-"), i + 1);
+    flat_ = kit::v3::notes::flatPref(ap);
+    for (int i = 0; i < 12; ++i) keyBox.addItem(kit::v3::notes::pcName(i, flat_), i + 1);
     for (auto* c : {&kitBox, &keyBox}) { addAndMakeVisible(c); c->setJustificationType(Justification::centredLeft); }
     kitAtt = std::make_unique<ComboAtt>(ap, "kit", kitBox);
     keyAtt = std::make_unique<ComboAtt>(ap, "key", keyBox);
@@ -96,10 +97,12 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
     chainSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("chain"), juce::StringArray{"Aucun", "A B", "A B C D"}, pal);
     midiSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("midimap"), juce::StringArray{"GM + 808", u8("Canal 10 = batterie")}, pal);
     modeSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("mode"), juce::StringArray{"Mineur", "Majeur"}, pal);
+    accSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("accid"), kit::v3::notes::accidentalLabels(), pal);
+    accSeg->setTooltip(kit::v3::notes::accidentalTip());
     patSeg->setTooltip(u8("Pattern à éditer et à jouer (A à D)"));
     chainSeg->setTooltip(u8("Joue les patterns à la suite, un par durée de pattern, en suivant le transport"));
     midiSeg->setTooltip(u8("GM + 808 : les notes de batterie GM déclenchent les pistes, les autres notes jouent l'808. Canal 10 = batterie : seul le canal 10 est de la batterie, le reste joue l'808."));
-    for (auto* c : {(juce::Component*)patSeg.get(), (juce::Component*)stepsSeg.get(), (juce::Component*)chainSeg.get(), (juce::Component*)midiSeg.get(), (juce::Component*)modeSeg.get(), (juce::Component*)&grid}) addAndMakeVisible(c);
+    for (auto* c : {(juce::Component*)patSeg.get(), (juce::Component*)stepsSeg.get(), (juce::Component*)chainSeg.get(), (juce::Component*)midiSeg.get(), (juce::Component*)modeSeg.get(), (juce::Component*)accSeg.get(), (juce::Component*)&grid}) addAndMakeVisible(c);
 
     for (auto* b : {&genB, &varyB, &clearB, &auditionB}) addAndMakeVisible(b);
     genB.setTooltip(u8("Remplit le pattern courant avec un motif adapté au kit"));
@@ -168,7 +171,7 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
         swingK.setVisible(!n3); masterK.setVisible(!n3);
         for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
         const auto* tp = skin.tp();
-        for (auto* s : {patSeg.get(), stepsSeg.get(), chainSeg.get(), midiSeg.get(), modeSeg.get()}) { s->T = tp; s->px = 11.5f; s->repaint(); }
+        for (auto* s : {patSeg.get(), stepsSeg.get(), chainSeg.get(), midiSeg.get(), modeSeg.get(), accSeg.get()}) { s->T = tp; s->px = 11.5f; s->repaint(); }
         for (auto* b : {&genB, &varyB, &clearB, &auditionB, &toolB[0], &toolB[1], &toolB[2], &toolB[3]}) b->T = tp;
         for (int i = 0; i < kLanes; ++i) { muteB[i].T = tp; soloB[i].T = tp; }
         help.T = tp; handle->T = tp; grid.T = tp; repaint();
@@ -203,14 +206,16 @@ void OrbeBeatEditor::resized() {
     swingK.setBounds(Si(32, 468, 96, 96)); masterK.setBounds(Si(148, 468, 96, 96));
     stepsSeg->setBounds(Si(300, 470, 96, 28)); chainSeg->setBounds(Si(410, 470, 210, 28));
     midiSeg->setBounds(Si(300, 530, 320, 28));
-    keyBox.setBounds(Si(660, 470, 96, 28));
-    modeSeg->setBounds(Si(766, 470, 112, 28));
+    keyBox.setBounds(Si(660, 470, 76, 28));
+    accSeg->setBounds(Si(742, 470, 48, 28));
+    modeSeg->setBounds(Si(796, 470, 92, 28));
     seqB.setBounds(Si(660, 534, 200, 22));
     handle->setBounds(Si(900, 470, 176, 74));
     repaint();
 }
 
 void OrbeBeatEditor::timerCallback() {
+    if (const bool f = kit::v3::notes::flatPref(proc.apvts); f != flat_) { flat_ = f; kit::v3::notes::relabelKeyItems(keyBox, 1, f); grid.repaint(); repaint(); }
     meterShown = juce::jmax(proc.meter.load(), meterShown * 0.9f);
     if (skin.on()) for (auto* k : k3) k->tickMod(1.f / 30.f);
     bool any = proc.playStep.load() >= 0.f;
@@ -275,7 +280,7 @@ void OrbeBeatEditor::paint(juce::Graphics& g) {
     engraved(g, pal, u8("Enchaînement"), S(410, 452, 210, 14), Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, u8("Entrée MIDI"), S(300, 512, 320, 14), Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Tonique 808", S(660, 452, 100, 14), Justification::centredLeft, 10.f * u, 2.f * u);
-    engraved(g, pal, "Gamme 808", S(770, 452, 100, 14), Justification::centredLeft, 10.f * u, 2.f * u);
+    engraved(g, pal, "Gamme 808", S(800, 452, 88, 14), Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Export MIDI", S(900, 452, 176, 14), Justification::centredLeft, 10.f * u, 2.f * u);
     g.setColour(pal.line);
     g.fillRect(S(270, 456, 1.f, 150)); g.fillRect(S(640, 456, 1.f, 100)); g.fillRect(S(884, 456, 1.f, 150));
@@ -309,7 +314,7 @@ void OrbeBeatGrid::paint3(juce::Graphics& g) {
                 g.setColour(Colours::white.withAlpha(0.22f * a)); g.fillRoundedRectangle(b.withHeight(b.getHeight() * 0.45f), rad);
             }
             g.setColour(Colour(0xFF14161C)); g.setFont(v3::font(juce::jmin(11.f * u, cw * 0.4f), true));
-            const String tx = li == obeat::B ? letter(proc.noteOfDegree(obeat::degOf(c))) : rep > 1 ? (rep == 3 ? String("3") : String(juce::CharPointer_UTF8("\xC3\x97")) + String(rep)) : String();
+            const String tx = li == obeat::B ? letter(proc.noteOfDegree(obeat::degOf(c)), kit::v3::notes::flatPref(proc.apvts)) : rep > 1 ? (rep == 3 ? String("3") : String(juce::CharPointer_UTF8("\xC3\x97")) + String(rep)) : String();
             if (tx.isNotEmpty()) g.drawText(tx, r.reduced(4.f * u, 0), Justification::centredLeft, false);
         }
     }
@@ -330,8 +335,9 @@ void OrbeBeatEditor::resized3() {
     for (int i = 0; i < 2; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(30.f + 116.f * (float)i, 472, 108, 112)); }
     stepsSeg->setBounds(Si(300, 474, 96, 30)); chainSeg->setBounds(Si(410, 474, 220, 30));
     midiSeg->setBounds(Si(300, 540, 330, 30));
-    keyBox.setBounds(Si(660, 474, 96, 30));
-    modeSeg->setBounds(Si(766, 474, 118, 30));
+    keyBox.setBounds(Si(660, 474, 76, 30));
+    accSeg->setBounds(Si(740, 474, 44, 30));
+    modeSeg->setBounds(Si(788, 474, 94, 30));
     seqB.setBounds(Si(660, 540, 200, 24));
     handle->setBounds(Si(904, 474, 168, 78));
     repaint();
@@ -355,7 +361,7 @@ void OrbeBeatEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
     v3::label(g, T, u8("Enchaînement"), R(412, 456, 210, 14), 11.f * u);
     v3::label(g, T, u8("Entrée MIDI"), R(302, 522, 320, 14), 11.f * u);
     v3::label(g, T, "Tonique 808", R(662, 456, 100, 14), 11.f * u);
-    v3::label(g, T, "Gamme 808", R(768, 456, 110, 14), 11.f * u);
+    v3::label(g, T, "Gamme 808", R(790, 456, 92, 14), 11.f * u);
     v3::label(g, T, "Export MIDI", R(904, 456, 168, 14), 11.f * u);
     const auto sep = T.dark ? juce::Colours::white.withAlpha(0.07f) : Colour(0x14101828);
     g.setColour(sep); g.fillRect(R(270, 462, 1, 150)); g.fillRect(R(640, 462, 1, 150)); g.fillRect(R(888, 462, 1, 150));

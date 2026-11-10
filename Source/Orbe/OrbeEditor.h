@@ -4,7 +4,7 @@
 #include "../Kit/v3/InstrumentSkin.h"
 
 // Sélecteur segmenté relié à un paramètre « choix ».
-class Segmented : public juce::Component {
+class Segmented : public juce::Component, public juce::SettableTooltipClient {
 public:
     Segmented(juce::RangedAudioParameter& p, juce::StringArray labels, const kit::Palette& pal)
         : labels_(std::move(labels)), P(pal), att(p, [this](float v) { idx = juce::roundToInt(v); repaint(); }) { att.sendInitialUpdate(); }
@@ -83,7 +83,9 @@ private:
     struct Drag { int mode = 0, idx = -1; float grab = 0; bool moved = false, pushed = false, added = false; } drag;  // mode 1 déplacer, 2 durée, 3 gomme
 
     juce::ComboBox styleBox, keyBox, scaleBox;
-    std::unique_ptr<Segmented> barsSeg, arpSeg;
+    std::unique_ptr<Segmented> barsSeg, arpSeg, accSeg;   // accSeg : # / b
+    bool flat_ = false;   // écriture des notes (paramètre « accid »)
+    juce::String chordLabel(const orbe::Chord&) const;
     juce::ToggleButton b7, bAdd9, bBorrow;
     juce::Slider densityK, humanK, masterK, fader[4];
     juce::ToggleButton mute[4], midiOut;

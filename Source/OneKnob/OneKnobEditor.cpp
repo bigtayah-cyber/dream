@@ -4,7 +4,6 @@ using namespace kit;
 using juce::Colour, juce::Rectangle, juce::String;
 
 namespace {
-const char* kKeyName[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 // lettres lisibles en 7 segments (b et d minuscules) ; le dièse s'affiche en point décimal
 const char* kKeySeg[12] = {"C", "C.", "d", "d.", "E", "F", "F.", "G", "G.", "A", "A.", "b"};
 
@@ -190,7 +189,9 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
 
     // sélecteurs de tonalité et de gamme (paramètres sauvegardés avec le projet) : seulement sur les modèles qui corrigent la hauteur
     for (auto* b : {&keyBox, &scaleBox}) { addChildComponent(*b); b->setJustificationType(juce::Justification::centredLeft); b->setScrollWheelEnabled(false); }
-    keyBox.addItemList(juce::StringArray{"Auto", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}, 1);
+    lastFlat = usesPitch && v3::notes::flatPref(proc.apvts);
+    keyBox.addItem("Auto", 1);
+    for (int i = 0; i < 12; ++i) keyBox.addItem(v3::notes::pcName(i, lastFlat), i + 2);
     scaleBox.addItemList(juce::StringArray{"Auto", "Majeur", "Mineur"}, 1);
     keyAtt = std::make_unique<ComboAtt>(proc.apvts, "key", keyBox);
     scaleAtt = std::make_unique<ComboAtt>(proc.apvts, "scale", scaleBox);
@@ -198,6 +199,10 @@ OneKnobEditor::OneKnobEditor(OneKnobProcessor& p)
     scaleBox.setTooltip(u8("Gamme. Auto : majeur ou mineur détecté. Ou impose majeur / mineur."));
     if (vi == 2) keyBox.setTooltip(u8("Tonalité. Auto : hard-tune CHROMATIQUE (toutes les notes, effet immédiat). Ou impose la tonique : la voix est plaquée sur sa gamme."));
     keyBox.setVisible(usesPitch); scaleBox.setVisible(usesPitch);
+    if (usesPitch) {
+        accSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "accid", v3::notes::accidentalLabels(), v3::notes::accidentalTip(), pal);
+        addAndMakeVisible(*accSeg);
+    }
 
     // --- v3 : grand potard héros, petits potards du volet (mêmes paramètres, attachements propres), IN, thème
     auto& ap = proc.apvts;
@@ -250,6 +255,7 @@ void OneKnobEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto& k : small3) k->setup(&T, &art);
     inSw3->setVisible(n3); inSw3->setup(&T);
     themeBtn.T = &T; themeBtn.current = m;
+    if (accSeg != nullptr) { accSeg->T = n3 ? &T : nullptr; accSeg->repaint(); }
     for (auto* b : {&keyBox, &scaleBox}) b->setScrollWheelEnabled(false);
     if (persist) v3::Prefs::setTheme(OneKnobProcessor::voicing().id, m);
     setPanel(panelOpen, false);
@@ -317,9 +323,11 @@ void OneKnobEditor::resizedClassic() {
     if (vi == 2) {
         keyBox.setBounds(Si(214, 132, 64, 22));
         scaleBox.setBounds(Si(214, 160, 64, 22));
+        if (accSeg != nullptr) accSeg->setBounds(Si(214, 188, 64, 20));
     } else {
         keyBox.setBounds(Si(22, 480, 100, 24));
         scaleBox.setBounds(Si(132, 480, 100, 24));
+        if (accSeg != nullptr) accSeg->setBounds(Si(242, 480, 40, 24));
     }
     advBtn.setBounds(Si(20, 529, 112, 20));
     const float xs[5] = {46, 98, 150, 202, 254};
@@ -338,6 +346,7 @@ void OneKnobEditor::timerCallback() {
     gr += (proc.reduction.load() - gr) * 0.35f;
     inDb = proc.inDb.load();
     ++tick;
+    if (usesPitch) if (const bool f = v3::notes::flatPref(proc.apvts); f != lastFlat) { lastFlat = f; v3::notes::relabelKeyItems(keyBox, 2, f); repaint(); }
     if (isV3()) {
         vuSm += (vu - vuSm) * 0.3f;
         ringLvl[ringPos] = juce::jlimit(0.f, 1.f, (vu + 30.f) / 36.f);
@@ -359,8 +368,8 @@ void OneKnobEditor::timerCallback() {
 String OneKnobEditor::keyText(bool seg7) const {
     const int pc = proc.keyPc.load(), st = proc.keyState.load();
     if (!usesPitch || pc < 0 || pc > 11 || st == 2) return seg7 ? "--" : "...";
-    if (seg7) return kKeySeg[pc];
-    return String(kKeyName[pc]) + (proc.keyScale.load() == 2 ? " MIN" : " MAJ");
+    if (seg7) return lastFlat && v3::notes::isBlack(pc) ? String(kKeySeg[(pc + 1) % 12]).trimCharactersAtEnd(".") + "b" : String(kKeySeg[pc]);   // bémol : lettre + « b » (le point = dièse)
+    return String(v3::notes::pcName(pc, lastFlat)) + (proc.keyScale.load() == 2 ? " MIN" : " MAJ");
 }
 
 // Plaque de série rivetée (aluminium) ou plaque laiton gravée.
@@ -577,7 +586,7 @@ void OneKnobEditor::resized3() {
     inSw3->setBounds(Si(282, 25, 96, 26));
     big3->setScale(u_ * 1.5f); big3->setLabelPx(10.f);
     big3->setBounds(Si(50, 314, 300, 232));
-    if (usesPitch) { keyBox.setBounds(Si(20, 614, 96, 32)); scaleBox.setBounds(Si(124, 614, 110, 32)); }
+    if (usesPitch) { keyBox.setBounds(Si(20, 614, 80, 32)); accSeg->setBounds(Si(104, 614, 46, 32)); accSeg->px = 12.f * u_; scaleBox.setBounds(Si(154, 614, 92, 32)); }
     advBtn.setBounds(Si(250, 614, 130, 32));
     const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false);
     for (int i = 0; i < 5; ++i) { small3[i]->setScale(u_); small3[i]->setBounds(Si(20.f + 72.f * (float)i, kH3 + 16.f, 72, kh)); }
@@ -602,7 +611,7 @@ void OneKnobEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
     else {
         g.setColour(T.inkMute);
         v3::caps(g, u8("Tonalité"), R(24, 594, 90, 14), 10.5f * u, juce::Justification::centredLeft);
-        v3::caps(g, "Gamme", R(128, 594, 90, 14), 10.5f * u, juce::Justification::centredLeft);
+        v3::caps(g, "Gamme", R(158, 594, 90, 14), 10.5f * u, juce::Justification::centredLeft);
     }
     // textes fixes de l'écran
     g.setColour(T.scrMute);
@@ -662,7 +671,7 @@ void OneKnobEditor::paintHero3(juce::Graphics& g) {
         const bool known = pc >= 0 && pc < 12 && st != 2;
         const bool chroma = !known && vi == 2 && st == 0;   // Poupée, tonalité Auto : hard-tune chromatique
         g.setColour(known ? accent3(vi).scr : T.scrMute); g.setFont(big);
-        g.drawText(known ? String(kKeyName[pc]) : String(v3::fmt::minus()), S(258, 106, 112, 56), juce::Justification::centredLeft, false);
+        g.drawText(known ? String(v3::notes::pcName(pc, lastFlat)) : String(v3::fmt::minus()), S(258, 106, 112, 56), juce::Justification::centredLeft, false);
         g.setColour(T.scrInk.withAlpha(0.9f)); g.setFont(v3::font(15.f * u));
         g.drawText(known ? (proc.keyScale.load() == 2 ? u8("mineur") : u8("majeur")) : String(), S(258, 160, 112, 18), juce::Justification::centredLeft, false);
         const bool blink = (tick / 8) % 2 == 0;

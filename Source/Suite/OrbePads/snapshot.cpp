@@ -4,6 +4,7 @@
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
     kit::v3::snapshotTheme("orbepads");
+    kit::v3::Prefs::setFlats("orbepads", std::getenv("FLATS") != nullptr);   // bémols (réglage d'interface)
     PadsProcessor proc;
     proc.prepareToPlay(48000, 512);
     if (argc > 1 && juce::String(argv[1]) == "--etat") {  // aller-retour de l'état : l'audio embarqué doit revenir à l'identique

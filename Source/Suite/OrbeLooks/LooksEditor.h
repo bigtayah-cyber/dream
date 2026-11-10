@@ -36,6 +36,8 @@ private:
     float modLevel[8] = {};
     juce::OwnedArray<oc::ui::Pot> pots;
     juce::ComboBox keyBox, scaleBox;
+    std::unique_ptr<kit::v3::bridge::Seg> accSeg;   // # / b
+    bool flat_ = false;
     juce::ArrowButton prev{"prev", 0.5f, kit::w::kSilk.withAlpha(0.7f)}, next{"next", 0.f, kit::w::kSilk.withAlpha(0.7f)};
     kit::v3::bridge::Power power;
     kit::v3::bridge::HelpKey help;

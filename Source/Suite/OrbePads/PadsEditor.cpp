@@ -52,7 +52,7 @@ public:
         g.drawText(String(idx + 1).paddedLeft('0', 2), Rectangle<float>(r.getX() + 8 * u, r.getY() + 5 * u, 40 * u, 16 * u), juce::Justification::centredLeft);
         g.setColour(ed.pal.mute);
         g.setFont(mono(9.5f * u));
-        g.drawText(noteName(PadsProcessor::kFirstNote + idx), Rectangle<float>(r.getX() + 8 * u, r.getBottom() - 16 * u, 50 * u, 12 * u), juce::Justification::centredLeft);
+        g.drawText(kit::v3::notes::name(PadsProcessor::kFirstNote + idx, ed.acc.flat(), -2), Rectangle<float>(r.getX() + 8 * u, r.getBottom() - 16 * u, 50 * u, 12 * u), juce::Justification::centredLeft);
         led(g, r.getRight() - 12 * u, r.getY() + 12 * u, 3.4f * u, fl > 0.25f, c);
         if (ed.proc.sel.load() == idx) {
             g.setColour(c.withAlpha(0.95f));
@@ -79,7 +79,7 @@ public:
             if (pos >= 0.f) { g.setColour(T.ink); g.fillRect(w.getX() + pos * w.getWidth(), w.getY() - 2 * u, 1.5f * u, w.getHeight() + 4 * u); }
         } else { g.setColour(mute); v3::caps(g, "Vide", r.withTrimmedTop(r.getHeight() * 0.35f), 10.5f * u, juce::Justification::centred); }
         g.setColour(ink); g.setFont(v3::font(14.f * u, true)); g.drawText(String(idx + 1).paddedLeft('0', 2), Rectangle<float>(r.getX() + 10 * u, r.getY() + 6 * u, 40 * u, 18 * u), juce::Justification::centredLeft, false);
-        g.setColour(mute); g.setFont(v3::font(11.f * u)); g.drawText(noteName(PadsProcessor::kFirstNote + idx), Rectangle<float>(r.getX() + 10 * u, r.getBottom() - 19 * u, 50 * u, 14 * u), juce::Justification::centredLeft, false);
+        g.setColour(mute); g.setFont(v3::font(11.f * u)); g.drawText(kit::v3::notes::name(PadsProcessor::kFirstNote + idx, ed.acc.flat(), -2), Rectangle<float>(r.getX() + 10 * u, r.getBottom() - 19 * u, 50 * u, 14 * u), juce::Justification::centredLeft, false);
         if (ed.proc.sel.load() == idx) { g.setColour(T.accent); g.drawRoundedRectangle(r.reduced(1.f * u), rad, 2.f * u); }
     }
     void mouseDown(const juce::MouseEvent& e) override {
@@ -167,6 +167,8 @@ PadsEditor::PadsEditor(PadsProcessor& p)
         u8("- Découpe : Attaques (réglage de sensibilité), Grille (divisions égales) ou Manuel."),
         u8("- En manuel : clic sur la forme d'onde pour ajouter un repère, glisser pour le déplacer, double-clic ou clic droit pour le supprimer."),
         u8("- Clic sur un pad : le sélectionne et le joue (Maj : plus doux). Les réglages de droite s'appliquent au pad sélectionné.")});
+    accSeg = std::make_unique<kit::v3::UiSeg>(acc, kit::v3::notes::accidentalLabels(), kit::v3::notes::accidentalTip(), pal);
+    addAndMakeVisible(*accSeg); acc.onChange = [this] { repaint(); for (auto& p : pads) p->repaint(); };
     addAndMakeVisible(skin.themeBtn);
     skin.onMode = [this] {
         const bool n3 = skin.on(); const auto* tp = skin.tp();
@@ -177,7 +179,7 @@ PadsEditor::PadsEditor(PadsProcessor& p)
         for (auto* s : {&modeSeg, &divSeg, &playSeg, &dltSeg}) { s->T = tp; s->px = 11.5f; s->repaint(); }
         if (grpSeg) { grpSeg->T = tp; grpSeg->repaint(); }
         for (auto* b : {&importB, &demoB, &clearB}) b->T = tp;
-        wave.T = tp; help.T = tp; repaint();
+        accSeg->T = tp; accSeg->px = 12.f; wave.T = tp; help.T = tp; repaint();
     };
     setResizable(true, true);
     setResizeLimits(760, 502, 1600, 1056);
@@ -237,6 +239,7 @@ void PadsEditor::resized() {
     importB.setBounds(Si(722, 8, 110, 34)); demoB.setBounds(Si(838, 8, 90, 34));
     wave.setBounds(Si(24, 80, 952, 152));
     modeSeg.setBounds(Si(24, 242, 300, 30));
+    accSeg->setBounds(Si(700, 242, 56, 30));
     sens.setBounds(Si(440, 244, 220, 26)); divSeg.setBounds(Si(440, 242, 150, 30));
     clearB.setBounds(Si(800, 242, 176, 30));
     for (int i = 0; i < 16; ++i) pads[i]->setBounds(Si(24.f + (float)(i % 4) * 112.f, 290.f + (float)(3 - i / 4) * 88.f, 112, 88));
@@ -309,7 +312,7 @@ void PadsEditor::paint(juce::Graphics& g) {
         cell(212, "Tempo", bpm > 0 ? fr(bpm, bpm == std::round(bpm) ? 0 : 1) + " bpm" : String(u8("\xE2\x80\x94")), pal.accent, 78);
         const int pc = proc.holder.pc.load();
         const bool mn = proc.holder.minor.load() != 0;
-        cell(296, u8("Tonalité"), keyName(pc, mn), pal.accent2, 64);
+        cell(296, u8("Tonalité"), (pc < 0 ? keyName(pc, mn) : String(kit::v3::notes::pcName(pc, acc.flat())) + (mn ? " min" : " maj")), pal.accent2, 64);
         cell(358, "Camelot", pc >= 0 ? String(camelot(pc, mn)) : String(u8("\xE2\x80\x94")), pal.accent2, 40);
     } else if (st == 1) {
         g.setColour(pal.accent.withAlpha(0.6f + 0.4f * std::sin((float)tick * 0.35f)));
@@ -323,7 +326,7 @@ void PadsEditor::paint(juce::Graphics& g) {
 
     // panneau du pad sélectionné
     const int sel = proc.sel.load();
-    String t = "Pad " + String(sel + 1).paddedLeft('0', 2) + "   " + noteName(PadsProcessor::kFirstNote + sel);
+    String t = "Pad " + String(sel + 1).paddedLeft('0', 2) + "   " + kit::v3::notes::name(PadsProcessor::kFirstNote + sel, acc.flat(), -2);
     if (snap && sel < snap->nsl && snap->pcm) t += "   " + durText((snap->b[sel] - snap->a[sel]) / snap->pcm->sr);
     panel(g, S(488, 290, 488, 352), t);
     engraved(g, pal, "Groupe de coupure", S(744, 468, 200, 14), juce::Justification::centredLeft, 8.5f * u, 1.4f, true);
@@ -395,6 +398,7 @@ void PadsEditor::resized3() {
     importB.setBounds(Si(712, 18, 96, 34)); demoB.setBounds(Si(812, 18, 80, 34));
     wave.setBounds(Si(24, 80, 952, 152));
     modeSeg.setBounds(Si(24, 242, 300, 32));
+    accSeg->setBounds(Si(700, 242, 56, 32));
     sens.setBounds(Si(440, 244, 220, 28)); divSeg.setBounds(Si(440, 242, 150, 32));
     clearB.setBounds(Si(800, 242, 176, 32));
     for (int i = 0; i < 16; ++i) pads[i]->setBounds(Si(24.f + (float)(i % 4) * 112.f, 290.f + (float)(3 - i / 4) * 88.f, 112, 88));
@@ -439,7 +443,7 @@ void PadsEditor::paint3(juce::Graphics& g) {
         const float bpm = proc.holder.bpm.load();
         cell(214, "Tempo", bpm > 0 ? v3::fmt::num(bpm, bpm == std::round(bpm) ? 0 : 1) : String(u8("\xE2\x80\x94")), 66);
         const int pc = proc.holder.pc.load(); const bool mn = proc.holder.minor.load() != 0;
-        cell(290, u8("Tonalité"), keyName(pc, mn), 62);
+        cell(290, u8("Tonalité"), (pc < 0 ? keyName(pc, mn) : String(kit::v3::notes::pcName(pc, acc.flat())) + (mn ? " min" : " maj")), 62);
         cell(358, "Camelot", pc >= 0 ? String(camelot(pc, mn)) : String(u8("\xE2\x80\x94")), 40);
     } else if (st == 1) {
         g.setColour(T.out.withAlpha(0.6f + 0.4f * std::sin((float)tick * 0.35f))); v3::caps(g, "Analyse...", Rectangle<float>(lcd.getX() + 214 * u, lcd.getY() + 6 * u, 180 * u, 40 * u), 12.f * u, juce::Justification::centredLeft);
@@ -448,7 +452,7 @@ void PadsEditor::paint3(juce::Graphics& g) {
     if (mode == 0) v3::label(g, T, u8("Sensibilité"), S(334, 248, 100, 22), 11.f * u, juce::Justification::centredRight);
     if (mode == 1) v3::label(g, T, "Divisions", S(334, 248, 100, 22), 11.f * u, juce::Justification::centredRight);
     const int sel = proc.sel.load();
-    String t = "Pad " + String(sel + 1).paddedLeft('0', 2) + "   " + noteName(PadsProcessor::kFirstNote + sel);
+    String t = "Pad " + String(sel + 1).paddedLeft('0', 2) + "   " + kit::v3::notes::name(PadsProcessor::kFirstNote + sel, acc.flat(), -2);
     if (snap && sel < snap->nsl && snap->pcm) t += "   " + v3::fmt::withUnit(v3::fmt::num((snap->b[sel] - snap->a[sel]) / snap->pcm->sr, 2), "s");
     v3::label(g, T, t, S(504, 298, 440, 18), 12.f * u);
     v3::label(g, T, "Groupe de coupure", S(744, 472, 200, 14), 11.f * u);

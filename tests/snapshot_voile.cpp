@@ -21,6 +21,10 @@ int main(int argc, char** argv) {
     }
     if (std::getenv("VOILE_SCOPE_DEBUG") != nullptr)
         for (int i = 0; i < VoileProcessor::Scope::N; i += 64) std::printf("%d sung=%.2f out=%.2f tgt=%.0f lvl=%.3f\n", i, proc.scope.sung[i].load(), proc.scope.out[i].load(), proc.scope.tgt[i].load(), proc.scope.lvl[i].load());
+    if (std::getenv("FLATS") != nullptr) {   // bémols ; gamme chromatique et tonique Eb pour voir les noms noirs
+        proc.apvts.getParameter("accid")->setValueNotifyingHost(1.f);
+        proc.apvts.getParameter("scale")->setValueNotifyingHost(0.f); proc.apvts.getParameter("key")->setValueNotifyingHost(3.f / 11.f);
+    }
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
     auto* ve = dynamic_cast<VoileEditor*>(ed.get());
     ve->setThemeMode(th == "sombre" ? kit::v3::Mode::Dark : th == "classique" ? kit::v3::Mode::Classic : kit::v3::Mode::Light, false);

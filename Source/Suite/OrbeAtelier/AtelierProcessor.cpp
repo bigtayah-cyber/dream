@@ -22,6 +22,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtelierProcessor::makeLayout
         }
     }
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"bypass", 1}, "Bypass", false));
+    l.add(kit::v3::notes::makeAccidParam());   // ajouté en dernier : écriture dièses / bémols (noms seulement)
     return l;
 }
 

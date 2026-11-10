@@ -718,6 +718,8 @@ class Seg : public kit::w::Seg {
 public:
     Seg(juce::AudioProcessorValueTreeState& a, const String& id, juce::StringArray names, const String& tip, const kit::Palette& pal)
         : kit::w::Seg(a, id, names, tip, pal), labels(std::move(names)) {}
+    Seg(juce::RangedAudioParameter& p, juce::StringArray names, const String& tip, const kit::Palette& pal)
+        : kit::w::Seg(p, names, pal), labels(std::move(names)) { setTooltip(tip); }
     const Theme* T = nullptr;
     float px = 12.f;
     void paint(Graphics& g) override {
@@ -750,5 +752,34 @@ public:
     }
 };
 }  // namespace bridge
+
+// ------------------------------------------------------------ écriture des notes pour les plugins sans tonalité propre
+// Réglage d'INTERFACE (dièses / bémols), mémorisé dans Prefs et non dans l'état du projet : le paramètre est local à l'éditeur,
+// jamais ajouté au processeur (ni automation ni identifiant). Défaut : dièses. Nom seulement : le son ne change jamais.
+class UiAccidental : private juce::AudioProcessorParameter::Listener {
+public:
+    explicit UiAccidental(const String& plugin)
+        : param(juce::ParameterID{"accid", 1}, "accid", juce::StringArray{"#", "b"}, Prefs::flats(plugin) ? 1 : 0), id(plugin) { param.addListener(this); }
+    ~UiAccidental() override { param.removeListener(this); }
+    bool flat() const { return param.getIndex() == 1; }
+    juce::AudioParameterChoice param;
+    std::function<void()> onChange;   // appelée sur le fil de l'interface après un changement
+private:
+    void parameterValueChanged(int, float) override { Prefs::setFlats(id, flat()); if (onChange) onChange(); }
+    void parameterGestureChanged(int, bool) override {}
+    String id;
+};
+
+// Sélecteur « # / ♭ » relié à UiAccidental : même rendu que bridge::Seg (v3 : segments-pilule, Classique : touches du kit).
+class UiSeg : public bridge::Seg {
+public:
+    UiSeg(UiAccidental& a, juce::StringArray names, const String& tip, const kit::Palette& pal) : bridge::Seg(a.param, names, tip, pal), acc(a), n(names.size()) {}
+    void mouseDown(const juce::MouseEvent& e) override {   // pas de geste hôte : le paramètre n'appartient à aucun processeur
+        const int i = juce::jlimit(0, n - 1, (int)(e.position.x / ((float)getWidth() / (float)n)));
+        acc.param.setValueNotifyingHost(acc.param.convertTo0to1((float)i));
+    }
+private:
+    UiAccidental& acc; int n;
+};
 
 }  // namespace kit::v3

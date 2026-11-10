@@ -90,6 +90,14 @@ Ce que l'utilisateur doit savoir :
 ### Tous les plugins concernés par le bypass
 - Bypass honoré avec fondu de 10 ms (14 plugins, depuis le 8 novembre).
 
+## Dièses / bémols (♯ / ♭)
+
+- Nouveau réglage « Altérations » (# / ♭) pour les plugins qui affichent des notes, tonalités, gammes ou accords. Les enharmoniques ne changent que les noms, jamais le son. Défaut : dièses (comportement d'avant). Aide commune : `Source/Kit/v3/NoteNames.h`.
+- Paramètre `accid`, ajouté en fin de liste, choix à 2 valeurs (pas un booléen), défaut dièses : Voile, Grain Nord et Poupée (seulement s'ils ont une hauteur), Orbe et Orbe FX, Looks, Atelier, Beat, Fredonne. Aucun identifiant ni état existant ne change.
+- Sans tonalité propre (affichage seulement) : Detect, 808, Pads, Sample. Réglage d'interface mémorisé par plugin dans les préférences de l'utilisateur (`Prefs`, kit v3), pas dans le projet.
+- Non touchés : Gorge, Patine (pas de notes), Relance, Synth, Accroc, Mix, Master, Cabine, EQ, Galet, De-esser, Denoiser. `TuneCore.h` et les moteurs DSP sont intacts.
+- Limites : le texte d'automation hôte du paramètre `key` (Looks, Atelier) reste en dièses ; Orbe garde sa règle d'armure pour les noms d'accords tant que « dièses » est choisi.
+
 ## Nouveaux plugins
 
 - **Orbe Galet** : courbes et distorsion lisse. 16 préréglages, distorsion sur-échantillonnée ×4 (ADAA), latence 71 échantillons, forme sauvegardée dans l'état. pluginval niveau 10 : réussi.

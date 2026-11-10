@@ -13,8 +13,15 @@ using kit::w::lcd; using kit::w::hairline; using kit::w::fr;
 // Outils de mesure : boîtier d'appareil gris martelé (kit commun).
 inline kit::Palette palette(Colour accent = kOk) { return kit::w::meter(accent); }
 inline String T(const std::string& s) { return String::fromUTF8(s.c_str()); }
-inline String note(int pc) { return T(oa::kNoteNames[((pc % 12) + 12) % 12]); }
-inline String noteOct(int midi) { return note(midi % 12) + String(midi / 12 - 1); }
+// flat = false : écriture d'origine (C♯ E♭ F♯ A♭ B♭) ; flat = true : tous les noirs en bémol. Nom seulement, jamais le son.
+inline String note(int pc, bool flat = false) {
+    static const char* const fl[12] = {"C", "D\xE2\x99\xAD", "D", "E\xE2\x99\xAD", "E", "F", "G\xE2\x99\xAD", "G", "A\xE2\x99\xAD", "A", "B\xE2\x99\xAD", "B"};
+    pc = ((pc % 12) + 12) % 12;
+    return flat ? String::fromUTF8(fl[pc]) : T(oa::kNoteNames[pc]);
+}
+inline String noteOct(int midi, bool flat = false) { return note(midi % 12, flat) + String(midi / 12 - 1); }
+inline String keyShort(int pc, bool minor, bool flat) { return flat ? note(pc, true) + (minor ? "m" : "") : T(oa::keyShort(pc, minor)); }
+inline String keyLong(int pc, bool minor, bool flat) { return flat ? note(pc, true) + (minor ? kit::u8(" mineur") : kit::u8(" majeur")) : T(oa::keyLong(pc, minor)); }
 inline const String kDot = kit::u8("  ·  ");
 inline Colour camColour(int number, float a = 1.f, float sat = .7f, float li = .78f) { return Colour::fromHSL((float)oa::camelotHue(number) / 360.f, sat, li, a); }
 inline Colour sevColour(int sev) { return sev == 0 ? kBad : sev == 1 ? kWarn : kOk; }

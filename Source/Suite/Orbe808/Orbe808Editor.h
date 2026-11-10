@@ -2,6 +2,7 @@
 #include "Orbe808Processor.h"
 #include "SuiteUi.h"
 #include "../../Kit/v3/InstrumentSkin.h"
+#include "../../Kit/v3/NoteNames.h"
 
 // Clavier de deux octaves (C1–B2) pour jouer la basse depuis l'interface ; glisser d'une touche à l'autre fait glisser la hauteur (legato).
 class Orbe808Keys : public juce::Component {
@@ -56,6 +57,8 @@ private:
     std::unique_ptr<SliderAtt> att[kKnobs];
     std::unique_ptr<kit::v3::GridSeg> presetSeg, satSeg, bendSeg;
     Orbe808Keys keysUi;
+    kit::v3::UiAccidental acc{"orbe808"};   // dièses / bémols : réglage d'interface (Prefs)
+    std::unique_ptr<kit::v3::UiSeg> accSeg;
 
     static constexpr int kCols = 640;
     std::vector<float> pkMin, pkMax;

@@ -3,6 +3,7 @@
 #include "Engine.h"
 #include "Kit/BypassFade.h"
 #include "Kit/Sanitize.h"
+#include "Kit/v3/NoteNames.h"
 
 class VoileProcessor : public juce::AudioProcessor {
 public:

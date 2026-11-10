@@ -1,5 +1,6 @@
 #pragma once
 #include "../../Kit/v3/Analysis3.h"
+#include "../../Kit/v3/NoteNames.h"
 #include "DetectProcessor.h"
 
 class DetectEditor : public ou3::Base3 {
@@ -28,6 +29,9 @@ private:
     std::string hover, focus;
     std::vector<double> taps;
 
+    kit::v3::UiAccidental acc{"detect"};            // dièses / bémols : réglage d'interface (Prefs)
+    std::unique_ptr<kit::v3::UiSeg> accSeg;
+    bool flat_() const { return acc.flat(); }
     kit::v3::bridge::PushKey captureB;
     kit::v3::bridge::PushKey clearB{"Vider"}, analyzeB{"Analyser"}, halfB, dblB{juce::String::fromUTF8("×2")}, tapB{"Tap"}, applyB;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> capAtt;

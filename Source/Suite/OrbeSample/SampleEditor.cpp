@@ -121,6 +121,8 @@ SampleEditor::SampleEditor(SampleProcessor& p)
     };
     demoB.onClick = [this] { proc.loadDemo(); };
 
+    accSeg = std::make_unique<kit::v3::UiSeg>(acc, kit::v3::notes::accidentalLabels(), kit::v3::notes::accidentalTip(), pal);
+    addAndMakeVisible(*accSeg); acc.onChange = [this] { repaint(); };
     addAndMakeVisible(skin.themeBtn);
     skin.onMode = [this] {
         const bool n3 = skin.on(); const auto* tp = skin.tp();
@@ -129,7 +131,7 @@ SampleEditor::SampleEditor(SampleProcessor& p)
         for (auto& ch : chip) ch->T = tp;
         for (auto* s : {&modeSeg, &chopSeg}) { s->T = tp; s->px = 11.5f; s->repaint(); }
         for (auto* b : {&importB, &demoB, &playB}) b->T = tp;
-        srcWave.T = tp; resWave.T = tp; help.T = tp; repaint();
+        accSeg->T = tp; accSeg->px = 12.f; srcWave.T = tp; resWave.T = tp; help.T = tp; repaint();
     };
     setResizable(true, true);
     help.install(*this, "Orbe Sample", {u8("Transformateur de sample : choisis une zone de la source, applique un préréglage et un traitement, joue le résultat."),
@@ -163,6 +165,7 @@ void SampleEditor::resized() {
     help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false).toNearestInt(), getLocalBounds());
     skin.themeBtn.setBounds(help.getBounds().translated(-help.getWidth() - juce::roundToInt(6.f * u_), 0));
     importB.setBounds(Si(722, 8, 110, 34)); demoB.setBounds(Si(838, 8, 90, 34));
+    accSeg->setBounds(Si(200, 14, 56, 26));
     srcWave.setBounds(Si(24, 78, 952, 112));
     resWave.setBounds(Si(24, 196, 952, 142));
     for (int i = 0; i < 9; ++i) chip[i]->setBounds(Si(36.f + (float)(i % 3) * 112.f, 382.f + (float)(i / 3) * 42.f, 106, 36));
@@ -305,7 +308,7 @@ void SampleEditor::paintResOver(juce::Graphics& g, WaveView& w) {
             g.setColour(c.withAlpha(0.85f)); g.fillRect(x0, r.getY(), 1.2f, r.getHeight());
             auto tab = Rectangle<float>(x0, r.getBottom() - 15 * u_, juce::jmin(32.f * u_, x1 - x0 - 1.f), 15 * u_);
             g.fillRoundedRectangle(tab, 4.f * u_);
-            if (tab.getWidth() > 19.f * u_) { g.setColour(Colour(0xFF14161C)); g.setFont(v3::font(10.5f * u_, true)); g.drawText(noteName(SampleProcessor::kFirstNote + i), tab, juce::Justification::centred, false); }
+            if (tab.getWidth() > 19.f * u_) { g.setColour(Colour(0xFF14161C)); g.setFont(v3::font(10.5f * u_, true)); g.drawText(kit::v3::notes::name(SampleProcessor::kFirstNote + i, acc.flat(), -2), tab, juce::Justification::centred, false); }
         }
         const float pp = proc.playPos.load();
         if (pp >= 0.f) { g.setColour(juce::Colours::white); g.fillRect(r.getX() + pp * r.getWidth() - 0.75f, r.getY(), 1.5f, r.getHeight()); }
@@ -335,7 +338,7 @@ void SampleEditor::paintResOver(juce::Graphics& g, WaveView& w) {
         g.fillRect(x0, r.getY(), 1.2f, r.getHeight());
         auto tab = Rectangle<float>(x0, r.getBottom() - 13 * u_, juce::jmin(30.f * u_, x1 - x0 - 1.f), 13.f * u_);
         g.fillRect(tab);
-        if (tab.getWidth() > 19.f * u_) { g.setColour(juce::Colours::black.withAlpha(0.85f)); g.setFont(mono(9.f * u_)); g.drawText(noteName(SampleProcessor::kFirstNote + i), tab, juce::Justification::centred); }
+        if (tab.getWidth() > 19.f * u_) { g.setColour(juce::Colours::black.withAlpha(0.85f)); g.setFont(mono(9.f * u_)); g.drawText(kit::v3::notes::name(SampleProcessor::kFirstNote + i, acc.flat(), -2), tab, juce::Justification::centred); }
     }
     const float pp = proc.playPos.load();
     if (pp >= 0.f) { g.setColour(juce::Colours::white); g.fillRect(r.getX() + pp * r.getWidth() - 0.75f, r.getY(), 1.5f, r.getHeight()); }
@@ -374,6 +377,7 @@ void SampleEditor::resized3() {
     help.layout(Si(954, 24, 28, 28), getLocalBounds());
     skin.themeBtn.setBounds(Si(918, 24, 28, 28));
     importB.setBounds(Si(712, 18, 96, 34)); demoB.setBounds(Si(812, 18, 80, 34));
+    accSeg->setBounds(Si(228, 38, 58, 28));
     srcWave.setBounds(Si(24, 78, 952, 112));
     resWave.setBounds(Si(24, 196, 952, 142));
     for (int i = 0; i < 9; ++i) chip[i]->setBounds(Si(36.f + (float)(i % 3) * 112.f, 384.f + (float)(i / 3) * 42.f, 106, 36));

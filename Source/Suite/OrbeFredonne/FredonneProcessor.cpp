@@ -21,6 +21,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FredonneProcessor::makeLayou
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"follow", 1}, "Suivre l'hote", true));
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"play", 1}, "Jouer les notes", true));
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"monitor", 1}, "Ecoute directe", false));
+    l.add(kit::v3::notes::makeAccidParam());   // ajouté en dernier : écriture dièses / bémols (noms seulement)
     return l;
 }
 

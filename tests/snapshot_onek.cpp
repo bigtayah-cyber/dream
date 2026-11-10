@@ -6,6 +6,7 @@ int main(int argc, char** argv) {
     OneKnobProcessor::index() = argc > 2 ? juce::String(argv[2]).getIntValue() : 0;
     OneKnobProcessor proc;
     proc.prepareToPlay(48000, 512);
+    if (std::getenv("FLATS") != nullptr) if (auto* p = proc.apvts.getParameter("accid")) { p->setValueNotifyingHost(1.f); proc.apvts.getParameter("key")->setValueNotifyingHost(4.f / 12.f); }   // bémols, tonique Eb
     if (argc > 3) if (auto* p = proc.apvts.getParameter("char")) p->setValueNotifyingHost(p->convertTo0to1(juce::String(argv[3]).getFloatValue()));
     // un peu de signal pour animer le VU
     juce::AudioBuffer<float> b(2, 512); juce::MidiBuffer m;

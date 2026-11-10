@@ -1,5 +1,6 @@
 #pragma once
 #include "AtelierParams.h"
+#include "../../Kit/v3/NoteNames.h"
 
 class AtelierProcessor : public juce::AudioProcessor {
 public:

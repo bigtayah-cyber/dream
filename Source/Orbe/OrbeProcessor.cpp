@@ -33,6 +33,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrbeProcessor::makeLayout() 
     }
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"midiout", 1}, "Sortie MIDI", false));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID{"master", 1}, "Master", NormalisableRange<float>(0.f, 1.f), 0.8f));
+    l.add(kit::v3::notes::makeAccidParam());   // ajouté en dernier : écriture dièses / bémols (noms seulement)
     return l;
 }
 

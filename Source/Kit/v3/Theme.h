@@ -117,6 +117,9 @@ public:
         return (std::isfinite(v) && v >= 0.5f && v <= 2.5f) ? v : def;
     }
     static void setScale(const juce::String& plugin, float s) { set(plugin + ".scale", juce::String(s, 3)); }
+    // Écriture des notes (dièses / bémols) d'un plugin sans tonalité propre : réglage d'interface, pas d'état de projet. Défaut : dièses.
+    static bool flats(const juce::String& plugin) { return get(plugin + ".flats") == "1"; }
+    static void setFlats(const juce::String& plugin, bool f) { set(plugin + ".flats", f ? "1" : "0"); }
 
 private:
     // Fichier ouvert à la demande (appels rares : ouverture de l'éditeur, changement de thème, fermeture) :

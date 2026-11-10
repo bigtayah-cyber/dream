@@ -31,9 +31,13 @@ AtelierEditor::AtelierEditor(AtelierProcessor& p) : AudioProcessorEditor(&p), pr
         {"Reverb", "rvOn", {"rvSize", "rvPre", "rvDamp", "rvMix"}, 2, {}},
         {"Limiteur", "lmOn", {"lmCeil"}, 2, {}},
     };
+    flat_ = v3::notes::flatPref(proc.apvts);
+    accSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "accid", v3::notes::accidentalLabels(), v3::notes::accidentalTip(), pal);
+    addAndMakeVisible(*accSeg);
     auto addCombo = [this](const String& id) {
         auto* cb = combos.add(new juce::ComboBox()); const auto items = atl::choices(id);
-        for (int i = 0; i < items.size(); ++i) cb->addItem(items[i], i + 1);
+        for (int i = 0; i < items.size(); ++i) cb->addItem(id == "key" && i > 0 ? juce::String(v3::notes::pcName(i - 1, flat_)) : items[i], i + 1);
+        if (id == "key") keyCombo = cb;
         if (auto* d = atl::find(id)) cb->setTooltip(u8(d->tip));
         addAndMakeVisible(cb); cmbAtt.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, id, *cb));
     };
@@ -98,6 +102,7 @@ void AtelierEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto* k : k3) { k->setVisible(n3); k->setup(&T, &art); }
     prev3.setVisible(n3); next3.setVisible(n3); prev3.T = next3.T = &T;
     power.T = &T; help.T = &T; themeBtn.T = &T; themeBtn.current = m;
+    accSeg->T = n3 ? &T : nullptr; accSeg->repaint();
     lastPreset = -1;
     if (persist) v3::Prefs::setTheme("atelier", m);
     // Classique : taille d'origine (1400 de large par défaut, 1120 à 2240) ; v3 : 1200 × 700, 0,75 à 1,5
@@ -151,7 +156,8 @@ void AtelierEditor::resized3() {
                 const float c = cw * wOf(id);
                 if (id == "@tonal") {
                     labels3.push_back({{cx, rowY[row] + 38, c, 12}, u8("Tonalité")}); labels3.push_back({{cx, rowY[row] + 86, c, 12}, "Mode"});
-                    combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 52, c - 8, 28)); combos[cmbI + 1]->setBounds(Si(cx + 4, rowY[row] + 100, c - 8, 28)); cmbI += 2;
+                    accSeg->setBounds(Si(cx + c - 56, rowY[row] + 56, 50, 20)); accSeg->px = 11.f * u_;
+                    combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 52, c - 64, 28)); combos[cmbI + 1]->setBounds(Si(cx + 4, rowY[row] + 100, c - 8, 28)); cmbI += 2;
                 } else if (id == "@dyDiv") {
                     labels3.push_back({{cx, rowY[row] + 60, c, 12}, "Division"});
                     combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 74, c - 8, 28)); ++cmbI;
@@ -192,7 +198,8 @@ void AtelierEditor::resized() {
             for (auto& id : m.ids) {
                 const Rectangle<float> cell(cx, kRowY[row] + 28, cw, 82.f);
                 if (id == "@tonal") {
-                    combos[cmbI]->setBounds(Si(cx + 3, kRowY[row] + 42, cw - 6, 22)); combos[cmbI + 1]->setBounds(Si(cx + 3, kRowY[row] + 82, cw - 6, 22));
+                    accSeg->setBounds(Si(cx + cw - 46, kRowY[row] + 44, 42, 18));
+                    combos[cmbI]->setBounds(Si(cx + 3, kRowY[row] + 42, cw - 52, 22)); combos[cmbI + 1]->setBounds(Si(cx + 3, kRowY[row] + 82, cw - 6, 22));
                     m.labels.push_back({cx, kRowY[row] + 30, cw, 10}); m.labels.push_back({cx, kRowY[row] + 70, cw, 10}); cmbI += 2;
                 } else if (id == "@dyDiv") {
                     combos[cmbI]->setBounds(Si(cx + 3, kRowY[row] + 56, cw - 6, 22)); m.labels.push_back({cx, kRowY[row] + 44, cw, 10}); ++cmbI;
@@ -207,6 +214,7 @@ void AtelierEditor::resized() {
 }
 
 void AtelierEditor::timerCallback() {
+    if (const bool f = v3::notes::flatPref(proc.apvts); f != flat_ && keyCombo != nullptr) { flat_ = f; v3::notes::relabelKeyItems(*keyCombo, 2, f); repaint(); }
     outDb = juce::jmax(20.f * std::log10(juce::jmax(1e-5f, proc.host.peak.load())), outDb - 1.0f);
     grDisp = juce::jmax(proc.host.reduction.load(), grDisp - 0.5f);
     modified = !proc.matchesPreset();

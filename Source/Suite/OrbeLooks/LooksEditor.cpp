@@ -32,13 +32,16 @@ LooksEditor::LooksEditor(LooksProcessor& p) : AudioProcessorEditor(&p), proc(p),
                                              [isMix] { return isMix ? 1.0 : 0.0; }, 19.f, kIce));
         pot->setStyle(KnobStyle::Cap); addAndMakeVisible(pot);
     }
-    keyBox.addItem("Auto", 1); for (int i = 0; i < 12; ++i) keyBox.addItem(oc::ui::kNotes[i], i + 2);
+    flat_ = v3::notes::flatPref(proc.apvts);
+    keyBox.addItem("Auto", 1); for (int i = 0; i < 12; ++i) keyBox.addItem(v3::notes::pcName(i, flat_), i + 2);
     scaleBox.addItem(u8("Majeur"), 1); scaleBox.addItem(u8("Mineur"), 2);
     keyBox.setTooltip(u8("Tonalité de la correction de hauteur. Auto : détection prudente, aucune correction tant qu'elle n'est pas sûre."));
     scaleBox.setTooltip(u8("Mode utilisé quand la tonalité est choisie à la main."));
     addAndMakeVisible(keyBox); addAndMakeVisible(scaleBox);
     keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, "key", keyBox);
     scaleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, "scale", scaleBox);
+    accSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "accid", v3::notes::accidentalLabels(), v3::notes::accidentalTip(), pal);
+    addAndMakeVisible(*accSeg);
     prev.onClick = [this] { step(-1); }; next.onClick = [this] { step(1); };
     prev.setTooltip(u8("Look précédent")); next.setTooltip("Look suivant");
     addAndMakeVisible(prev); addAndMakeVisible(next); addAndMakeVisible(power);
@@ -89,6 +92,7 @@ void LooksEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto& k : k3) { k->setVisible(n3); k->setup(&T, &art); }
     prev3.setVisible(n3); next3.setVisible(n3); prev3.T = next3.T = &T;
     power.T = &T; help.T = &T; themeBtn.T = &T; themeBtn.current = m;
+    accSeg->T = m != v3::Mode::Classic ? &T : nullptr; accSeg->repaint();
     lastLook = -1;
     if (persist) v3::Prefs::setTheme("looks", m);
     const float bw = n3 ? kW3 : kW, bh = n3 ? kH3 : kH, lo = n3 ? 0.75f : 0.7f, hi = n3 ? 1.5f : 2.f;
@@ -121,6 +125,7 @@ void LooksEditor::resized3() {
     k3[4]->setScale(u_); k3[5]->setScale(u_);
     k3[4]->setBounds(Si(631 - 40, 384, 80, mh)); k3[5]->setBounds(Si(709 - 40, 384, 80, mh));
     keyBox.setBounds(Si(782, 368, 84, 36)); scaleBox.setBounds(Si(872, 368, 90, 36));
+    accSeg->setBounds(Si(912, 332, 50, 28)); accSeg->px = 14.f * u_;
 }
 
 void LooksEditor::resized() {
@@ -136,9 +141,11 @@ void LooksEditor::resized() {
     pots[5]->setScale(u_); pots[5]->setBounds(Si(336, 446, 96, 90));
     prev.setBounds(Si(30, 117, 20, 26)); next.setBounds(Si(410, 117, 20, 26));
     keyBox.setBounds(Si(28, 366, 100, 30)); scaleBox.setBounds(Si(136, 366, 100, 30));
+    accSeg->setBounds(Si(244, 366, 60, 30));
 }
 
 void LooksEditor::timerCallback() {
+    if (const bool f = v3::notes::flatPref(proc.apvts); f != flat_) { flat_ = f; v3::notes::relabelKeyItems(keyBox, 2, f); repaint(); }
     const float pk = proc.host.peak.load(), gr = proc.host.reduction.load(), sh = proc.host.shift.load();
     const float db = 20.f * std::log10(juce::jmax(1e-5f, pk));
     outDb = juce::jmax(db, outDb - 1.0f);
@@ -275,7 +282,7 @@ void LooksEditor::paint3(juce::Graphics& g) {
     const bool corrects = modLevel[3] > 0.f; const bool manual = proc.apvts.getRawParameterValue("key")->load() >= 0.5f;
     if (!corrects) { txt = u8("Correction coupée"); tc = T.inkMute; }
     else if (manual) txt = u8("Tonalité choisie");
-    else if (kp >= 0) txt = u8("Détectée : ") + String(oc::ui::kNotes[kp]) + (sc == 2 ? u8(" mineur") : u8(" majeur"));
+    else if (kp >= 0) txt = u8("Détectée : ") + String(v3::notes::pcName(kp, flat_)) + (sc == 2 ? u8(" mineur") : u8(" majeur"));
     else { txt = u8("À l'écoute…"); tc = T.accentText; }
     g.setColour(tc); g.setFont(v3::font(14.f * u)); g.drawText(txt, S(782, 414, 190, 22), juce::Justification::centredLeft, true);
     g.setColour(T.inkMute); g.setFont(v3::font(12.5f * u));
@@ -314,7 +321,7 @@ void LooksEditor::paint(juce::Graphics& g) {
     const bool corrects = modLevel[3] > 0.f; const bool manual = proc.apvts.getRawParameterValue("key")->load() >= 0.5f;
     if (!corrects) { txt = u8("Correction coupée"); tc = vfd.withAlpha(0.45f); }
     else if (manual) txt = u8("Tonalité choisie");
-    else if (kp >= 0) txt = u8("Détectée : ") + String(oc::ui::kNotes[kp]) + (sc == 2 ? u8(" mineur") : u8(" majeur"));
+    else if (kp >= 0) txt = u8("Détectée : ") + String(v3::notes::pcName(kp, flat_)) + (sc == 2 ? u8(" mineur") : u8(" majeur"));
     else { txt = u8("À l'écoute…"); tc = pal.ledAmber; }
     g.setColour(tc); g.setFont(lcdFont(11.f * u)); g.drawText(txt, det.reduced(6 * u).toNearestInt(), juce::Justification::centred);
 

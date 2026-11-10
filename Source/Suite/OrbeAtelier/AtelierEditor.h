@@ -50,6 +50,9 @@ private:
     std::vector<std::pair<juce::Rectangle<float>, juce::String>> labels3;
     kit::v3::Chevron prev3{true}, next3{false};
     int lastPreset = -1;
+    std::unique_ptr<kit::v3::bridge::Seg> accSeg;   // # / b (cellule Tune)
+    juce::ComboBox* keyCombo = nullptr;
+    bool flat_ = false;
     float scale_ = 1.f;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAtt;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> togAtt;

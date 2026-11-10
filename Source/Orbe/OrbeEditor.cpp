@@ -6,9 +6,13 @@ namespace v3 = kit::v3;
 
 namespace {
 const Colour kLilac(0xFFCFC6FF), kIce(0xFFA9ECFF), kPeach(0xFFFFC4AB);
-const char* kSharpN[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-String noteName(int n) { return String(kSharpN[n % 12]) + String(n / 12 - 1); }
 }  // namespace
+
+// Dièses par défaut (et bémols d'après l'armure, comme le générateur) ; avec « bémols » choisis, toute racine noire s'écrit en bémol. Le son ne change pas.
+String OrbeEditor::chordLabel(const orbe::Chord& c) const {
+    if (!flat_ || !kit::v3::notes::isBlack(c.rootPc)) return String(c.name);
+    return String(kit::v3::notes::pcName(c.rootPc, true)) + String(c.name).substring(2);
+}
 
 // ---------------- Segmented ----------------
 void Segmented::paint(juce::Graphics& g) {
@@ -111,13 +115,16 @@ OrbeEditor::OrbeEditor(OrbeProcessor& p) : AudioProcessorEditor(&p), proc(p), pa
         if (lastGroup != s.group) { styleBox.addSectionHeading(s.group); lastGroup = s.group; }
         styleBox.addItem(s.label, id++);
     }
-    for (int i = 0; i < 12; ++i) keyBox.addItem(kSharpN[i], i + 1);
+    flat_ = v3::notes::flatPref(ap);
+    for (int i = 0; i < 12; ++i) keyBox.addItem(v3::notes::pcName(i, flat_), i + 1);
     for (auto& s : orbe::scales()) scaleBox.addItem(s.label, (int)(&s - &orbe::scales()[0]) + 1);
     for (auto* c : {&styleBox, &keyBox, &scaleBox}) { addAndMakeVisible(c); c->setJustificationType(juce::Justification::centredLeft); }
     styleAtt = std::make_unique<ComboAtt>(ap, "style", styleBox);
     keyAtt = std::make_unique<ComboAtt>(ap, "key", keyBox);
     scaleAtt = std::make_unique<ComboAtt>(ap, "scale", scaleBox);
 
+    accSeg = std::make_unique<Segmented>(*ap.getParameter("accid"), v3::notes::accidentalLabels(), pal);
+    accSeg->setTooltip(v3::notes::accidentalTip()); addAndMakeVisible(*accSeg);
     barsSeg = std::make_unique<Segmented>(*ap.getParameter("bars"), juce::StringArray{"4", "8"}, pal);
     arpSeg = std::make_unique<Segmented>(*ap.getParameter("arp"), juce::StringArray{u8("Plaq."), u8("Mont."), u8("A/R"), u8("Aléa")}, pal);
     addAndMakeVisible(*barsSeg); addAndMakeVisible(*arpSeg);
@@ -162,7 +169,7 @@ OrbeEditor::OrbeEditor(OrbeProcessor& p) : AudioProcessorEditor(&p), proc(p), pa
         const bool n3 = skin.on(); const auto* tp = skin.tp();
         for (auto* s : {&densityK, &humanK, &masterK}) s->setVisible(!n3);
         for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
-        barsSeg->T = tp; arpSeg->T = tp; handle->T = tp; repaint();
+        barsSeg->T = tp; arpSeg->T = tp; accSeg->T = tp; handle->T = tp; repaint();
     };
     auditionB.setClickingTogglesState(true);
     auditionB.setTooltip(u8("Joue la boucle ici. Dans le DAW, la lecture suit directement le transport."));
@@ -202,8 +209,9 @@ void OrbeEditor::resized() {
     skin.themeBtn.setBounds(Si(606, 24, 26, 26));
 
     styleBox.setBounds(Si(24, 102, 260, 30));
-    keyBox.setBounds(Si(24, 158, 108, 30));
-    scaleBox.setBounds(Si(144, 158, 140, 30));
+    keyBox.setBounds(Si(24, 158, 76, 30));
+    accSeg->setBounds(Si(106, 158, 50, 30));
+    scaleBox.setBounds(Si(164, 158, 120, 30));
     barsSeg->setBounds(Si(24, 214, 76, 30));
     arpSeg->setBounds(Si(112, 214, 172, 30));
     b7.setBounds(Si(24, 264, 70, 22)); bAdd9.setBounds(Si(100, 264, 84, 22)); bBorrow.setBounds(Si(180, 264, 104, 22));
@@ -227,6 +235,7 @@ void OrbeEditor::resized() {
 
 void OrbeEditor::timerCallback() {
     static int tick = 0;
+    if (const bool f = v3::notes::flatPref(proc.apvts); f != flat_) { flat_ = f; v3::notes::relabelKeyItems(keyBox, 1, f); repaint(); }
     if (skin.on()) for (auto* k : k3) k->tickMod(1.f / 30.f);
     if (proc.playStep.load() >= 0.f || (++tick % 6) == 0) repaint(S(300, 84, 690, 410).toNearestInt());
 }
@@ -284,7 +293,7 @@ void OrbeEditor::chordMenu(int bar, int slot) {
     int cur = -1;
     { int k = 0; for (auto& c : sl) if (c.bar == bar) { if (k++ == slot) cur = c.deg; } }
     juce::PopupMenu m;
-    auto label = [&](int d) { auto c = proc.chordFor(d); return String(c.name) + "   " + String(c.roman); };
+    auto label = [&](int d) { auto c = proc.chordFor(d); return chordLabel(c) + "   " + String(c.roman); };
     m.addSectionHeader(u8("Alternatives suggérées"));
     for (int d : proc.suggest(bar)) if (d != cur) m.addItem(100 + d, label(d));
     m.addSectionHeader("Gamme");
@@ -404,7 +413,7 @@ void OrbeEditor::paint(juce::Graphics& g) {
     // panneau gauche : libellés gravés
     engraved(g, pal, "Style", S(24, 84, 200, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Tonique", S(24, 140, 108, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
-    engraved(g, pal, "Gamme", S(144, 140, 140, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
+    engraved(g, pal, "Gamme", S(164, 140, 120, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Mesures", S(24, 196, 76, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Jeu des accords", S(112, 196, 172, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
     engraved(g, pal, "Harmonie", S(24, 246, 140, 14), juce::Justification::centredLeft, 10.f * u, 2.f * u);
@@ -455,7 +464,7 @@ void OrbeEditor::paintHeader(juce::Graphics& g, float u) {
     const int bpm = hb > 0.f ? juce::roundToInt(hb) : st.bpm;
     screenWell(g, pal, S(640, 18, 336, 36));
     g.setColour(kIce); g.setFont(mono(13.f * u));
-    String line = String(st.label).toUpperCase() + "   " + String(bpm) + " BPM   " + kSharpN[key] + " " + String(orbe::scales()[(size_t)sc].label).toUpperCase();
+    String line = String(st.label).toUpperCase() + "   " + String(bpm) + " BPM   " + v3::notes::pcName(key, flat_) + " " + String(orbe::scales()[(size_t)sc].label).toUpperCase();
     g.drawText(line, S(652, 18, 320, 36).toNearestInt(), juce::Justification::centredLeft);
 }
 
@@ -481,9 +490,9 @@ void OrbeEditor::paintCards(juce::Graphics& g, float u) {
             if (ch.borrowed && !half) { g.setColour(kPeach); g.drawText("emprunt", Rectangle<float>(rr.getX() + 8 * u, rr.getY() + 6 * u, rr.getWidth() - 16 * u, 14 * u), juce::Justification::centredRight); }
             g.setColour(pal.screenInk);
             g.setFont(fnt(juce::jmin(24.f * u, rr.getWidth() * 0.30f), true));
-            g.drawFittedText(ch.name, Rectangle<float>(rr.getX() + 2 * u, rr.getY() + 22 * u, rr.getWidth() - 4 * u, 30 * u).toNearestInt(), juce::Justification::centred, 1, 0.5f);
+            g.drawFittedText(chordLabel(ch), Rectangle<float>(rr.getX() + 2 * u, rr.getY() + 22 * u, rr.getWidth() - 4 * u, 30 * u).toNearestInt(), juce::Justification::centred, 1, 0.5f);
             String ns;
-            for (size_t k = 0; k < ch.voicing.size(); ++k) ns << (k ? " " : "") << noteName(ch.voicing[k]);
+            for (size_t k = 0; k < ch.voicing.size(); ++k) ns << (k ? " " : "") << v3::notes::name(ch.voicing[k], flat_);
             g.setColour(pal.mute); g.setFont(mono(juce::jmin(10.f * u, rr.getWidth() * (half ? 0.17f : 0.085f))));
             g.drawFittedText(ns, Rectangle<float>(rr.getX() + 3 * u, rr.getY() + 54 * u, rr.getWidth() - 6 * u, 24 * u).toNearestInt(), juce::Justification::centred, 2);
         };
@@ -561,7 +570,7 @@ void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
             if (n % 12 == 0) {
                 g.setColour(juce::Colours::white.withAlpha(0.10f)); g.fillRect(area.getX(), y + G.rowH - 1.f, area.getWidth(), 1.f);
                 g.setColour(muteC.withAlpha(0.8f)); g.setFont(fm(8.5f * u));
-                g.drawText(noteName(n), Rectangle<float>(area.getX() + 2 * u, y - 3 * u, 30 * u, G.rowH + 6 * u), juce::Justification::centredLeft);
+                g.drawText(v3::notes::name(n, flat_), Rectangle<float>(area.getX() + 2 * u, y - 3 * u, 30 * u, G.rowH + 6 * u), juce::Justification::centredLeft);
             }
         } else {
             g.setColour(juce::Colours::white.withAlpha(r % 2 ? 0.0f : 0.03f)); g.fillRect(area.getX(), y, area.getWidth(), G.rowH);
@@ -630,8 +639,9 @@ void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
 void OrbeEditor::resized3() {
     skin.themeBtn.setBounds(Si(944, 24, 28, 28));
     styleBox.setBounds(Si(28, 102, 252, 32));
-    keyBox.setBounds(Si(28, 158, 106, 32));
-    scaleBox.setBounds(Si(144, 158, 136, 32));
+    keyBox.setBounds(Si(28, 158, 76, 32));
+    accSeg->setBounds(Si(110, 158, 50, 32));
+    scaleBox.setBounds(Si(166, 158, 114, 32));
     barsSeg->setBounds(Si(28, 214, 76, 32));
     arpSeg->setBounds(Si(112, 214, 168, 32));
     b7.setBounds(Si(28, 264, 70, 24)); bAdd9.setBounds(Si(100, 264, 84, 24)); bBorrow.setBounds(Si(180, 264, 104, 24));
@@ -661,7 +671,7 @@ void OrbeEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
     v3::hero(g, T, R(590, 14, 340, 44), 14.f * u);
     v3::label(g, T, "Style", R(28, 84, 200, 14), 11.f * u);
     v3::label(g, T, "Tonique", R(28, 140, 108, 14), 11.f * u);
-    v3::label(g, T, "Gamme", R(146, 140, 140, 14), 11.f * u);
+    v3::label(g, T, "Gamme", R(168, 140, 118, 14), 11.f * u);
     v3::label(g, T, "Mesures", R(28, 196, 76, 14), 11.f * u);
     v3::label(g, T, "Jeu des accords", R(114, 196, 172, 14), 11.f * u);
     v3::label(g, T, "Harmonie", R(28, 246, 140, 14), 11.f * u);
@@ -700,7 +710,7 @@ void OrbeEditor::paintHeader3(juce::Graphics& g, float u) {
     g.setColour(T.scrInk); g.setFont(v3::font(14.f * u, true));
     g.drawText(String(st.label), S(606, 14, 150, 44), juce::Justification::centredLeft, true);
     v3::tabular(g, v3::fmt::withUnit(String(bpm), "BPM"), S(748, 14, 80, 44), v3::font(14.f * u, true), juce::Justification::centredRight);
-    g.setColour(T.out); g.drawText(String(kSharpN[key]) + " " + String(orbe::scales()[(size_t)sc].label), S(836, 14, 90, 44), juce::Justification::centredRight, true);
+    g.setColour(T.out); g.drawText(String(v3::notes::pcName(key, flat_)) + " " + String(orbe::scales()[(size_t)sc].label), S(836, 14, 90, 44), juce::Justification::centredRight, true);
 }
 
 void OrbeEditor::paintCards3(juce::Graphics& g, float u) {
@@ -723,8 +733,8 @@ void OrbeEditor::paintCards3(juce::Graphics& g, float u) {
             g.drawText(ch.roman, Rectangle<float>(rr.getX() + 10 * u, rr.getY() + 7 * u, rr.getWidth() - 20 * u, 15 * u), juce::Justification::centredLeft, false);
             if (ch.borrowed && !half) { g.setColour(T.inkMute); v3::caps(g, "emprunt", Rectangle<float>(rr.getX() + 8 * u, rr.getY() + 7 * u, rr.getWidth() - 16 * u, 15 * u), 9.f * u, juce::Justification::centredRight); }
             g.setColour(T.ink); g.setFont(v3::font(juce::jmin(26.f * u, rr.getWidth() * 0.32f), true));
-            g.drawFittedText(ch.name, Rectangle<float>(rr.getX() + 2 * u, rr.getY() + 22 * u, rr.getWidth() - 4 * u, 32 * u).toNearestInt(), juce::Justification::centred, 1, 0.5f);
-            String ns; for (size_t k = 0; k < ch.voicing.size(); ++k) ns << (k ? " " : "") << noteName(ch.voicing[k]);
+            g.drawFittedText(chordLabel(ch), Rectangle<float>(rr.getX() + 2 * u, rr.getY() + 22 * u, rr.getWidth() - 4 * u, 32 * u).toNearestInt(), juce::Justification::centred, 1, 0.5f);
+            String ns; for (size_t k = 0; k < ch.voicing.size(); ++k) ns << (k ? " " : "") << v3::notes::name(ch.voicing[k], flat_);
             g.setColour(T.inkMute); g.setFont(v3::font(juce::jmin(11.5f * u, rr.getWidth() * (half ? 0.17f : 0.09f))));
             g.drawFittedText(ns, Rectangle<float>(rr.getX() + 4 * u, rr.getY() + 55 * u, rr.getWidth() - 8 * u, 22 * u).toNearestInt(), juce::Justification::centred, 2);
         };

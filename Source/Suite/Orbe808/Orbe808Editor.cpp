@@ -116,13 +116,15 @@ Orbe808Editor::Orbe808Editor(Orbe808Processor& p)
         if (i == 5) k->setFormatter([](double v) { const double f = 120.0 * std::pow(100.0, v); return v > 0.98 ? String(u8("ouvert")) : v3::fmt::hz(f); });
         addChildComponent(k);
     }
+    accSeg = std::make_unique<kit::v3::UiSeg>(acc, kit::v3::notes::accidentalLabels(), kit::v3::notes::accidentalTip(), pal);
+    addAndMakeVisible(*accSeg); acc.onChange = [this] { repaint(); };
     addAndMakeVisible(skin.themeBtn);
     skin.onMode = [this] {
         const bool n3 = skin.on();
         for (auto& s : knobs) s.setVisible(!n3);
         for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
         for (auto* s : {presetSeg.get(), satSeg.get(), bendSeg.get()}) { s->T = skin.tp(); s->px = 11.f; s->repaint(); }
-        help.T = skin.tp(); keysUi.T = skin.tp();
+        help.T = skin.tp(); keysUi.T = skin.tp(); accSeg->T = skin.tp(); accSeg->px = 12.f;
     };
     setResizable(true, true);
     setResizeLimits(800, 506, 1700, 1074);
@@ -144,6 +146,7 @@ void Orbe808Editor::resized() {
     const float pitch = 952.f / (float)kKnobs;
     for (int i = 0; i < kKnobs; ++i) knobs[i].setBounds(Si(24.f + pitch * ((float)i + 0.5f) - 48.f, 364, 96, 96));
     presetSeg->setBounds(Si(700, 108, 276, 120));
+    accSeg->setBounds(Si(926, 78, 50, 22));
     satSeg->setBounds(Si(700, 254, 276, 28));
     bendSeg->setBounds(Si(700, 310, 276, 28));
     keysUi.setBounds(Si(24, 520, 952, 88));
@@ -198,7 +201,7 @@ void Orbe808Editor::paintHeader(juce::Graphics& g, float u) {
     led(g, 578 * u, 25 * u, 3.6f * u, on ? 1.f : 0.f, pal.ledRed, LedBezel::None);
     g.setColour(kPeach); g.setFont(mono(13.f * u));
     const int idx = (int)proc.apvts.getRawParameterValue("preset")->load();
-    g.drawText(suiteui::noteName(n) + "  " + suiteui::fr1(hz) + " Hz", S(592, 8, 170, 34).toNearestInt(), juce::Justification::centredLeft);
+    g.drawText(kit::v3::notes::name(n, acc.flat()) + "  " + suiteui::fr1(hz) + " Hz", S(592, 8, 170, 34).toNearestInt(), juce::Justification::centredLeft);
     g.setColour(displayColours(Display::Amber, pal).ink.withAlpha(0.85f));
     g.drawText(upper(Orbe808Processor::presetLabel(idx)), S(760, 8, 152, 34).toNearestInt(), juce::Justification::centredRight);
 }
@@ -234,7 +237,7 @@ void Orbe808Editor::paintScope(juce::Graphics& g, float u) {
     // textes
     g.setFont(mono(10.f * u)); g.setColour(pal.mute);
     g.drawText(upper(u8("Forme d'onde de la note")), S(38, 100, 280, 16).toNearestInt(), juce::Justification::centredLeft);
-    g.setColour(kPeach); g.drawText(suiteui::noteName(shotNote), S(400, 100, 60, 16).toNearestInt(), juce::Justification::centredRight);
+    g.setColour(kPeach); g.drawText(kit::v3::notes::name(shotNote, acc.flat()), S(400, 100, 60, 16).toNearestInt(), juce::Justification::centredRight);
     g.setColour(pal.mute); g.drawText("SORTIE", S(480, 100, 60, 16).toNearestInt(), juce::Justification::centredRight);
     const float db = 20.f * std::log10(juce::jmax(1e-4f, meterShown));
     suiteui::ledBar(g, S(548, 104, 114, 8), juce::jlimit(0.f, 1.f, (db + 42.f) / 42.f), 14, kPeach);
@@ -295,6 +298,7 @@ void Orbe808Editor::resized3() {
     const float pitch = 952.f / (float)kKnobs;
     for (int i = 0; i < kKnobs; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(24.f + pitch * ((float)i + 0.5f) - 52.f, 364, 104, 112)); }
     presetSeg->setBounds(Si(706, 118, 264, 104));
+    accSeg->setBounds(Si(916, 98, 54, 22));
     satSeg->setBounds(Si(706, 250, 264, 30));
     bendSeg->setBounds(Si(706, 304, 264, 30));
     keysUi.setBounds(Si(24, 524, 952, 88));
@@ -344,7 +348,7 @@ void Orbe808Editor::paintScope3(juce::Graphics& g) {
     const int n = proc.sounding.load() >= 0 ? proc.sounding.load() : proc.lastNote.load();
     const float hz = 440.f * std::pow(2.f, ((float)n - 69.f) / 12.f);
     const auto big = v3::font(34.f * u, true);
-    g.setColour(T.scrInk); g.setFont(big); g.drawText(suiteui::noteName(n), Rectangle<float>(box.getX() + 20 * u, box.getY() + 12 * u, 90 * u, 40 * u), Justification::centredLeft, false);
+    g.setColour(T.scrInk); g.setFont(big); g.drawText(kit::v3::notes::name(n, acc.flat()), Rectangle<float>(box.getX() + 20 * u, box.getY() + 12 * u, 90 * u, 40 * u), Justification::centredLeft, false);
     g.setColour(T.scrMute); v3::tabular(g, v3::fmt::hz(hz), Rectangle<float>(box.getX() + 100 * u, box.getY() + 22 * u, 110 * u, 22 * u), v3::font(15.f * u), Justification::centredLeft);
     const int idx = (int)proc.apvts.getRawParameterValue("preset")->load();
     g.setColour(T.out); v3::caps(g, Orbe808Processor::presetLabel(idx), Rectangle<float>(box.getX() + 230 * u, box.getY() + 22 * u, 190 * u, 22 * u), 12.f * u, Justification::centredLeft);

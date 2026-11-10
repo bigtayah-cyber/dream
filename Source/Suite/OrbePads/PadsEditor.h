@@ -1,6 +1,7 @@
 #pragma once
 #include "PadsProcessor.h"
 #include "../../Kit/v3/InstrumentSkin.h"
+#include "../../Kit/v3/NoteNames.h"
 
 class PadsEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer {
 public:
@@ -21,6 +22,8 @@ public:
 
 private:
     class PadButton;
+    kit::v3::UiAccidental acc{"orbepads"};   // dièses / bémols : réglage d'interface (Prefs)
+    std::unique_ptr<kit::v3::UiSeg> accSeg;
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
     void timerCallback() override;

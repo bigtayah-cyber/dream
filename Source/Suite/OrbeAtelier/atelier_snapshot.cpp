@@ -5,6 +5,7 @@ int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
     AtelierProcessor proc;
     proc.prepareToPlay(48000, 512);
+    if (std::getenv("FLATS") != nullptr) { proc.apvts.getParameter("accid")->setValueNotifyingHost(1.f); proc.apvts.getParameter("key")->setValueNotifyingHost(4.f / 12.f); }   // bémols, tonique Eb
     if (argc > 2) proc.applyPreset(juce::String(argv[2]).getIntValue());
     juce::AudioBuffer<float> b(2, 512); juce::MidiBuffer m;
     for (int blk = 0; blk < 120; ++blk) { for (int i = 0; i < 512; ++i) { const float v = 0.18f * std::sin(0.06f * (float)(blk * 512 + i)) * (1.f + 2.f * std::sin(0.0004f * (float)(blk * 512 + i))); b.setSample(0, i, v); b.setSample(1, i, v); } proc.processBlock(b, m); }

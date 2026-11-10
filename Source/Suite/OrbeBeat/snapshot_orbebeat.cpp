@@ -7,6 +7,7 @@ int main(int argc, char** argv) {
     OrbeBeatProcessor proc;
     proc.prepareToPlay(48000, 512);
     auto setP = [&](const char* id, float v) { if (auto* p = proc.apvts.getParameter(id)) p->setValueNotifyingHost(p->convertTo0to1(v)); };
+    if (std::getenv("FLATS") != nullptr) { setP("accid", 1.f); setP("key", 3.f); }   // bémols, tonique Eb
     if (argc > 3) { setP("kit", (float)juce::String(argv[3]).getIntValue()); }
     if (argc > 4) setP("steps", 1.f);
     if (argc > 3) { proc.generateCurrent(); }

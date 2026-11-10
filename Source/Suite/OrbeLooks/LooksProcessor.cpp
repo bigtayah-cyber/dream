@@ -21,6 +21,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout LooksProcessor::makeLayout()
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"key", 1}, u8("Tonalité"), keys, 0));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"scale", 1}, "Mode", StringArray{u8("Majeur"), u8("Mineur")}, 0));
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"bypass", 1}, "Bypass", false));
+    l.add(kit::v3::notes::makeAccidParam());   // ajouté en dernier : écriture dièses / bémols (noms seulement)
     return l;
 }
 

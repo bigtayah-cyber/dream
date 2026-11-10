@@ -4,6 +4,7 @@
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
     kit::v3::snapshotTheme("orbe808");
+    kit::v3::Prefs::setFlats("orbe808", std::getenv("FLATS") != nullptr);   // bémols (réglage d'interface)
     Orbe808Processor proc;
     proc.prepareToPlay(48000, 512);
     if (argc > 3) {  // joue une note pour voir les voyants

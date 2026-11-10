@@ -38,6 +38,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout VoileProcessor::makeLayout()
           juce::StringArray{"Chromatique", "Majeur", "Mineur"}, 1));
     // ajouté en dernier : les identifiants existants ne changent pas
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"bypass", 1}, "Bypass", juce::StringArray{"Off", "On"}, 0));
+    l.add(kit::v3::notes::makeAccidParam());   // écriture des notes (dièses / bémols), nom seulement : jamais le son
     return l;
 }
 

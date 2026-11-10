@@ -61,7 +61,7 @@ jobs:
                    "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" \
                    "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix" "Orbe Galet" "Orbe Accroc"; do
             for EXT in vst3 component; do
-              F=$(ls -d dist/"$N.$EXT" dist-studio/"$N.$EXT" dist-instruments/"$N.$EXT" 2>/dev/null | head -1)
+              F=$(ls -d dist/"$N.$EXT" dist-studio/"$N.$EXT" dist-instruments/"$N.$EXT" 2>/dev/null | head -1 || true)
               if [ -z "$F" ] || [ ! -f "$F/Contents/MacOS/$N" ]; then
                 echo "::error::Plugin manquant : $N.$EXT"; MISSING=$((MISSING+1))
               fi

@@ -43,6 +43,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrbeBeatProcessor::makeLayou
         l.add(std::make_unique<AudioParameterBool>(ParameterID{"mute" + String(i), 1}, n + " muet", false));
         l.add(std::make_unique<AudioParameterBool>(ParameterID{"solo" + String(i), 1}, n + " solo", false));
     }
+    l.add(kit::v3::notes::makeAccidParam());   // ajouté en dernier : écriture dièses / bémols (noms seulement)
     return l;
 }
 

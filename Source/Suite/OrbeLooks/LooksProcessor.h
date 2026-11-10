@@ -1,5 +1,6 @@
 #pragma once
 #include "../OrbeChain/ChainUi.h"
+#include "../../Kit/v3/NoteNames.h"
 
 class LooksProcessor : public juce::AudioProcessor {
 public:

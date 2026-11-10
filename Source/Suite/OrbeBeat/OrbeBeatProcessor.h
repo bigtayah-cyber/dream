@@ -3,6 +3,7 @@
 #include <atomic>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "OrbeBeatEngine.h"
+#include "../../Kit/v3/NoteNames.h"
 
 class OrbeBeatProcessor : public juce::AudioProcessor {
 public:

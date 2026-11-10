@@ -5,6 +5,7 @@
 #include <set>
 #include "OrbeCore.h"
 #include "OrbeSynth.h"
+#include "../Kit/v3/NoteNames.h"
 
 // Instantané lisible par le thread audio (créé sur le thread message, jamais modifié ensuite).
 struct OrbeEv { float t, d; uint8_t n, track; float v; uint8_t gl; };

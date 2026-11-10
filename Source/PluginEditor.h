@@ -44,6 +44,8 @@ private:
     kit::VuBallistics vu;
     float u_ = 1.f, shiftSm = 0.f, lvlSm = 0.f, scale_ = 1.f, viewC = 64.f;
     int lastProg = -1;
+    bool lastFlat = false;   // écriture dièses / bémols (paramètre « accid »)
+    std::unique_ptr<kit::v3::bridge::Seg> accSeg;
 
     // --- Classique
     juce::Slider knob[4], mixS, outS;

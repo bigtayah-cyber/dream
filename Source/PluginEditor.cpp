@@ -31,13 +31,15 @@ VoileEditor::VoileEditor(VoileProcessor& p) : AudioProcessorEditor(&p), proc(p),
     mixAtt = std::make_unique<SliderAtt>(ap, "mix", mixS);
     outAtt = std::make_unique<SliderAtt>(ap, "out", outS);
 
-    const char* keys[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-    for (int i = 0; i < 12; ++i) keyBox.addItem(keys[i], i + 1);
+    lastFlat = v3::notes::flatPref(ap);
+    for (int i = 0; i < 12; ++i) keyBox.addItem(v3::notes::pcName(i, lastFlat), i + 1);
     scaleBox.addItem("Chromatique", 1); scaleBox.addItem("Majeur", 2); scaleBox.addItem("Mineur", 3);
     keyBox.setTooltip(u8("Tonalité de la correction")); scaleBox.setTooltip(u8("Gamme de la correction"));
     addAndMakeVisible(keyBox); addAndMakeVisible(scaleBox);
     keyAtt = std::make_unique<ComboAtt>(ap, "key", keyBox);
     scaleAtt = std::make_unique<ComboAtt>(ap, "scale", scaleBox);
+    accSeg = std::make_unique<v3::bridge::Seg>(ap, "accid", v3::notes::accidentalLabels(), v3::notes::accidentalTip(), pal);
+    addAndMakeVisible(*accSeg);
 
     for (int i = 0; i < proc.getNumPrograms(); ++i) presetBox.addItem(proc.getProgramName(i), i + 1);
     presetBox.setSelectedItemIndex(proc.getCurrentProgram(), juce::dontSendNotification);
@@ -110,6 +112,7 @@ void VoileEditor::setThemeMode(v3::Mode m, bool persist) {
     inSw->setVisible(n3); inSw->setup(&T);
     prev3.setVisible(n3); next3.setVisible(n3); prev3.T = next3.T = &T;
     help.T = &T; themeBtn.T = &T; themeBtn.current = m;
+    accSeg->T = n3 ? &T : nullptr; accSeg->repaint();
     presetBox.getProperties().set("v3bare", n3);
     for (auto* cb : {&presetBox, &keyBox, &scaleBox}) cb->setJustificationType(n3 && cb == &presetBox ? juce::Justification::centred : juce::Justification::centredLeft);
     if (persist) v3::Prefs::setTheme("voile", m);
@@ -152,6 +155,7 @@ void VoileEditor::resizedClassic() {
     prevB.setBounds(Si(292, 14, 18, 22)); nextB.setBounds(Si(546, 14, 18, 22));
     mixS.setBounds(Si(608 - 36, 112 - 36, 72, 72)); outS.setBounds(Si(696 - 36, 112 - 36, 72, 72));
     keyBox.setBounds(Si(564, 290, 64, 28)); scaleBox.setBounds(Si(634, 290, 104, 28));
+    accSeg->setBounds(Si(688, 262, 50, 22));
 }
 
 void VoileEditor::paintClassic(juce::Graphics& g) {
@@ -203,7 +207,8 @@ void VoileEditor::resized3() {
     const float mh = v3::Knob3::boxHeight(v3::KnobSize::M, false);
     mix3->setScale(u_); out3->setScale(u_);
     mix3->setBounds(Si(631 - 40, 378, 80, mh)); out3->setBounds(Si(709 - 40, 378, 80, mh));
-    keyBox.setBounds(Si(782, 362, 68, 36)); scaleBox.setBounds(Si(858, 362, 104, 36));
+    keyBox.setBounds(Si(782, 362, 80, 36)); scaleBox.setBounds(Si(868, 362, 94, 36));
+    accSeg->setBounds(Si(912, 332, 50, 28)); accSeg->px = 14.f * u_;
 }
 
 void VoileEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
@@ -258,7 +263,7 @@ void VoileEditor::paintHero(juce::Graphics& g) {
         g.setColour(juce::Colours::white.withAlpha(cur ? 0.16f : 0.07f));
         for (float x = plot.getX(); x < plot.getRight(); x += 6.f * u) g.fillRect(x, y - 0.5f, 2.f * u, 1.f);
         g.setColour(cur ? T.out : T.scrMute);
-        g.drawText(kit::w::noteName(n), Rectangle<float>(S(34, 0, 30, 0).getX(), y - 8.f * u, 30.f * u, 16.f * u), juce::Justification::centredRight, false);
+        g.drawText(v3::notes::name(n, lastFlat), Rectangle<float>(S(34, 0, 30, 0).getX(), y - 8.f * u, 30.f * u, 16.f * u), juce::Justification::centredRight, false);
     }
     juce::Graphics::ScopedSaveState st(g);
     g.reduceClipRegion(clip.toNearestInt());
@@ -298,11 +303,11 @@ void VoileEditor::paint3(juce::Graphics& g) {
     const float nw = v3::tabularWidth(num, big);
     g.setColour(T.scrMute); g.setFont(v3::font(17.f * u)); g.drawText("dt", Rectangle<float>(S(672, 0, 0, 0).getX() + nw + 3.f * u, 152.f * u, 30.f * u, 22.f * u), juce::Justification::centredLeft, false);
     g.setColour(T.out); g.setFont(v3::font(48.f * u, true));
-    g.drawText(lastNote >= 0 && valid > 0 ? kit::w::noteName(lastNote) : String(v3::fmt::minus()), S(860, 112, 98, 64), juce::Justification::centredRight, false);
+    g.drawText(lastNote >= 0 && valid > 0 ? v3::notes::name(lastNote, lastFlat) : String(v3::fmt::minus()), S(860, 112, 98, 64), juce::Justification::centredRight, false);
     v3::gauge(g, T, S(712, 196, 200, 100), shiftSm, -1.f, 1.f, v3::fmt::minus() + "1", "0", "+1", 11.5f * u);
     // voix détectée (lecture honnête : rien d'inventé quand la voix n'est pas lisible)
     g.setColour(T.inkMute); g.setFont(v3::font(13.5f * u));
-    const String voix = valid > 0 && lastSung > 0.f ? u8("Voix : ") + kit::w::noteName((int)std::lround(lastSung)) + " " + v3::fmt::cents((lastSung - std::round(lastSung)) * 100.0)
+    const String voix = valid > 0 && lastSung > 0.f ? u8("Voix : ") + v3::notes::name((int)std::lround(lastSung), lastFlat) + " " + v3::fmt::cents((lastSung - std::round(lastSung)) * 100.0)
                                                     : u8("Voix : en attente");
     g.drawText(voix, S(782, 402, 190, 22), juce::Justification::centredLeft, true);
     v3::vu(g, T, S(782, 436, 180, 120), (float)vu.vu(), lvlSm > 0.89f, 11.f * u);
@@ -313,6 +318,7 @@ void VoileEditor::paint3(juce::Graphics& g) {
 void VoileEditor::paint(juce::Graphics& g) { if (isV3()) paint3(g); else paintClassic(g); }
 
 void VoileEditor::timerCallback() {
+    if (const bool f = v3::notes::flatPref(proc.apvts); f != lastFlat) { lastFlat = f; v3::notes::relabelKeyItems(keyBox, 1, f); repaint(); }
     shiftSm += (proc.shift.load() - shiftSm) * 0.3f;
     lvlSm += (proc.level.load() - lvlSm) * 0.25f;
     vu.step(proc.level.load(), 1.0 / 30.0);

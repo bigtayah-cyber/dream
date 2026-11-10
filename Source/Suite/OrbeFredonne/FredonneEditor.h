@@ -52,6 +52,8 @@ private:
     int state = 0; double recSec = 0; float level = 0.f, cents = 0.f; int liveNote = -1; double liveHz = 0, lastLive = 0;
     juce::Slider sensK, minK, bpmK;
     juce::ComboBox keyBox, modeBox;
+    std::unique_ptr<kit::v3::bridge::Seg> accSeg;   // # / b
+    bool flat_ = false;
     std::unique_ptr<kit::v3::GridSeg> gridSeg, octSeg;
     juce::ToggleButton snapT, tuneT, followT, playT, monT;
     kit::v3::bridge::PushKey recB, clearB;

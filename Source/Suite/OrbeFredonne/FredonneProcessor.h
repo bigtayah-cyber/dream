@@ -1,5 +1,6 @@
 // Orbe Fredonne : instrument à entrée audio, sortie MIDI. Enregistre une voix (jusqu'à 120 s), la découpe en notes (YIN) et les envoie à l'hôte.
 #pragma once
+#include "../../Kit/v3/NoteNames.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <atomic>
 #include <memory>

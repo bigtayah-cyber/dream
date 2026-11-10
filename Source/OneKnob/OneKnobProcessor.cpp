@@ -35,6 +35,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout OneKnobProcessor::makeLayout
                                                        juce::StringArray{"Non", "Oui"}, voicing().optDefault > 0.5f ? 1 : 0));
     l.add(std::make_unique<juce::AudioParameterChoice>(ParameterID{"engine", 1}, "Moteur", juce::StringArray{"Actuel", "Classique"}, 0,
                                                        juce::AudioParameterChoiceAttributes().withAutomatable(false)));
+    // écriture des notes (dièses / bémols), seulement sur les modèles qui ont une tonalité ; nom seulement, jamais le son
+    if (voicing().pitch) l.add(kit::v3::notes::makeAccidParam());
     return l;
 }
 

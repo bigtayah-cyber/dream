@@ -85,6 +85,8 @@ private:
     juce::Slider knobS, trimS, toneS, mixS, outS, specS;
     FaceButton inSw, advBtn, autoInB, autoGainB, optB, engineB;
     juce::ComboBox keyBox, scaleBox;
+    std::unique_ptr<kit::v3::bridge::Seg> accSeg;   // # / b (modèles à tonalité)
+    bool lastFlat = false;
     std::unique_ptr<ComboAtt> keyAtt, scaleAtt;
     std::unique_ptr<SliderAtt> knobAtt, trimAtt, toneAtt, mixAtt, outAtt, specAtt;
     std::unique_ptr<ButtonAtt> inAtt, autoInAtt, autoGainAtt, optAtt, engineAtt;

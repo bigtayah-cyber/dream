@@ -4,6 +4,7 @@
 #include "../OrbeDetect/DetectProcessor.h"
 #include "../OrbeMix/MixProcessor.h"
 #include "../OrbeFredonne/FredonneProcessor.h"
+#include "../../Kit/v3/Theme.h"
 
 static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
 
@@ -26,6 +27,8 @@ int main(int argc, char** argv) {
     juce::AudioBuffer<float> wav((int)juce::jmin<int64_t>(2, rd->numChannels), (int)rd->lengthInSamples);
     rd->read(&wav, 0, wav.getNumSamples(), 0, true, true);
     const double sr = rd->sampleRate;
+    const bool flats = std::getenv("FLATS") != nullptr;   // bémols (Detect : réglage d'interface ; Fredonne : paramètre)
+    kit::v3::Prefs::setFlats("detect", flats);
     const int w = argc > 4 ? juce::String(argv[4]).getIntValue() : 1000;
     std::unique_ptr<juce::AudioProcessor> proc;
     if (which == "detect") {
@@ -36,7 +39,7 @@ int main(int argc, char** argv) {
         auto p = std::make_unique<MixProcessor>(); p->prepareToPlay(sr, 512); feed(*p, wav); feed(*p, wav);   // deux passes : plus de 3 s de matière
         proc = std::move(p);
     } else {
-        auto p = std::make_unique<FredonneProcessor>(); p->prepareToPlay(sr, 512); p->pressRecord(); feed(*p, wav); p->pressRecord();
+        auto p = std::make_unique<FredonneProcessor>(); if (flats) p->apvts.getParameter("accid")->setValueNotifyingHost(1.f); p->prepareToPlay(sr, 512); p->pressRecord(); feed(*p, wav); p->pressRecord();
         for (int i = 0; i < 1200 && !(p->state() == FredonneProcessor::Idle && !p->take()->seg.notes.empty()); ++i) pump(50);
         printf("notes: %d\n", (int)p->take()->seg.notes.size());
         proc = std::move(p);

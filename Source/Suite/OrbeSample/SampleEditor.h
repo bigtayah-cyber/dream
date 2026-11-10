@@ -1,6 +1,7 @@
 #pragma once
 #include "SampleProcessor.h"
 #include "../../Kit/v3/InstrumentSkin.h"
+#include "../../Kit/v3/NoteNames.h"
 
 class SampleEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer {
 public:
@@ -15,6 +16,8 @@ public:
 
 private:
     class Chip;
+    kit::v3::UiAccidental acc{"orbesample"};   // dièses / bémols : réglage d'interface (Prefs)
+    std::unique_ptr<kit::v3::UiSeg> accSeg;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
     void timerCallback() override;
     void loadFile(const juce::File&);

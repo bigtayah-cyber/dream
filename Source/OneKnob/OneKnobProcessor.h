@@ -3,6 +3,7 @@
 #include <atomic>
 #include "OneKnob.h"
 #include "../Kit/BypassFade.h"
+#include "../Kit/v3/NoteNames.h"
 #include "../Kit/VuBallistics.h"
 
 #ifndef ONEK_INDEX

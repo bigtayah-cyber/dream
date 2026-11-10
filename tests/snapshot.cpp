@@ -6,7 +6,8 @@ int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
     kit::v3::snapshotTheme("orbe");
     OrbeProcessor proc;
-    if (argc > 3) proc.generate(OrbeProcessor::Gen::All);
+    if (std::getenv("FLATS") != nullptr) { proc.apvts.getParameter("accid")->setValueNotifyingHost(1.f); proc.apvts.getParameter("key")->setValueNotifyingHost(1.f / 11.f); }   // bémols, tonique C# (noms noirs)
+    if (argc > 3 || std::getenv("FLATS") != nullptr) proc.generate(OrbeProcessor::Gen::All);
     proc.prepareToPlay(48000, 512);
     std::unique_ptr<juce::AudioProcessorEditor> ed(proc.createEditor());
     const int w = argc > 2 ? juce::String(argv[2]).getIntValue() : 1000;
