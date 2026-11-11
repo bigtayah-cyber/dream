@@ -4,6 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "OrbeBeatEngine.h"
 #include "../../Kit/v3/NoteNames.h"
+#include "../../Kit/AuxOuts.h"
 
 class OrbeBeatProcessor : public juce::AudioProcessor {
 public:
@@ -64,6 +65,7 @@ private:
     std::array<Ev, 1024> evs;
     int nev = 0;
     std::vector<float> mono;
+    std::vector<float> stemBuf[obeat::kLanes];   // une piste seule, rendue seulement si une sortie auxiliaire est active
     obeat::Engine engine;
     double sr = 48000.0, internalPpq = 0.0, lastEnd = 0.0;
     bool lastValid = false, wasAudition = false;

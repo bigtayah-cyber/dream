@@ -53,7 +53,7 @@ target_link_libraries(Voile
 # Test hors-ligne du moteur (sans JUCE) : cmake --build . --target voile_offline_test
 add_executable(voile_offline_test EXCLUDE_FROM_ALL tests/offline.cpp)
 
-# ---------------- Orbe (générateur musical) ----------------
+# ---------------- Orbe (générateur d'accords, de lead et de basse ; MIDI) ----------------
 juce_add_plugin(Orbe
     COMPANY_NAME "dreamaws"
     BUNDLE_ID com.dreamaws.orbe
@@ -71,23 +71,8 @@ target_sources(Orbe PRIVATE Source/Orbe/OrbeProcessor.cpp Source/Orbe/OrbeEditor
 target_compile_definitions(Orbe PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
 target_link_libraries(Orbe PRIVATE juce::juce_audio_utils PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
 
-# Orbe FX : même plugin, déclaré comme effet (audio en entrée) pour se charger dans le mixeur
-juce_add_plugin(OrbeFX
-    COMPANY_NAME "dreamaws"
-    BUNDLE_ID com.dreamaws.orbefx
-    PLUGIN_MANUFACTURER_CODE Drmw
-    PLUGIN_CODE OrbF
-    FORMATS ${VOILE_FORMATS}
-    PRODUCT_NAME "Orbe FX"
-    IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
-    NEEDS_MIDI_OUTPUT TRUE
-    VST3_CATEGORIES Fx
-    AU_MAIN_TYPE kAudioUnitType_MusicEffect
-    COPY_PLUGIN_AFTER_BUILD FALSE)
-target_sources(OrbeFX PRIVATE Source/Orbe/OrbeProcessor.cpp Source/Orbe/OrbeEditor.cpp)
-target_compile_definitions(OrbeFX PUBLIC ORBE_FX=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
-target_link_libraries(OrbeFX PRIVATE juce::juce_audio_utils PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
+# Orbe FX : vrai effet audio (chaîne filtre / saturation / chorus / delay / réverbe) -> Source/Suite/OrbeFX/plugin.cmake
+# Orbe Rythme : générateur de batterie MIDI, issu d'Orbe -> Source/Suite/OrbeRythme/plugin.cmake
 
 add_executable(orbe_test EXCLUDE_FROM_ALL tests/orbe_test.cpp)
 
@@ -97,6 +82,13 @@ target_sources(orbe_snapshot PRIVATE tests/snapshot.cpp Source/Orbe/OrbeProcesso
 set_target_properties(orbe_snapshot PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_compile_definitions(orbe_snapshot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STANDALONE_APPLICATION=1)
 target_link_libraries(orbe_snapshot PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+
+# Version d'état (Kit/StateVersion.h) : états anciens relus, identifiants intacts. cmake --build <dir> --target state_version_test
+juce_add_console_app(state_version_test PRODUCT_NAME "state_version_test")
+target_sources(state_version_test PRIVATE tests/state_version_test.cpp)
+set_target_properties(state_version_test PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_compile_definitions(state_version_test PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1)
+target_link_libraries(state_version_test PRIVATE juce::juce_data_structures juce::juce_recommended_config_flags)
 
 juce_add_console_app(orbe_audiotest PRODUCT_NAME "orbe_audiotest")
 target_sources(orbe_audiotest PRIVATE tests/orbe_audio.cpp Source/Orbe/OrbeProcessor.cpp Source/Orbe/OrbeEditor.cpp)

@@ -22,6 +22,8 @@ struct Params {
     float glide = 0.12f;  // durée des glissés (s)
     float level = 0.8f;
     float bendRange = 2.f;  // demi-tons
+    float foldScale = 1.f;  // sat=2 : 1 = « Repliée » d'origine (k jusqu'à 8), 0,5 = « Pliée » (k jusqu'à 4,5, repliement divisé par ~100 en amplitude)
+    float retrigMs = 2.5f;  // fondu croisé quand une note interrompt la précédente ; 0 = ancien comportement (attend que l'enveloppe tombe)
 };
 
 struct Preset { const char* label; float len, punch, pt, drive; int sat; float tone, cut, click; };
@@ -50,12 +52,14 @@ public:
     void prepare(double sampleRate) {
         sr = (float)sampleRate;
         rng = 0x1234567u;
-        v = Voice{}; nHeld = 0; bendNorm = bendS = 0.f; lastCut = -1.f;
-        lp.reset(); hpClick.reset();
-        hpClick.highpass(sr, 2500.f, 1.f);
-        // saturation suréchantillonnée ×8 (×4 à 88,2/96 kHz) ; l'enveloppe et le clic sont retardés d'autant (voix entière retardée)
-        sat.init(voile::Oversampler::stagesFor(sampleRate, 3)); adx = adS = 0.0;
-        clkDel.init(sat.latency() + 4); normDel.init(sat.latency() + 4);
+        v = Voice{}; ghost = Voice{}; ghostLeft = 0; cc = 0; nHeld = 0; bendNorm = bendS = 0.f; lastCut = -1.f;
+        for (auto& c : ch) {
+            c.lp.reset(); c.hpClick.reset();
+            c.hpClick.highpass(sr, 2500.f, 1.f);
+            // saturation suréchantillonnée ×8 (×4 à 88,2/96 kHz) ; l'enveloppe et le clic sont retardés d'autant (voix entière retardée)
+            c.sat.init(voile::Oversampler::stagesFor(sampleRate, 3)); c.adx = c.adS = 0.0;
+            c.clkDel.init(c.sat.latency() + 4); c.normDel.init(c.sat.latency() + 4);
+        }
         dfDrive = -1.f;
         relC = std::exp(-1.f / (0.012f * sr));
         stealC = std::exp(-1.f / (0.0007f * sr));
@@ -63,10 +67,10 @@ public:
     }
     void setParams(const Params& p) {
         P = p;
-        if (P.drive != dfDrive || P.sat != dfSat || P.tone != dfTone) buildDescribing();
+        if (P.drive != dfDrive || P.sat != dfSat || P.tone != dfTone || P.foldScale != dfFold) buildDescribing();
         if (std::fabs(P.cut - lastCut) > 1e-5f) {
             lastCut = P.cut;
-            lp.lowpass(sr, std::min(120.f * std::pow(100.f, P.cut), 0.45f * sr), 0.6f);
+            for (auto& c : ch) c.lp.lowpass(sr, std::min(120.f * std::pow(100.f, P.cut), 0.45f * sr), 0.6f);
         }
     }
     void setBend(float norm) { bendNorm = std::max(-1.f, std::min(1.f, norm)); }
@@ -76,8 +80,14 @@ public:
         const bool legato = v.active && !v.rel && nHeld > 0 && v.env > 0.02f * v.peak;
         push(note);
         if (legato) { retarget((float)note); return; }
-        if (v.active && v.env > 0.003f) {  // note en cours d'extinction : fondu très court puis départ
-            v.stealing = true; v.stealNote = note; v.stealVel = vel; v.rel = true; v.relC = stealC;
+        if (v.active && v.env > 0.003f) {
+            if (P.retrigMs > 0.f) {  // relance immédiate : l'ancienne note finit en fondu linéaire sur sa propre chaîne, la nouvelle part à l'échantillon près
+                ghost = v; ghostCh = cc; ghostN = ghostLeft = std::max(1, (int)(P.retrigMs * 1e-3f * sr));
+                cc ^= 1; resetChain(ch[cc]);
+                start(note, vel);
+                return;
+            }
+            v.stealing = true; v.stealNote = note; v.stealVel = vel; v.rel = true; v.relC = stealC;  // ancien comportement
             return;
         }
         start(note, vel);
@@ -91,7 +101,7 @@ public:
     }
     void allOff() { nHeld = 0; if (v.active) { v.stealing = false; v.rel = true; v.relC = relC; } }
 
-    int latency() const { return sat.latency(); }   // échantillons : à déclarer à l'hôte
+    int latency() const { return ch[0].sat.latency(); }   // échantillons : à déclarer à l'hôte
     bool active() const { return v.active; }
     int currentNote() const { return v.active ? (int)std::lround(v.target) : -1; }
 
@@ -99,7 +109,12 @@ public:
     void render(float* out, int n) {
         for (int i = 0; i < n; ++i) {
             bendS += (bendNorm - bendS) * bendCoef;
-            out[i] = v.active ? softClip(voiceSample() * P.level) : 0.f;
+            float y = v.active ? voiceSample(v, ch[cc]) : 0.f;
+            if (ghostLeft > 0) {
+                if (ghost.active) y += voiceSample(ghost, ch[ghostCh]) * ((float)ghostLeft / (float)ghostN);
+                if (--ghostLeft == 0) ghost.active = false;
+            }
+            out[i] = (v.active || ghostLeft > 0) ? softClip(y * P.level) : 0.f;
         }
     }
 
@@ -114,26 +129,30 @@ private:
         float ng = 0.f, ngm = 1.f, kg = 0.f, kgm = 1.f, cf = 1800.f, cfm = 1.f, cph = 0.f;
         uint32_t clkN = 0;
     };
+    struct Chain {   // état de traitement d'une voix (filtre, saturation suréchantillonnée, retards) : deux chaînes pour le fondu de relance
+        onek::Biquad lp, hpClick;
+        voile::Oversampler sat;
+        voile::Delay clkDel, normDel;
+        double adx = 0.0, adS = 0.0;
+    };
     Params P;
-    Voice v;
+    Voice v, ghost;
+    Chain ch[2];
+    int cc = 0, ghostCh = 1, ghostN = 1, ghostLeft = 0;
     float sr = 48000.f, relC = 0.99f, stealC = 0.9f, bendCoef = 0.01f, bendNorm = 0.f, bendS = 0.f, lastCut = -1.f;
     int held[16];
     int nHeld = 0;
     uint32_t rng = 1;
-    onek::Biquad lp, hpClick;
-    voile::Oversampler sat;
-    voile::Delay clkDel, normDel;
-    double adx = 0.0, adS = 0.0;
     // Gain RMS de la saturation selon le niveau relatif e = env/crête (table sur e, 0..1) : h(e) = RMS(shape(m·K·e²)) / e².
     static constexpr int kDf = 96;
     float df[kDf + 1] = {};
-    float dfDrive = -1.f, dfTone = -1.f;
+    float dfDrive = -1.f, dfTone = -1.f, dfFold = -1.f;
     int dfSat = -1;
 
     // Recalculée seulement quand drive, sat ou tone changent (97 x 32 évaluations, sans allocation). m = l'onde réelle
     // (sinus + triangle d'octave). Le gain RMS (et non celui du fondamental) reste défini pour la saturation repliée.
     void buildDescribing() {
-        dfDrive = P.drive; dfSat = P.sat; dfTone = P.tone;
+        dfDrive = P.drive; dfSat = P.sat; dfTone = P.tone; dfFold = P.foldScale;
         const float K = (1.f + P.drive * 7.f) * 0.8f;
         constexpr int N = 32;
         for (int j = 0; j <= kDf; ++j) {
@@ -160,6 +179,10 @@ private:
         if (nHeld == 16) { for (int j = 0; j + 1 < 16; ++j) held[j] = held[j + 1]; --nHeld; }
         held[nHeld++] = note;
     }
+    void resetChain(Chain& c) {
+        c.lp.reset(); c.hpClick.reset(); c.sat.reset(); c.adx = c.adS = 0.0;
+        std::fill(c.clkDel.b.begin(), c.clkDel.b.end(), 0.f); std::fill(c.normDel.b.begin(), c.normDel.b.end(), 0.f);
+    }
     void retarget(float t) {
         v.target = t;
         v.glideLeft = std::max(1, (int)(P.glide * sr));
@@ -173,7 +196,7 @@ private:
         n.dc = std::exp(-1.f / (std::max(0.05f, P.len / 3.2f) * sr));
         const float c0 = P.click * 0.5f * vel, k0 = P.click * 0.3f * vel;
         if (c0 > 0.001f) { n.ng = c0; n.ngm = std::pow(0.001f / c0, 1.f / (0.025f * sr)); n.kg = k0; n.kgm = std::pow(0.001f / k0, 1.f / (0.03f * sr)); n.cfm = std::pow(200.f / 1800.f, 1.f / (0.02f * sr)); n.clkN = (uint32_t)(0.04f * sr); }
-        hpClick.reset();
+        ch[cc].hpClick.reset();
         v = n;
     }
     static float tri(float p) { float q = p + 0.25f; q -= std::floor(q); return 1.f - 4.f * std::fabs(q - 0.5f); }
@@ -181,34 +204,33 @@ private:
         x = std::max(-1.f, std::min(1.f, x));
         const float k = 1.f + P.drive * 7.f;
         if (P.sat == 1) return std::max(-1.f, std::min(1.f, x * k)) * 0.92f;
-        if (P.sat == 2) return std::sin(x * k * kPi * 0.5f);
+        if (P.sat == 2) return std::sin(x * (1.f + (k - 1.f) * P.foldScale) * kPi * 0.5f);
         return std::tanh(x * k) / std::tanh(k);
     }
     // Même fonction, antidérivée d'ordre 1 (ADAA) : l'écrêtage dur et les cassures de la courbe ne se replient presque plus (-13 dB de plus
     // que le suréchantillonnage seul). Appelée dans l'ordre des échantillons suréchantillonnés ; calcul en double (différences voisines).
-    float shapeAdaa(float xf) {
+    float shapeAdaa(Chain& C, float xf) {
         const double k = 1.0 + (double)P.drive * 7.0, x = std::max(-1.0, std::min(1.0, (double)xf));
         double S;
         if (P.sat == 1) {
             const double ax = std::fabs(x);
             S = ax * k <= 1.0 ? 0.46 * k * ax * ax : 0.46 / k + 0.92 * (ax - 1.0 / k);
         } else if (P.sat == 2) {
-            const double a = k * 3.14159265358979323846 * 0.5, ax = std::fabs(x);
+            const double a = (1.0 + (k - 1.0) * (double)P.foldScale) * 3.14159265358979323846 * 0.5, ax = std::fabs(x);
             S = (1.0 - std::cos(a * ax)) / a;   // |x| <= 1 : l'entrée est déjà bornée
         } else {
             const double ax = std::fabs(x), t = std::tanh(k), kx = k * ax;
             S = (kx + std::log1p(std::exp(-2.0 * kx)) - 0.6931471805599453) / (k * t);
         }
-        const double dx = x - adx;
+        const double dx = x - C.adx;
         double y;
-        if (std::fabs(dx) > 1e-7) y = (S - adS) / dx;
-        else { const double m = 0.5 * (x + adx); y = P.sat == 1 ? std::max(-1.0, std::min(1.0, m * k)) * 0.92 : P.sat == 2 ? std::sin(m * k * 3.14159265358979323846 * 0.5) : std::tanh(m * k) / std::tanh(k); }
-        adx = x; adS = S;
+        if (std::fabs(dx) > 1e-7) y = (S - C.adS) / dx;
+        else { const double m = 0.5 * (x + C.adx); y = P.sat == 1 ? std::max(-1.0, std::min(1.0, m * k)) * 0.92 : P.sat == 2 ? std::sin(m * (1.0 + (k - 1.0) * (double)P.foldScale) * 3.14159265358979323846 * 0.5) : std::tanh(m * k) / std::tanh(k); }
+        C.adx = x; C.adS = S;
         return (float)y;
     }
 
-    float voiceSample() {
-        Voice& V = v;
+    float voiceSample(Voice& V, Chain& C) {
         if (V.glideLeft > 0) { V.pitch += V.glideStep; if (--V.glideLeft == 0) V.pitch = V.target; }
         float semi = V.pitch + bendS * P.bendRange;
         if (V.age < V.ptN) semi += V.punch * (1.f - (float)V.age / (float)V.ptN);
@@ -227,19 +249,19 @@ private:
         // Le niveau est ramené par le gain RMS h(e) de la courbe : sortie = shape(m·K·u)·crête·h(1)/(e·h(e)), e = env/crête. À e = 1, son
         // identique à l'ancien moteur ; ensuite, même contour de niveau RMS qu'avant (la longueur perçue ne change pas).
         const float K = (1.f + P.drive * 7.f) * 0.8f, e = V.peak > 0.f ? std::min(1.f, V.env / V.peak) : 0.f, u = e * e;
-        const float y = sat.process(mix * K * u, [this](float x) { return shapeAdaa(x); });
-        normDel.push(V.peak * rmsGain(1.f) / (std::max(e, 1e-3f) * rmsGain(e)));
-        float o = lp.process(y) * normDel.read((float)sat.latency());
+        const float y = C.sat.process(mix * K * u, [this, &C](float x) { return shapeAdaa(C, x); });
+        C.normDel.push(V.peak * rmsGain(1.f) / (std::max(e, 1e-3f) * rmsGain(e)));
+        float o = C.lp.process(y) * C.normDel.read((float)C.sat.latency());
         float clk = 0.f;
         if (V.age < V.clkN) {  // clic : bruit filtré + balayage grave, hors enveloppe et hors filtre
-            if (V.age < (uint32_t)(0.025f * sr)) { clk += V.ng * hpClick.process(noise()); V.ng *= V.ngm; }
+            if (V.age < (uint32_t)(0.025f * sr)) { clk += V.ng * C.hpClick.process(noise()); V.ng *= V.ngm; }
             clk += V.kg * std::sin(2.f * kPi * V.cph);
             V.cph += V.cf / sr; V.cph -= std::floor(V.cph);
             if (V.age < (uint32_t)(0.02f * sr)) V.cf *= V.cfm;
             V.kg *= V.kgm;
         }
-        clkDel.push(clk);
-        o += clkDel.read((float)sat.latency());
+        C.clkDel.push(clk);
+        o += C.clkDel.read((float)C.sat.latency());
         ++V.age;
         if ((V.rel || V.age > V.holdN) && V.env < (V.stealing ? 0.003f : 2e-4f)) {
             if (V.stealing) { const int nn = V.stealNote; const float nv = V.stealVel; start(nn, nv); }

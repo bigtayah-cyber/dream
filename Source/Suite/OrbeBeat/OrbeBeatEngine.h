@@ -212,12 +212,13 @@ public:
         chokeC = std::exp(-1.f / (0.008f * sr));
         setKit(kit);
     }
-    void reset() { for (auto& x : vs) x = Voice{}; rng = 0x2468ACEu; lp.reset(); }
+    void reset() { for (auto& x : vs) x = Voice{}; rng = 0x2468ACEu; lp.reset(); for (auto& f : lpl) f.reset(); }
     void setKit(int k) {
         kit = std::max(0, std::min(kKits - 1, k));
         const auto& D = kits()[kit];
         lp.reset();
         if (D.lp > 0.f) lp.lowpass(sr, std::min(D.lp, 0.45f * sr), 0.8f);
+        for (auto& f : lpl) { f.reset(); if (D.lp > 0.f) f.lowpass(sr, std::min(D.lp, 0.45f * sr), 0.8f); }
     }
     void setLevel(float l) { level = l; }
 
@@ -235,15 +236,24 @@ public:
     void release808(int note = -1) { for (int i = 0; i < kPerLane; ++i) { auto& c = vs[B * kPerLane + i]; if (c.on && !c.rel && (note < 0 || c.note == note)) { c.rel = true; c.relc = std::exp(-1.f / (0.012f * sr)); } } }
     bool active() const { for (auto& x : vs) if (x.on) return true; return false; }
 
-    void render(float* out, int n) {
+    // Mix mono. Si `stems` n'est pas nul, stems[k] (ou nul pour une piste ignorée) reçoit en plus la piste k seule, avec la même chaîne de bus
+    // (saturation du kit, filtre, niveau, écrêtage) : le mix n'est pas la somme exacte des pistes (la saturation de bus est non linéaire).
+    void render(float* out, int n, float* const* stems = nullptr) {
         const auto& D = kits()[kit];
         const float sat = D.sat, ts = sat > 0.f ? std::tanh(sat) : 1.f;
         for (int i = 0; i < n; ++i) {
-            float m = 0.f;
-            for (auto& x : vs) if (x.on) m += sample(x);
+            float m = 0.f, ln[kLanes] = {};
+            for (auto& x : vs) if (x.on) { const float y = sample(x); m += y; ln[x.lane] += y; }
             if (sat > 0.f) m = std::tanh(std::max(-1.f, std::min(1.f, m)) * sat) / ts;
             if (D.lp > 0.f) m = lp.process(m);
             out[i] = softClip(m * 0.9f * level);
+            if (stems)
+                for (int k = 0; k < kLanes; ++k) if (stems[k]) {
+                    float y = ln[k];
+                    if (sat > 0.f) y = std::tanh(std::max(-1.f, std::min(1.f, y)) * sat) / ts;
+                    if (D.lp > 0.f) y = lpl[k].process(y);
+                    stems[k][i] = softClip(y * 0.9f * level);
+                }
         }
     }
 
@@ -260,7 +270,7 @@ private:
     float sr = 48000.f, tail = 0.9f, chokeC = 0.99f, level = 1.f;
     int kit = 0;
     uint32_t rng = 1;
-    onek::Biquad lp;
+    onek::Biquad lp, lpl[kLanes];
 
     float noise() { rng = rng * 1664525u + 1013904223u; return (float)(int32_t)rng / 2147483648.f; }
     uint32_t smp(float t) const { return std::max(1u, (uint32_t)(t * sr)); }

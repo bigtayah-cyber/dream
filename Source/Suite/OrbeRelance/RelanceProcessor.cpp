@@ -55,6 +55,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout RelanceProcessor::makeLayout
     l.add(choice("lock", "Verrou", {"Libre", u8("Verrouill\xC3\xA9" "e")}, d.lock));
     l.add(choice("outmode", "Sortie", {"Voix + relances", "Relances seules"}, d.outMode));
     l.add(choice("bypass", "Bypass", {"Off", "On"}, 0));   // contournement en « choix » à deux états (aucun booléen)
+    // ajoutés en fin de liste : tonalité et gamme de l'harmonie (Auto : déduite des notes chantées)
+    l.add(choice("hkey", u8("Tonalit\xC3\xA9 harmonie"), {"Auto", "Do", "Do#", "R\xC3\xA9", "R\xC3\xA9#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"}, 0));
+    l.add(choice("hscale", "Mode harmonie", {"Majeur", "Mineur"}, 0));
     return l;
 }
 
@@ -69,6 +72,7 @@ rel::Params RelanceProcessor::readParams() const {
     p.density = raw("dens"); p.audace = raw("audace"); p.character = ch("carac"); p.delayMode = ch("delay");
     p.lenMs = raw("len"); p.threshDb = raw("thresh"); p.width = raw("width"); p.tone = raw("tone"); p.levelDb = raw("level");
     p.seed = ch("seed"); p.lock = ch("lock"); p.outMode = ch("outmode");
+    p.key = ch("hkey"); p.scale = ch("hscale"); p.diatonic = stateVer >= 2;   // état d'avant la v2 : quinte juste fixe d'origine
     return p;
 }
 
@@ -77,10 +81,11 @@ void RelanceProcessor::writeParams(const rel::Params& p) {
     put("dens", p.density); put("audace", p.audace); put("carac", (float)p.character); put("delay", (float)p.delayMode);
     put("len", p.lenMs); put("thresh", p.threshDb); put("width", p.width); put("tone", p.tone); put("level", p.levelDb);
     put("seed", (float)p.seed); put("lock", (float)p.lock); put("outmode", (float)p.outMode);
+    put("hkey", (float)p.key); put("hscale", (float)p.scale);
 }
 
 static rel::Params presetParams(int i, const rel::Params& cur) {
-    rel::Params p; p.lock = cur.lock; p.outMode = cur.outMode;
+    rel::Params p; p.lock = cur.lock; p.outMode = cur.outMode; p.key = cur.key; p.scale = cur.scale;   // tonalité : jamais dans un préréglage
     kPresets[i].tune(p);
     return p;
 }
@@ -105,9 +110,10 @@ void RelanceProcessor::setCurrentProgram(int i) {
 void RelanceProcessor::beforeSave() {
     rel::Meta m; m.program = program;
     apvts.state.setProperty("rel", juce::String(rel::toString(m)), nullptr);
-    apvts.state.setProperty("stateVersion", 1, nullptr);
+    apvts.state.setProperty("stateVersion", 2, nullptr);   // 2 : harmonie diatonique
 }
 void RelanceProcessor::afterLoad() {
+    stateVer = (int)apvts.state.getProperty("stateVersion", 1);
     rel::Meta m;
     if (rel::fromString(apvts.state.getProperty("rel").toString().toStdString(), m)) program = juce::jlimit(0, kNumPresets - 1, m.program);
 }

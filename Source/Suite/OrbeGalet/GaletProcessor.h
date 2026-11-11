@@ -17,7 +17,12 @@ public:
     gal::Params readParams() const;
     void writeParams(const gal::Params&);
     // Forme : modifiée par l'interface (fil de message), transmise au moteur sans attente côté audio.
-    const gal::Shape& shape() const { return shape_; }
+    // Lot E : une forme par module (0 Volume, 1 Filtre, 2 Distorsion, 3 Pan). Liés (par défaut, comme avant), la forme 0 sert aux quatre ;
+    // séparés, l'éditeur modifie la forme du module choisi (editSlot). shape()/setShape() agissent sur la forme visible.
+    bool linked() const { return raw("shape_link") < 0.5f; }
+    int editSlot() const { return linked() ? 0 : editSlot_.load(); }
+    void setEditSlot(int k) { editSlot_.store(juce::jlimit(0, 3, k)); ++shapeVer; }
+    const gal::Shape& shape() const { return shapes_[(size_t)editSlot()]; }
     void setShape(const gal::Shape& s);
     int shapeVersion() const { return shapeVer; }
     bool snap = true;                    // aimant de la grille (interface), sauvegardé dans l'état
@@ -34,7 +39,8 @@ private:
     void beforeSave() override;
     void afterLoad() override;
     gal::Engine engine;
-    gal::Shape shape_;
+    std::array<gal::Shape, 4> shapes_;
+    std::atomic<int> editSlot_{0};
     int shapeVer = 0, program = 0, maxBlock = 0;   // 0 : pas encore préparé
     std::array<int, 128> notes{};
     std::atomic<float> uiPhase{0.f}, uiMod{0.f}, uiDrive{0.f};

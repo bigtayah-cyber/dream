@@ -68,6 +68,26 @@ int main() {
         int expect = 0; for (int l = 0; l < kLanes - 1; ++l) for (int s = 0; s < 16; ++s) if (filled(p.c[l][s])) expect += rollOf(p.c[l][s]);
         CHECK(ons >= expect * 2 - 4 && ons <= expect * 2 + 8, "notes batterie MIDI : %d pour %d attendues", ons, expect * 2);
     }
+    {   // lot E : sorties séparées. Une piste seule : sa sortie auxiliaire est identique au mix, au bit près ; les autres pistes restent muettes ;
+        // plusieurs pistes : toutes bornées et finies ; le mix est identique avec ou sans sorties auxiliaires.
+        for (int k = 0; k < kKits; ++k) {
+            for (int l = 0; l < kLanes; ++l) {
+                obeat::Engine e; e.setKit(k); e.prepare(48000.0); e.trigger(l, 1.f, 33);
+                const int N = 24000; std::vector<float> mix((size_t)N), st[kLanes]; float* sp[kLanes];
+                for (int q = 0; q < kLanes; ++q) { st[q].assign((size_t)N, 0.f); sp[q] = st[q].data(); }
+                e.render(mix.data(), N, sp);
+                CHECK(st[l] == mix, "piste seule %d (kit %d) : sortie auxiliaire differente du mix", l, k);
+                for (int q = 0; q < kLanes; ++q) if (q != l) CHECK(peakOf(st[q], 0, st[q].size()) == 0.f, "piste %d : fuite de la piste %d (kit %d)", q, l, k);
+            }
+            obeat::Engine a, b; a.setKit(k); b.setKit(k); a.prepare(48000.0); b.prepare(48000.0);
+            for (int l = 0; l < kLanes; ++l) { a.trigger(l, .9f, 33); b.trigger(l, .9f, 33); }
+            const int N = 24000; std::vector<float> ma((size_t)N), mb((size_t)N), st[kLanes]; float* sp[kLanes];
+            for (int q = 0; q < kLanes; ++q) { st[q].assign((size_t)N, 0.f); sp[q] = st[q].data(); }
+            a.render(ma.data(), N, sp); b.render(mb.data(), N);
+            CHECK(ma == mb, "kit %d : le mix change quand les sorties auxiliaires sont actives", k);
+            for (int q = 0; q < kLanes; ++q) CHECK(finite(st[q]) && peakOf(st[q], 0, st[q].size()) <= 1.f, "kit %d piste %d : sortie auxiliaire non bornee", k, q);
+        }
+    }
     std::printf(fails ? "orbebeat_test : %d echec(s)\n" : "orbebeat_test : OK\n", fails);
     return fails ? 1 : 0;
 }

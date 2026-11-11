@@ -1,5 +1,6 @@
 #pragma once
 #include "Kit/Widgets.h"
+#include "Kit/KeyClipboard.h"
 #include "Kit/v3/Widgets3.h"
 #include "PluginProcessor.h"
 
@@ -50,6 +51,7 @@ private:
     // --- Classique
     juce::Slider knob[4], mixS, outS;
     juce::ComboBox keyBox, scaleBox, presetBox;
+    kit::KeyPaster keyPaster;   // clic droit sur Tonalité : coller la tonalité copiée depuis Orbe Détect
     juce::ArrowButton prevB{"prev", 0.5f, kit::w::kSilk.withAlpha(0.7f)}, nextB{"next", 0.f, kit::w::kSilk.withAlpha(0.7f)};
     kit::v3::bridge::HelpKey help;
     std::unique_ptr<SliderAtt> knobAtt[4], mixAtt, outAtt;

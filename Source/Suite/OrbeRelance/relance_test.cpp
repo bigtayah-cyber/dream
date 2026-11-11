@@ -127,6 +127,28 @@ int main() {
         CHECK(fromString(toString(m), r) && r.program == 11 && toString(m) == "REL1;prog=11", "etat REL1");
         CHECK(!fromString("XYZ;prog=3", r) && fromString("REL1;prog=99", r) && r.program == 15, "etat REL1 tolerant");
     }
+    // 8) harmonie diatonique : Do majeur, chaque degré reçoit la quinte de la gamme (le Si une quinte diminuée, jamais un Fa dièse) ; tonalité Auto déduite des notes
+    {
+        const int deg[7] = {60, 62, 64, 65, 67, 69, 71}, want[7] = {7, 7, 7, 7, 7, 7, 6};
+        for (int i = 0; i < 7; ++i) CHECK(harmonyInterval((float)deg[i] + 0.2f, 0, 0) == want[i], "harmonie Do majeur degre %d : %d (attendu %d)", i, harmonyInterval((float)deg[i], 0, 0), want[i]);
+        CHECK(harmonyInterval(71.f, 9, 1) == 6 && harmonyInterval(64.f, 9, 1) == 7, "harmonie La mineur : Si->Fa (6), Mi->Si (7)");   // La mineur : Si (71) -> Fa (77) = 6 ; Mi (64) -> Si (71) = 7
+        float h[12] = {}; for (int d : {0, 2, 4, 5, 7, 9, 11}) h[d] = 10.f; h[0] = 30.f; int sc = -1;
+        CHECK(keyFromHistogram(h, sc) == 0 && sc == 0, "tonalite Auto : Do majeur attendu");
+        float h2[12] = {}; for (int d : {9, 11, 0, 2, 4, 5, 7}) h2[d] = 10.f; h2[9] = 40.f; sc = -1;
+        CHECK(keyFromHistogram(h2, sc) == 9 && sc == 1, "tonalite Auto : La mineur attendu");
+        float h3[12]; for (auto& v : h3) v = 10.f; CHECK(keyFromHistogram(h3, sc) < 0, "tonalite Auto : chromatique doit rester inconnue");
+        // bout en bout : voix finissant sur Si (247 Hz) en Do majeur imposé -> l'harmonie sonne un Fa (349 Hz) et non un Fa# (370 Hz)
+        Engine e; Params p; p.density = 1.f; p.character = 6; p.audace = 0.f; p.key = 1; p.scale = 0; p.lenMs = 400.f; e.set(p); e.prepare(sr, 512);
+        std::vector<float> x((size_t)(sr * 3.0), 0.f);
+        for (size_t i = 0; i < (size_t)(sr * 1.2); ++i) { float ph = 2.f * 3.14159265f * 246.94f * (float)i / (float)sr, v = 0; for (int k = 1; k <= 6; ++k) v += std::sin(k * ph) / (float)k; x[i] = 0.3f * v; }
+        const auto o = run(e, x, 512, sr);
+        CHECK(e.relancesFired() >= 1, "harmonie : aucune relance");
+        // fréquence dominante de la sortie après la fin de la voix (autocorrélation, plage 300..420 Hz)
+        const size_t a = (size_t)(sr * 1.7), n = (size_t)(sr * 0.25); double bestC = -1e30, bestF = 0;
+        for (double f = 300.0; f <= 420.0; f += 0.5) { const int lag = (int)std::lround(sr / f); double c = 0; for (size_t i = a; i + (size_t)lag < a + n; ++i) c += (double)o.l[i] * o.l[i + (size_t)lag] + (double)o.r[i] * o.r[i + (size_t)lag]; if (c > bestC) { bestC = c; bestF = f; } }
+        std::printf("  harmonie sur Si en Do majeur : %.1f Hz (Fa 349,2 ; Fa# 370,0)\n", bestF);
+        CHECK(bestF > 340.0 && bestF < 358.0, "harmonie hors gamme : %.1f Hz", bestF);
+    }
     std::printf(fails ? "orbe_relance_test : %d ECHEC(S)\n" : "orbe_relance_test : OK\n", fails);
     return fails ? 1 : 0;
 }

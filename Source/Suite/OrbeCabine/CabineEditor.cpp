@@ -7,7 +7,7 @@ namespace v3 = kit::v3;
 namespace {
 constexpr float kW = 400.f, kH = 760.f;
 using kit::w::kLilac, kit::w::kIce, kit::w::kPeach;
-struct PotDef { const char* id; const char* label; const char* tip; int section, col, row; };
+struct PotDef { const char* id; const char* label; const char* tip; int section, col, row; bool v3only = false; };
 // Disposition de la face : trois sections, trois colonnes.
 const PotDef kPots[] = {
     {"hp",    "Passe-haut",    "Passe-haut Butterworth 12 dB/oct : retire les graves inutiles de la voix.", 0, 0, 0},
@@ -25,6 +25,8 @@ const PotDef kPots[] = {
     {"dbl",   "Doubleur",      "Deux voix modul\xC3\xA9" "es (13 et 21 ms), ouvertes en st\xC3\xA9r\xC3\xA9o.", 2, 0, 0},
     {"rev",   "Reverb",        "Envoi vers la reverb \xC3\xA0 r\xC3\xA9seau de retards.", 2, 1, 0},
     {"dly",   "Delay",         "Envoi vers le delay en croche point\xC3\xA9" "e, synchronis\xC3\xA9 au tempo de l'h\xC3\xB4te.", 2, 2, 0},
+    {"ingain", "Entr\xC3\xA9" "e",  "Gain d'entr\xC3\xA9" "e avant la cha\xC3\xAEne : cale la voix vers -12 dBFS pour que le seuil du compresseur morde.", 0, 0, 0, true},
+    {"deess",  "Sifflantes", "De-esser relatif en t\xC3\xAAte de cha\xC3\xAEne (6 kHz) : r\xC3\xA9" "duit les S sans d\xC3\xA9pendre du niveau. 0 : coup\xC3\xA9.", 0, 1, 0, true},
 };
 const float kModY[3] = {246.f, 414.f, 582.f}, kModH = 162.f;
 const char* kSecName[3] = {"Module EQ \xC2\xB7 ton et saturation", "Module FET \xC2\xB7 dynamique", "Module espace \xC2\xB7 doubleur et envois"};
@@ -82,7 +84,7 @@ void CabineEditor::setThemeMode(v3::Mode m, bool persist) {
     skin.set(m);
     const bool n3 = isV3();
     setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&skin.look3) : static_cast<juce::LookAndFeel*>(&look));
-    for (auto* p : pots) p->setVisible(!n3);
+    for (int i = 0; i < pots.size(); ++i) pots[i]->setVisible(!n3 && !kPots[i].v3only);
     for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
     prev.setVisible(!n3); next.setVisible(!n3);
     const v3::Theme* tp = skin.tp();
@@ -204,10 +206,11 @@ void CabineEditor::resized3() {
     skin.btn.setBounds(Si(574, 35, 28, 28));
     power.setBounds(Si(644, 36, 70, 26));
     cPrev.setBounds(Si(30, 108, 32, 44)); cNext.setBounds(Si(390, 108, 32, 44));
-    int cnt[3] = {0, 0, 0};
+    int cnt[3] = {0, 0, 0}, tot[3] = {0, 0, 0};
+    for (auto& d : kPots) ++tot[d.section];
     for (int i = 0; i < k3.size(); ++i) {
-        const int sec = kPots[i].section, n = sec == 2 ? 3 : 6, idx = cnt[sec]++;
-        const float pitch = 640.f / (float)n, cx = 40.f + pitch * ((float)idx + 0.5f), w = 100.f;
+        const int sec = kPots[i].section, n = tot[sec], idx = cnt[sec]++;
+        const float pitch = 640.f / (float)n, cx = 40.f + pitch * ((float)idx + 0.5f), w = std::min(100.f, pitch);
         k3[i]->setScale(u_);
         k3[i]->setBounds(Si(cx - w * 0.5f, kCardY[sec] + 34.f, w, v3::Knob3::boxHeight(v3::KnobSize::S, false)));
     }

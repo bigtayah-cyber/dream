@@ -132,11 +132,12 @@ private:
     kit::v3::bridge::HelpKey help;
     kit::v3::Skin skin{"orbesynth", kit::v3::accents::lilac};
     juce::OwnedArray<kit::v3::Knob3> k3;
+    void layout5(bool n3);
     void resized3(); void paint3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
     float u_ = 1.f;
 
     osui::PresetBar presetBar;
-    std::unique_ptr<osui::Seg> wave1, wave2, divSeg;
+    std::unique_ptr<osui::Seg> wave1, wave2, divSeg, modeSeg, bendSeg, l1shape, l1dest, l2shape, l2dest, f2Seg;
     std::vector<std::unique_ptr<osui::Knob>> knobs;  // ordre de création = ordre de mise en page
     osui::EnvView envView;
     osui::FilterView fltView;

@@ -5,9 +5,15 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <atomic>
 #include <vector>
 #include "../../OneKnob/OneKnob.h"
+#include "../../Dsp/TruePeak.h"
 
+#ifndef HOLD_MS_DEFAULT
+#define HOLD_MS_DEFAULT 30.f
+#endif
 namespace mas {
 
 using onek::Biquad;
@@ -27,6 +33,9 @@ struct Params {
     bool satOn = false; float drive = .25f, satMix = .3f;
     bool stOn = true, mono = true; float width = 1.f, monoHz = 120.f;
     bool limOn = true; float lGain = 0.f, ceil = -1.f, lRel = 90.f;
+    int target = 0;           // lot E : cible LUFS court terme (0 coupée, 1 : -14, 2 : -11, 3 : -9) ; ajuste le gain d'entrée du limiteur, lentement
+    bool match = false;       // écoute à niveau égal : atténue la sortie pour qu'elle ait le LUFS court terme de l'entrée (jamais d'amplification)
+    bool delta = false;       // n'écoute que ce que la chaîne a changé (sortie - entrée retardée de la latence)
 };
 
 inline void setBand(Biquad& b, int i, float sr, float db) {
@@ -77,46 +86,12 @@ struct Os2 {
     }
 };
 
-// Estimation de crête vraie : 3 points intermédiaires entre deux échantillons (4×), 24 coefficients par phase.
-struct TruePeak {
-    static constexpr int T = 24, kLag = T / 2;   // la crête du segment [c, c+1] est connue kLag échantillons après c
-    float co[3][T] = {};
-    float x[2][32] = {}; int w = 0; float prevIp[2] = {0, 0};
-    TruePeak() {
-        auto i0 = [](double v) { double s = 1, t = 1; for (int k = 1; k < 30; ++k) { t *= (v / (2 * k)) * (v / (2 * k)); s += t; } return s; };
-        for (int p = 0; p < 3; ++p) {
-            const double f = (p + 1) / 4.0; double sum = 0;
-            for (int j = 0; j < T; ++j) {
-                const double d = (j - (T / 2 - 1)) - f, s = std::sin(kPi * d) / (kPi * d), r = d / (T / 2.0);
-                co[p][j] = (float)(s * i0(7.0 * std::sqrt(std::max(0.0, 1 - r * r))) / i0(7.0)); sum += co[p][j];
-            }
-            for (int j = 0; j < T; ++j) co[p][j] = (float)(co[p][j] / sum);
-        }
-    }
-    void reset() { for (auto& c : x) for (auto& v : c) v = 0; w = 0; prevIp[0] = prevIp[1] = 0; }
-    // Entrée : échantillon courant (deux voies). Sortie : crête vraie de l'échantillon c = n - kLag (voies liées).
-    // Les 3 points intermédiaires (4×) sont affinés par une parabole autour du maximum local (erreur < 0,05 dB).
-    float push(float a, float b) {
-        const float in[2] = {a, b}; float best = 0.f;
-        for (int ch = 0; ch < 2; ++ch) {
-            x[ch][w & 31] = in[ch];
-            float v[5] = {x[ch][(w - kLag) & 31], 0, 0, 0, x[ch][(w - kLag + 1) & 31]};
-            for (int p = 0; p < 3; ++p) { float s = 0.f; for (int j = 0; j < T; ++j) s += co[p][j] * x[ch][(w - (T - 1) + j) & 31]; v[p + 1] = s; }
-            float ip = 0.f;
-            for (int k = 0; k < 5; ++k) ip = std::max(ip, std::fabs(v[k]));
-            for (int k = 1; k < 4; ++k) {
-                const float sg = v[k] < 0 ? -1.f : 1.f, lo = sg * v[k - 1], mid = sg * v[k], hi = sg * v[k + 1], den = 2 * mid - lo - hi;
-                if (mid >= lo && mid >= hi && den > 1e-9f) ip = std::max(ip, std::min(mid * 1.1f, mid + (hi - lo) * (hi - lo) / (8 * den)));
-            }
-            best = std::max(best, std::max(std::fabs(v[0]), std::max(ip, prevIp[ch])));
-            prevIp[ch] = ip;
-        }
-        ++w; return best;
-    }
-};
+using TruePeak = dsp::TruePeak;   // détecteur unique, partagé avec Orbe Mix (Dsp/TruePeak.h)
 
 // Limiteur look-ahead : minimum glissant de la réduction requise, lissage par moyenne glissante (atteint la valeur
-// exacte au moment du pic), relâchement exponentiel. Le signal audio est retardé de latency() échantillons.
+// exacte au moment du pic), puis MAINTIEN (minimum glissant sur kHoldMs) et relâchement exponentiel. Le maintien couvre une
+// période entière des graves (40 ms = 25 Hz) : le gain ne suit plus l'onde d'une 808 (avant : DHT 1,16 % à 40 Hz, 8 dB de GR).
+// Le signal audio est retardé de latency() échantillons.
 class Limiter {
 public:
     void prepare(float sr_) {
@@ -125,13 +100,14 @@ public:
         const int n = nextPow2(D + 2);
         mask = n - 1; bufL.assign((size_t)n, 0.f); bufR = bufL;
         dq.assign((size_t)(W + 2), {1.f, 0}); head = tail = 0; cnt = 0;
+        H = std::max(W, (int)std::lround(kHoldMs * 1e-3f * sr)); hq.assign((size_t)(H + 2), {1.f, 0}); hHead = hTail = 0; hCnt = 0; hIdx = 0;
         box.assign((size_t)W, 1.f); bi = 0; boxSum = (double)W; g = 1.f; idx = 0; w = 0; tp.reset();
         gIn = 1.f; gInT = 1.f; sc = 1.f - std::exp(-1.f / (0.02f * sr));
     }
     int latency() const { return D; }
     void set(bool on, float gainDb, float ceilDb, float relMs) {
         active = on; gInT = on ? std::pow(10.f, gainDb / 20.f) : 1.f;
-        thr = on ? std::pow(10.f, (ceilDb - 0.1f) / 20.f) : 1e9f;   // 0,1 dB de marge pour l'erreur d'interpolation
+        thr = on ? std::pow(10.f, (ceilDb - 0.15f) / 20.f) : 1e9f;   // 0,15 dB de marge : l'estimateur sous-estime d'au plus 0,04 dB (sinus) et 0,3 dB (bruit blanc pleine bande)
         hard = on ? std::pow(10.f, ceilDb / 20.f) : 1e9f;
         rc = 1.f - std::exp(-1.f / (std::max(5.f, relMs) * 1e-3f * sr));
     }
@@ -150,7 +126,13 @@ public:
         const float m = dq[(size_t)head].v;
         boxSum += (double)m - (double)box[(size_t)bi]; box[(size_t)bi] = m; bi = (bi + 1) % W; ++idx;
         const float bx = (float)(boxSum / W);
-        g = bx < g ? bx : g + (bx - g) * rc;
+        // maintien : minimum de bx sur les H derniers échantillons (file monotone), puis relâchement depuis ce plancher
+        const int hn = (int)hq.size();
+        while (hCnt > 0 && hq[(size_t)((hTail - 1 + hn) % hn)].v >= bx) { hTail = (hTail - 1 + hn) % hn; --hCnt; }
+        hq[(size_t)hTail] = {bx, hIdx}; hTail = (hTail + 1) % hn; ++hCnt;
+        while (hq[(size_t)hHead].i <= hIdx - H) { hHead = (hHead + 1) % hn; --hCnt; }
+        const float hold = hq[(size_t)hHead].v; ++hIdx;
+        g = hold < g ? hold : g + (hold - g) * rc;
         gMin = std::min(gMin, g);
         const size_t o = (size_t)((w - D) & mask);
         l = std::clamp(bufL[o] * g, -hard, hard); r = std::clamp(bufR[o] * g, -hard, hard);
@@ -159,16 +141,26 @@ public:
 private:
     struct E { float v; int i; };
     static int nextPow2(int n) { int p = 1; while (p < n) p <<= 1; return p; }
+    static constexpr float kHoldMs = HOLD_MS_DEFAULT;
     float sr = 48000.f, thr = 1e9f, hard = 1e9f, rc = 0.001f, g = 1.f, gMin = 1.f, gIn = 1.f, gInT = 1.f, sc = 0.001f;
     int W = 144, D = 149, mask = 255, head = 0, tail = 0, cnt = 0, bi = 0, idx = 0, w = 0;
+    int H = 1920, hHead = 0, hTail = 0, hCnt = 0, hIdx = 0;
+    std::vector<E> hq;
     double boxSum = 0; bool active = true;
     std::vector<float> bufL, bufR, box; std::vector<E> dq;
     TruePeak tp;
 };
 
-// Loudness momentané (EBU R128 / BS.1770) : pondération K puis fenêtre de 400 ms (4 blocs de 100 ms).
+// Loudness (EBU R128 / BS.1770-4) : pondération K, blocs de 100 ms.
+//  - momentané : fenêtre de 400 ms (4 blocs) ;
+//  - court terme : fenêtre de 3 s (30 blocs ; sur les 3 premières secondes, la moyenne de ce qui est arrivé) ;
+//  - intégré : blocs de 400 ms au pas de 100 ms (recouvrement 75 %), porte absolue -70 LUFS puis porte relative -10 LU,
+//    accumulés dans un histogramme au centième de LU (alloué dans prepare, aucune allocation dans le thread audio).
 struct Lufs {
-    Biquad s1[2], s2[2]; double acc = 0; int n = 0, blk = 0, bl = 4800; double ring[4] = {0, 0, 0, 0}; int filled = 0; float value = -70.f;
+    Biquad s1[2], s2[2]; double acc = 0; int n = 0, blk = 0, bl = 4800; double ring[30] = {}; int filled = 0;
+    float value = -70.f, shortTerm = -70.f, integrated = -70.f; int skip = 0;
+    std::vector<double> hSum; std::vector<std::uint32_t> hCnt;
+    static constexpr int kBins = 8001;
     void prepare(float sr) {
         const double f1 = 1681.974450955533, G = 3.999843853973347, Q1 = 0.7071752369554196, K = std::tan(kPi * f1 / sr), Vh = std::pow(10.0, G / 20), Vb = std::pow(Vh, 0.4996667741545416);
         const double a0 = 1 + K / Q1 + K * K;
@@ -176,15 +168,36 @@ struct Lufs {
         const double f2 = 38.13547087602444, Q2 = 0.5003270373238773, K2 = std::tan(kPi * f2 / sr), c0 = 1 + K2 / Q2 + K2 * K2;
         const float d1 = (float)(2 * (K2 * K2 - 1) / c0), d2 = (float)((1 - K2 / Q2 + K2 * K2) / c0);
         for (int c = 0; c < 2; ++c) { s1[c].reset(); s2[c].reset(); s1[c].set(b0, b1, b2, 1, a1, a2); s2[c].set(1, -2, 1, 1, d1, d2); }
-        acc = 0; n = 0; filled = 0; bl = (int)(0.1f * sr); for (auto& r : ring) r = 0; value = -70.f;
+        bl = std::max(1, (int)(0.1f * sr));
+        hSum.assign(kBins, 0.0); hCnt.assign(kBins, 0u);
+        resetIntegrated(); value = shortTerm = -70.f;
     }
+    // Remise à zéro de l'intégré seul (appelée depuis le thread audio : voir Engine::requestLufsReset).
+    void resetIntegrated(int skipSamples = 0) {
+        skip = skipSamples;   // sortie : les `latence` premiers échantillons sont encore l'ancien passage
+        std::fill(hSum.begin(), hSum.end(), 0.0); std::fill(hCnt.begin(), hCnt.end(), 0u); integrated = -70.f;
+        acc = 0; n = 0; blk = 0; filled = 0; for (auto& r : ring) r = 0;   // les fenêtres repartent aussi : rien de l'ancien passage ne contamine le nouveau
+    }
+    static float lk(double p) { return p > 1e-10 ? (float)(-0.691 + 10 * std::log10(p)) : -70.f; }
     void push(float l, float r) {
+        if (skip > 0) { --skip; return; }
         const float a = s2[0].process(s1[0].process(l)), b = s2[1].process(s1[1].process(r));
         acc += (double)a * a + (double)b * b;
         if (++n >= bl) {
-            ring[blk] = acc / n; blk = (blk + 1) & 3; filled = std::min(4, filled + 1); acc = 0; n = 0;
-            double s = 0; for (int i = 0; i < filled; ++i) s += ring[i];
-            const double p = s / filled; value = p > 1e-10 ? (float)(-0.691 + 10 * std::log10(p)) : -70.f;
+            ring[blk] = acc / n; blk = (blk + 1) % 30; filled = std::min(30, filled + 1); acc = 0; n = 0;
+            auto mean = [&](int k) { double s = 0; for (int j = 1; j <= k; ++j) s += ring[(blk - j + 60) % 30]; return s / k; };
+            const double pm = mean(std::min(4, filled)), ps = mean(filled);
+            value = lk(pm); shortTerm = lk(ps);
+            if (filled >= 4 && value > -70.f) {   // porte absolue -70 LUFS
+                const int bin = std::clamp((int)std::floor((value + 70.0) * 100.0), 0, kBins - 1);
+                hSum[(size_t)bin] += pm; hCnt[(size_t)bin]++;
+                double S = 0; std::uint64_t C = 0;
+                for (int i = 0; i < kBins; ++i) { S += hSum[(size_t)i]; C += hCnt[(size_t)i]; }
+                const double rel = lk(S / (double)C) - 10.0, relBin = (rel + 70.0) * 100.0;   // porte relative : -10 LU sous la moyenne
+                double S2 = 0; std::uint64_t C2 = 0;
+                for (int i = (int)std::max(0.0, std::floor(relBin)); i < kBins; ++i) if (i + 0.5 > relBin) { S2 += hSum[(size_t)i]; C2 += hCnt[(size_t)i]; }
+                integrated = C2 ? lk(S2 / (double)C2) : -70.f;
+            }
         }
     }
 };
@@ -199,7 +212,7 @@ public:
         comp.prepare(sr); dryD[0].init(Os2::kLatency + 4); dryD[1].init(Os2::kLatency + 4);
         lim.prepare(sr); kIn.prepare(sr); kOut.prepare(sr);
         sc = 1.f - std::exp(-1.f / (0.02f * sr)); mixS = 0.f; lvC = 1.f - std::exp(-1.f / (0.3f * sr)); pPre = pSat = 0.f; wid = 1.f; coefValid = false; side.highpass(sr, 10.f, 0.7071f); sideF = 10.f;
-        inPk = outPk = 0.f; grComp = 0.f;
+        inPk = outPk = 0.f; grComp = 0.f; autoG = 0.f; mG = 1.f; for (auto& d : dlyIn) d.init(latency() + 8);
     }
     int latency() const { return Os2::kLatency + lim.latency(); }
     void set(const Params& p) { P = p; }
@@ -209,15 +222,38 @@ public:
     float limReduction() const { return -20.f * std::log10(lim.minGain() + 1e-9f); }
     float lufsIn() const { return kIn.value; }
     float lufsOut() const { return kOut.value; }
+    float lufsShortIn() const { return kIn.shortTerm; }
+    float lufsShortOut() const { return kOut.shortTerm; }
+    float lufsIntegratedIn() const { return kIn.integrated; }
+    float lufsIntegratedOut() const { return kOut.integrated; }
+    void requestLufsReset() { lufsReset.store(true, std::memory_order_release); }   // tout thread ; exécuté au prochain bloc
 
     // Traitement en place, deux voies.
     void process(float* l, float* r, int n) {
         update();
         lim.resetMeter();
+        if (lufsReset.exchange(false, std::memory_order_acq_rel)) { kIn.resetIntegrated(); kOut.resetIntegrated(latency()); }
         const float tMix = P.satOn ? P.satMix : 0.f, tW = P.stOn ? P.width : 1.f, k = 1.f + P.drive * 9.f, ik = 1.f / k;
         float ip = 0.f, op = 0.f, gm = 0.f;
+        // cible LUFS : intégrateur lent (0,15 dB/s par dB d'écart, au plus 1 dB/s) sur le gain d'entrée du limiteur ; l'écart est mesuré sur le court terme de la sortie
+        {
+            const float dt = (float)n / sr;
+            if (P.target > 0 && P.limOn && kOut.shortTerm > -60.f && kIn.shortTerm > -60.f) {
+                static const float tl[4] = {0.f, -14.f, -11.f, -9.f};
+                const float err = tl[std::clamp(P.target, 0, 3)] - kOut.shortTerm;
+                autoG += std::clamp(0.15f * err, -1.f, 1.f) * dt;
+            } else if (P.target == 0) autoG += std::clamp(-autoG, -6.f * dt, 6.f * dt);
+            autoG = std::clamp(autoG, -12.f, 12.f);
+            const float tot = std::clamp(P.lGain + autoG, -3.f, 24.f); autoG = tot - P.lGain;
+            lim.set(P.limOn, tot, P.ceil, P.lRel);
+        }
+        float mTgt = 1.f;
+        if (P.match && kIn.shortTerm > -60.f && kOut.shortTerm > -60.f) mTgt = std::pow(10.f, std::min(0.f, std::clamp(kIn.shortTerm - kOut.shortTerm, -18.f, 18.f)) / 20.f);
+        const float mC = 1.f - std::exp(-1.f / (0.5f * sr));
         for (int i = 0; i < n; ++i) {
             float a = l[i], b = r[i];
+            const float x0 = a, x1 = b;
+            dlyIn[0].push(x0); dlyIn[1].push(x1);
             ip = std::max(ip, std::max(std::fabs(a), std::fabs(b)));
             kIn.push(a, b);
             for (int j = 0; j < kBands; ++j) { a = eq[0][j].process(a); b = eq[1][j].process(b); }
@@ -241,8 +277,10 @@ public:
             const float m = 0.5f * (a + b), s = side.process(0.5f * (a - b) * wid);
             a = m + s; b = m - s;
             lim.process(a, b);
-            l[i] = a; r[i] = b;
             kOut.push(a, b);
+            if (P.match || mG != 1.f) { mG += (mTgt - mG) * mC; if (std::fabs(mG - 1.f) < 1e-6f && mTgt == 1.f) mG = 1.f; a *= mG; b *= mG; }
+            if (P.delta) { a -= dlyIn[0].read((float)latency()); b -= dlyIn[1].read((float)latency()); }
+            l[i] = a; r[i] = b;
             op = std::max(op, std::max(std::fabs(a), std::fabs(b)));
         }
         inPk = ip; outPk = op; grComp = gm;
@@ -258,7 +296,7 @@ private:
         comp.aC = std::exp(-1.f / (std::max(0.5f, P.cAtt) * 1e-3f * sr)); comp.rC = std::exp(-1.f / (0.2f * sr));
         const float f = (P.stOn && P.mono) ? std::clamp(P.monoHz, 20.f, 400.f) : 10.f;
         if (f != sideF) { side.highpass(sr, f, 0.7071f); sideF = f; }
-        lim.set(P.limOn, P.lGain, P.ceil, P.lRel);
+        lim.set(P.limOn, P.lGain + autoG, P.ceil, P.lRel);
     }
     float lvC = 1e-4f, pPre = 0.f, pSat = 0.f;   // compensation de niveau de la saturation
     float sr = 48000.f, sc = 0.001f, mixS = 0, wid = 1, sideF = 10, inPk = 0, outPk = 0, grComp = 0, eqLast[2], eqLast2[kBands];
@@ -270,6 +308,8 @@ private:
     voile::Delay dryD[2];
     Limiter lim;
     Lufs kIn, kOut;
+    float autoG = 0.f, mG = 1.f; voile::Delay dlyIn[2];
+    std::atomic<bool> lufsReset{false};
 };
 
 // Contournement à latence compensée : sortie = entrée retardée de `latency` échantillons (exact).

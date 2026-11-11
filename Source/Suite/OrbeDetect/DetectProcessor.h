@@ -4,6 +4,7 @@
 #include <atomic>
 #include <memory>
 #include "../OrbeAnalysis/OrbeAnalysis.h"
+#include "FalseNotes.h"
 
 struct DetectResult {
     bool valid = false;
@@ -48,6 +49,11 @@ public:
     int peakCount() const { return clearReq.load() ? 0 : juce::jmin(kPeaks, peakIdx.load(std::memory_order_acquire)); }
     std::shared_ptr<const DetectResult> result() const { return std::atomic_load(&res); }
     void setResult(const DetectResult& r) { std::atomic_store(&res, std::make_shared<const DetectResult>(r)); }
+    void analyzeMap();                    // carte des fausses notes : juge la hauteur chantée de la capture par rapport à la tonalité (collée, sinon détectée)
+    std::shared_ptr<const fn::Map> falseMap() const { return std::atomic_load(&fmap); }
+    void setRefKey(int pc, bool minor) { refKey.store(pc * 2 + (minor ? 1 : 0)); }   // tonalité de référence (collée) ; -1 : celle que Détect mesure
+    void clearRefKey() { refKey.store(-1); }
+    int refKeyCode() const { return refKey.load(); }
     void scaleBpm(double f);              // ×½, ×2
     void setBpm(double v);
 
@@ -69,6 +75,9 @@ private:
     std::unique_ptr<std::atomic<float>[]> peaks;
     float peakAcc = 0.f; int peakCnt = 0, spp = 2400;
     std::shared_ptr<const DetectResult> res;
+    std::shared_ptr<const fn::Map> fmap;
+    std::atomic<int> refKey{-1};
+    std::atomic<bool> mapOnly{false};
     std::shared_ptr<std::vector<float>> work; double workSr = 48000.0;
     Worker worker{*this};
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DetectProcessor)

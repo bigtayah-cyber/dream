@@ -147,6 +147,22 @@ DenoiserEditor::DenoiserEditor(DenoiserProcessor& p)
     for (auto* k : {&learn3, &adapt3, &listen3}) addChildComponent(*k);
     adapt3Att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "adapt", adapt3);
     listen3Att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "listen", listen3);
+    {   // v3 seulement : trois curseurs et le mode Prise
+        const char* ids[3] = {"gap", "blo", "bhi"};
+        const char* labs[3] = {"Entre les phrases", "R\xC3\xA9" "duction graves", "R\xC3\xA9" "duction aigus"};
+        const char* tips[3] = {"R\xC3\xA9" "duction suppl\xC3\xA9mentaire quand il n'y a pas de voix (silences entre les phrases). 0 : coup\xC3\xA9.",
+                               "Ajoute ou retire de la r\xC3\xA9" "duction sous 200 Hz (le potard R\xC3\xA9" "duction reste le ma\xC3\xAEtre).",
+                               "Ajoute ou retire de la r\xC3\xA9" "duction au-dessus de 5 kHz."};
+        for (int i = 0; i < 3; ++i) {
+            extraS[i].setSliderStyle(juce::Slider::LinearHorizontal); extraS[i].setTextBoxStyle(juce::Slider::TextBoxRight, false, 78, 20);
+            extraS[i].setTooltip(u8(tips[i])); extraL[i].setText(u8(labs[i]), juce::dontSendNotification); extraL[i].setJustificationType(juce::Justification::centredLeft);
+            addChildComponent(extraS[i]); addChildComponent(extraL[i]);
+            extraAtt[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, ids[i], extraS[i]);
+        }
+        liveBtn.setButtonText(u8("Mode Prise (latence 11 ms)")); addChildComponent(liveBtn);
+        liveBtn.setTooltip(u8("Faible latence pour enregistrer : FFT 512 (au lieu de 2048), latence d'environ 11 ms, r\xC3\xA9" "duction plafonn\xC3\xA9" "e \xC3\xA0 12 dB. L'h\xC3\xB4te est pr\xC3\xA9venu du changement de latence."));
+        liveAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "live", liveBtn);
+    }
     addAndMakeVisible(themeBtn);
     themeBtn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
     themeBtn.onScale = [this](float s) { setUiScale(s); };
@@ -156,7 +172,8 @@ DenoiserEditor::DenoiserEditor(DenoiserProcessor& p)
         u8("- LISTEN : n'\xC3\xA9" "coute que ce qui est retir\xC3\xA9 ; monte le Seuil jusqu'\xC3\xA0 ce qu'aucune voix n'y passe."),
         u8("- R\xC3\xA9" "duction : att\xC3\xA9nuation maximale ; Lissage : moins de \xC2\xAB bruit musical \xC2\xBB ; Aigus : pr\xC3\xA9serve l'air au-dessus de 4 kHz."),
         u8("- Anti-ronflement : filtre le secteur \xC3\xA0 50 ou 60 Hz (et 3 harmoniques)."),
-        u8("- Latence ") + String(dn::kLatency) + u8(" \xC3\xA9" "chantillons (FFT 2048, saut 512), d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te."),
+        u8("- Latence ") + String(dn::kLatency) + u8(" \xC3\xA9" "chantillons (FFT 2048, saut 512), d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te ; Mode Prise : 512 \xC3\xA9" "chantillons."),
+        u8("- Entre les phrases : r\xC3\xA9" "duction en plus hors voix. R\xC3\xA9" "duction graves / aigus : r\xC3\xA9glage par bande (v3)."),
         u8("- Bouton demi-disque : thème Clair, Sombre ou Classique et taille de la fenêtre (mémorisés).")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     adaptAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "adapt", adaptKey);
@@ -180,6 +197,9 @@ void DenoiserEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto* k : k3) { k->setVisible(n3); k->setup(&T, &art); }
     for (auto* k : {&learnKey, &adaptKey, &listenKey}) k->setVisible(!n3);
     for (auto* k : {&learn3, &adapt3, &listen3}) { k->setVisible(n3); k->T = &T; }
+    for (auto& c : extraS) c.setVisible(n3);
+    for (auto& c : extraL) c.setVisible(n3);
+    liveBtn.setVisible(n3);
     scope->T = &T; scope->setOpaque(!n3);
     humSeg->T = &T; humSeg->px = 12.f;
     power.T = &T; help.T = &T; themeBtn.T = &T; themeBtn.current = m;
@@ -210,6 +230,8 @@ void DenoiserEditor::resized() {
         scope->setBounds(Si(34, 90, 700, 232));
         learn3.setBounds(Si(38, 392, 98, 44)); adapt3.setBounds(Si(146, 392, 98, 44)); listen3.setBounds(Si(254, 392, 98, 44));
         humSeg->setBounds(Si(38, 500, 314, 40));
+        liveBtn.setBounds(Si(38, 450, 314, 30));
+        for (int i = 0; i < 3; ++i) { extraL[i].setBounds(Si(396.f + 202.f * (float)i, 520, 190, 18)); extraS[i].setBounds(Si(396.f + 202.f * (float)i, 540, 190, 24)); }
         const float kh = v3::Knob3::boxHeight(v3::KnobSize::M, false);
         for (int i = 0; i < 4; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(448.f + 152.f * (float)i - 70.f, 410, 140, kh)); }
         return;

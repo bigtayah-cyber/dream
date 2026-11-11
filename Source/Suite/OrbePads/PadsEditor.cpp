@@ -109,7 +109,8 @@ PadsEditor::PadsEditor(PadsProcessor& p)
       modeSeg(*p.apvts.getParameter("mode"), {"Transitoires", "Grille", "Manuel"}, pal),
       divSeg(*p.apvts.getParameter("div"), {"4", "8", "16"}, pal),
       playSeg(*p.apvts.getParameter("play"), {u8("Un coup"), "Tenue"}, pal),
-      dltSeg(*p.apvts.getParameter("dlt"), {"1/16", "1/8", "1/8 p.", "1/4"}, pal) {
+      dltSeg(*p.apvts.getParameter("dlt"), {"1/16", "1/8", "1/8 p.", "1/4"}, pal),
+      outSeg(*p.apvts.getParameter("outs"), {"Mix", "Mix + 16", "16 seules"}, pal) {
     setLookAndFeel(&look);
     auto& ap = proc.apvts;
     wave.emptyText = u8("Glisse un sample ici ou clique sur Importer");
@@ -122,7 +123,8 @@ PadsEditor::PadsEditor(PadsProcessor& p)
         for (int i = 1; i < (int)m.size(); ++i) if (std::abs(wave.xOf(m[(size_t)i]) - e.position.x) < 8.f * u_) { proc.removeMark(i); return; }
     };
     addAndMakeVisible(wave);
-    for (auto* c : {(juce::Component*)&modeSeg, (juce::Component*)&divSeg, (juce::Component*)&playSeg, (juce::Component*)&dltSeg}) addAndMakeVisible(c);
+    for (auto* c : {(juce::Component*)&modeSeg, (juce::Component*)&divSeg, (juce::Component*)&playSeg, (juce::Component*)&dltSeg, (juce::Component*)&outSeg}) addAndMakeVisible(c);
+    outSeg.setTooltip(u8("Sorties séparées : activez les bus « Pad 1 à 16 » dans l'hôte (un pad par sortie, sans reverb ni delay). Mix : sortie principale seule. Mix + 16 : la principale garde tout. 16 seules : la principale se tait."));
     sens.setSliderStyle(juce::Slider::LinearHorizontal); sens.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     addAndMakeVisible(sens);
     sensAtt = std::make_unique<SliderAtt>(ap, "sens", sens);
@@ -176,7 +178,7 @@ PadsEditor::PadsEditor(PadsProcessor& p)
         masterK->setVisible(!n3);
         for (auto* x : k3) { x->setVisible(n3); x->setup(&skin.T, &skin.art); }
         masterK3->setVisible(n3); masterK3->setup(&skin.T, &skin.art);
-        for (auto* s : {&modeSeg, &divSeg, &playSeg, &dltSeg}) { s->T = tp; s->px = 11.5f; s->repaint(); }
+        for (auto* s : {&modeSeg, &divSeg, &playSeg, &dltSeg, &outSeg}) { s->T = tp; s->px = 11.5f; s->repaint(); }
         if (grpSeg) { grpSeg->T = tp; grpSeg->repaint(); }
         for (auto* b : {&importB, &demoB, &clearB}) b->T = tp;
         accSeg->T = tp; accSeg->px = 12.f; wave.T = tp; help.T = tp; repaint();
@@ -248,6 +250,7 @@ void PadsEditor::resized() {
     revB.setBounds(Si(744, 440, 110, 22));
     if (grpSeg) grpSeg->setBounds(Si(744, 488, 216, 28));
     playSeg.setBounds(Si(496, 566, 150, 28)); dltSeg.setBounds(Si(664, 566, 190, 28));
+    outSeg.setBounds(Si(496, 604, 358, 28));
     masterK->setBounds(Si(882, 534, 84, 104));
     repaint();
 }
@@ -409,6 +412,7 @@ void PadsEditor::resized3() {
     revB.setBounds(Si(744, 440, 110, 24));
     if (grpSeg) grpSeg->setBounds(Si(744, 490, 216, 30));
     playSeg.setBounds(Si(496, 568, 150, 30)); dltSeg.setBounds(Si(664, 568, 190, 30));
+    outSeg.setBounds(Si(496, 606, 358, 30));
     masterK3->setScale(u_); masterK3->setBounds(Si(878, 530, 92, 108));
     repaint();
 }

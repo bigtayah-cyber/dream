@@ -1,4 +1,5 @@
 #include "MasterProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "MasterEditor.h"
 #include "../../Kit/Kit.h"
 
@@ -38,6 +39,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout MasterProcessor::makeLayout(
     flt("ceil", "Plafond", -3.f, 0.f, 0.1f, d.ceil, [](float v) { return String(v, 1) + " dBTP"; });
     flt("lRel", "Limiteur rel\xC3\xA2" "chement", 20.f, 500.f, 1.f, d.lRel, [](float v) { return String(roundToInt(v)) + " ms"; }, 100.f);
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"bypass", 1}, "Bypass", false));
+    // lot E (ajoutés en fin, neutres par défaut : un ancien projet sonne comme avant)
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"target", 1}, "Cible LUFS", StringArray{"Off", "-14 LUFS", "-11 LUFS", "-9 LUFS"}, 0));
+    sw("match", "\xC3\x89" "coute \xC3\xA0 niveau \xC3\xA9gal", false);
+    sw("delta", "Delta", false);
     return l;
 }
 
@@ -46,7 +51,7 @@ MasterProcessor::MasterProcessor()
       apvts(*this, nullptr, "ORBEMASTER", makeLayout()) {
     bypass = dynamic_cast<juce::AudioParameterBool*>(apvts.getParameter("bypass"));
     for (int i = 0; i < mas::kBands; ++i) pp[(size_t)i] = apvts.getRawParameterValue("eq" + String(i));
-    const char* ids[] = {"eqOn", "compOn", "cAmt", "cRatio", "cAtt", "cGain", "satOn", "drive", "satMix", "stOn", "width", "mono", "monoHz", "limOn", "lGain", "ceil", "lRel"};
+    const char* ids[] = {"eqOn", "compOn", "cAmt", "cRatio", "cAtt", "cGain", "satOn", "drive", "satMix", "stOn", "width", "mono", "monoHz", "limOn", "lGain", "ceil", "lRel", "target", "match", "delta"};
     static_assert(sizeof(ids) / sizeof(ids[0]) == kNumP - kEqOn, "liste des identifiants");
     for (int i = kEqOn; i < kNumP; ++i) { pp[(size_t)i] = apvts.getRawParameterValue(ids[i - kEqOn]); jassert(pp[(size_t)i] != nullptr); }
 }
@@ -64,6 +69,7 @@ mas::Params MasterProcessor::readParams() const {
     p.satOn = v(kSatOn) > 0.5f; p.drive = v(kDrive); p.satMix = v(kSatMix);
     p.stOn = v(kStOn) > 0.5f; p.width = v(kWidth); p.mono = v(kMono) > 0.5f; p.monoHz = v(kMonoHz);
     p.limOn = v(kLimOn) > 0.5f; p.lGain = v(kLGain); p.ceil = v(kCeil); p.lRel = v(kLRel);
+    p.target = juce::roundToInt(v(kTarget)); p.match = v(kMatch) > 0.5f; p.delta = v(kDelta) > 0.5f;
     return p;
 }
 
@@ -100,10 +106,13 @@ void MasterProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         ip = juce::jmax(ip, engine.inPeak()); op = juce::jmax(op, engine.outPeak()); gc = juce::jmax(gc, engine.compReduction()); gl = juce::jmax(gl, engine.limReduction());
     });
     inPk.store(ip); outPk.store(op); grComp.store(gc); grLim.store(gl); lufsIn.store(engine.lufsIn()); lufsOut.store(engine.lufsOut());
+    lufsShort.store(engine.lufsShortOut()); lufsInt.store(engine.lufsIntegratedOut());
 }
 
 void MasterProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, dest);
+    auto st = apvts.copyState();
+    kit::stampState(st);
+    if (auto xml = st.createXml()) copyXmlToBinary(*xml, dest);
 }
 void MasterProcessor::setStateInformation(const void* data, int size) {
     if (auto xml = getXmlFromBinary(data, size))

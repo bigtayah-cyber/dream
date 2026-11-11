@@ -78,7 +78,7 @@ public:
     void setUiScale(float s);
 
 private:
-    static constexpr float kW3 = 1100.f, kH3 = 706.f;
+    static constexpr float kW3 = 1100.f, kH3 = 866.f;   // 866 : rangée « Comportement » (v3 seulement) sous la rangée de potards
     bool isV3() const { return mode != kit::v3::Mode::Classic; }
     void timerCallback() override;
     void resizedClassic();
@@ -108,6 +108,8 @@ private:
     float scale_ = 1.f;
     int lastProg = -1;
     juce::OwnedArray<kit::v3::Knob3> k3;
+    juce::OwnedArray<kit::v3::Knob3> kb;   // comportement : warble, humanize, transition, vitesse < 0, suivi (v3 seulement)
+    std::unique_ptr<kit::v3::bridge::Seg> stabSeg, atkSeg;   // stabilisateur de notes ; attaque accordée
     kit::v3::Trace trDet, trTgt, trOut;
     float sDet[atn::Telemetry::N] = {}, sTgt[atn::Telemetry::N] = {}, sOut[atn::Telemetry::N] = {};
     kit::v3::ThemeMenu themeBtn;

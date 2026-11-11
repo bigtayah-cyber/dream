@@ -1,4 +1,5 @@
 #include "DetectProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "DetectEditor.h"
 
 using juce::String;
@@ -77,8 +78,27 @@ void DetectProcessor::analyze() {
     worker.startThread();
 }
 
+void DetectProcessor::analyzeMap() {
+    if (busy() || clearReq.load()) return;
+    const int len = capLen.load(std::memory_order_acquire);
+    if (len < (int)(sr * 2)) return;
+    work = std::make_shared<std::vector<float>>(cap.begin(), cap.begin() + len);
+    workSr = sr; mapOnly = true; working = true;
+    worker.startThread();
+}
+
 void DetectProcessor::Worker::run() {
     auto data = owner.work; const double rate = owner.workSr; const int n = (int)data->size();
+    if (owner.mapOnly.exchange(false)) {   // carte des fausses notes : tonalité collée, sinon dernière mesure de Détect, sinon celle de cet audio
+        int pc = 0; bool minor = false; const int ref = owner.refKey.load(); const auto cur = owner.result();
+        if (ref >= 0) { pc = ref / 2; minor = (ref & 1) != 0; }
+        else if (cur->valid) { pc = cur->pc; minor = cur->minor; }
+        else { const auto k = oa::detectKey(data->data(), n, rate); pc = k.pc; minor = k.minor; }
+        auto m = std::make_shared<const fn::Map>(fn::build(data->data(), n, rate, pc, minor));
+        std::atomic_store(&owner.fmap, m);
+        owner.working = false;
+        return;
+    }
     DetectResult r; r.dur = n / rate;
     const auto t = oa::detectTempo(data->data(), n, rate);
     if (!threadShouldExit()) {
@@ -102,6 +122,8 @@ void DetectProcessor::scaleBpm(double f) { const auto r = result(); if (r->valid
 
 void DetectProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto s = apvts.copyState();
+    kit::stampState(s);
+    s.setProperty("refkey", refKey.load(), nullptr);
     const auto r = result();
     if (r->valid) s.setProperty("res", juce::Base64::toBase64(r.get(), sizeof(DetectResult)), nullptr);
     if (auto xml = s.createXml()) copyXmlToBinary(*xml, dest);
@@ -117,7 +139,8 @@ void DetectProcessor::setStateInformation(const void* data, int size) {
                 DetectResult r; std::memcpy(&r, mo.getData(), sizeof r); setResult(r);
             }
         }
-        s.removeProperty("res", nullptr);
+        refKey.store((int)s.getProperty("refkey", -1));
+        s.removeProperty("res", nullptr); s.removeProperty("refkey", nullptr);
         apvts.replaceState(s);
     }
 }

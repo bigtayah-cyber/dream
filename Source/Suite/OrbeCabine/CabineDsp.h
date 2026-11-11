@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 #include "../../OneKnob/OneKnob.h"
+#include "../../Dsp/DeEssDyn.h"
 
 namespace cab {
 
@@ -15,24 +16,26 @@ struct Params {
     float hp = 20, mud = 0, pres = 0, air = 0, lp = 20000, sat = 0;   // Hz, dB, dB, dB, Hz (20000 = coupé), drive
     float thr = 0, ratio = 1, atk = 6, rel = 120, mk = 0;             // dB, :1, ms, ms, dB
     float rev = 0, dly = 0, dbl = 0, out = 0;                          // envois 0..1, doubleur 0..1, sortie dB
+    float in = 0, des = 0;                                             // gain d'entrée dB ; de-esser relatif 0..1 (0 = coupé, exact)
 };
 struct Preset { const char* name; Params p; };
 
+inline Params withDes(Params p, float d) { p.des = d; return p; }
 inline Params mk(float hp, float mud, float pres, float air, float lp, float sat, float thr, float ratio, float atkMs, float relMs, float mkDb, float rev, float dly, float dbl) {
     Params p; p.hp = hp; p.mud = mud; p.pres = pres; p.air = air; p.lp = lp; p.sat = sat; p.thr = thr; p.ratio = ratio; p.atk = atkMs; p.rel = relMs; p.mk = mkDb; p.rev = rev; p.dly = dly; p.dbl = dbl; return p;
 }
 constexpr int kPresets = 11, kDefaultPreset = 2;
 inline const Preset* presets() {
     static const Preset t[kPresets] = {
-        {"Beat",         mk(20, 0, 0, 0, 20000, 0, 0, 1, 6, 120, 0, 0, 0, 0)},
+        {"Voix sur beat charg\xC3\xA9", withDes(mk(150, -4, 3.5f, 1, 20000, 1, -24, 4, 3, 80, 3, .05f, .08f, 0), .35f)},
         {"Brut",         mk(20, 0, 0, 0, 20000, 0, 0, 1, 6, 120, 0, 0, 0, 0)},
-        {"Voix lead",    mk(90, -3, 2.5f, 2, 20000, 0, -22, 3.5f, 6, 120, 3, .14f, .1f, 0)},
-        {"Backs",        mk(140, -4, 1, 3, 20000, 0, -26, 4, 8, 150, 3, .28f, .05f, 0)},
-        {"Ad-libs",      mk(220, -6, 4, 1, 20000, 0, -28, 6, 4, 100, 4, .2f, .32f, 0)},
-        {"Voix doubl\xC3\xA9""e", mk(100, -3, 2.5f, 2.5f, 20000, 0, -22, 3.5f, 6, 120, 3, .12f, .06f, .5f)},
-        {"A\xC3\xA9rienne", mk(140, -4, 1.5f, 5, 20000, 0, -24, 3, 10, 200, 3, .5f, .22f, .25f)},
-        {"\xC3\x89""cho rap", mk(120, -3, 3, 1.5f, 20000, 0, -24, 4, 5, 120, 3, .1f, .55f, 0)},
-        {"Satur\xC3\xA9""e", mk(120, -2, 3.5f, 1, 20000, 5, -26, 5, 4, 100, 2, .12f, .12f, 0)},
+        {"Voix lead",    withDes(mk(90, -3, 2.5f, 2, 20000, 0, -22, 3.5f, 6, 120, 3, .14f, .1f, 0), .4f)},
+        {"Backs",        withDes(mk(140, -4, 1, 3, 20000, 0, -26, 4, 8, 150, 3, .28f, .05f, 0), .3f)},
+        {"Ad-libs",      withDes(mk(220, -6, 4, 1, 20000, 0, -28, 6, 4, 100, 4, .2f, .32f, 0), .4f)},
+        {"Voix doubl\xC3\xA9""e", withDes(mk(100, -3, 2.5f, 2.5f, 20000, 0, -22, 3.5f, 6, 120, 3, .12f, .06f, .5f), .4f)},
+        {"A\xC3\xA9rienne", withDes(mk(140, -4, 1.5f, 5, 20000, 0, -24, 3, 10, 200, 3, .5f, .22f, .25f), .6f)},
+        {"\xC3\x89""cho rap", withDes(mk(120, -3, 3, 1.5f, 20000, 0, -24, 4, 5, 120, 3, .1f, .55f, 0), .3f)},
+        {"Satur\xC3\xA9""e", withDes(mk(120, -2, 3.5f, 1, 20000, 5, -26, 5, 4, 100, 2, .12f, .12f, 0), .3f)},
         {"T\xC3\xA9l\xC3\xA9phone", mk(500, 0, 4, 0, 3200, 3, -24, 5, 4, 100, 4, .06f, .18f, 0)},
         {"Lo-fi",        mk(180, -2, 1, -4, 5200, 2, -24, 4, 8, 150, 3, .25f, .1f, 0)},
     };
@@ -91,6 +94,7 @@ public:
         dly[0].init((int)(2.05 * sampleRate)); dly[1].init((int)(2.05 * sampleRate));
         for (auto& d : dd) d.init((int)(0.1 * sampleRate));
         lfo[0] = lfo[1] = 0.f; dlyT = 0.f;
+        dss.prepare(sampleRate); desOn = false; gIn = 1.f;
         gMk = gOut = gRev = gDly = gDbl = -1.f; last = Params{}; lastValid = false; outPk = 0.f; grNow = 0.f;
         sc = 1.f - std::exp(-1.f / (0.02f * sr));
         lvC = 1.f - std::exp(-1.f / (0.3f * sr)); pPre = pSat = 0.f; satS = -1.f;
@@ -103,7 +107,30 @@ public:
     float gainReduction() const { return grNow; }
 
     // Entrée mono (inR nul) ou stéréo ; sortie stéréo ; peut travailler en place.
+    // Étage d'entrée (lot E) : gain d'entrée lissé puis de-esser relatif (latence nulle). Gain 0 dB et de-esser à 0 : chemin d'origine, identique au bit.
     void process(const float* inL, const float* inR, float* outL, float* outR, int n) {
+        const bool pre = P.in != 0.f || std::fabs(gIn - 1.f) > 1e-5f || P.des > 0.001f;
+        if (!pre) { desOn = false; gIn = 1.f; processCore(inL, inR, outL, outR, n); return; }
+        if (P.des > 0.001f) {
+            dsp::deess::Params d; d.thresholdDb = 6.f - 12.f * P.des; d.ratio = 4.f; d.rangeDb = 4.f + 10.f * P.des; d.freqHz = 6000.f; d.airDb = 0.f;
+            dss.setParams(d); if (!desOn) dss.reset(); desOn = true;
+        } else desOn = false;
+        const float tIn = std::pow(10.f, P.in / 20.f);
+        for (int p0 = 0; p0 < n; p0 += kPre) {
+            const int c = std::min(kPre, n - p0);
+            for (int i = 0; i < c; ++i) { gIn += (tIn - gIn) * 0.002f; pl[i] = inL[p0 + i] * gIn; pr[i] = (inR ? inR[p0 + i] : inL[p0 + i]) * gIn; }
+            if (desOn) dss.process(pl, pr, c);
+            processCore(pl, inR ? pr : nullptr, outL + p0, outR + p0, c);
+        }
+    }
+    float deEssReduction() const { return desOn ? dss.reductionDb() : 0.f; }
+
+private:
+    static constexpr int kPre = 512;
+    float pl[kPre] = {}, pr[kPre] = {}, gIn = 1.f;
+    bool desOn = false;
+    dsp::deess::DeEsser dss;
+    void processCore(const float* inL, const float* inR, float* outL, float* outR, int n) {
         updateCoefs();
         const float dTarget = std::min(1.9f, 0.75f * 60.f / bpm) * sr;
         if (dlyT <= 0.f) dlyT = dTarget;
@@ -161,7 +188,6 @@ public:
         outPk = pk; grNow = gmax; outMs = n > 0 ? ss / (float)n : 0.f;
     }
 
-private:
     void reset() {
         for (int c = 0; c < 2; ++c) { hp[c].reset(); mud[c].reset(); pres[c].reset(); air[c].reset(); lp[c].reset(); os[c].reset(); dlp[c].reset(); dly[c].init((int)(2.05 * sr)); }
         rev.init(sr); rev.setDecay(1.8f); rhp.reset(); rlp.reset(); comp.env = 0;

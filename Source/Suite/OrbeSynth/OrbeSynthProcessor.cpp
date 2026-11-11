@@ -1,4 +1,5 @@
 #include "OrbeSynthProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "OrbeSynthEditor.h"
 #include "../../Kit/Kit.h"
 
@@ -47,6 +48,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrbeSynthProcessor::makeLayo
     C("dlydiv", "Delay valeur", {"1/16", "1/8", u8("1/8 pointée"), "1/4", u8("1/4 pointée"), "1/2"}, 2);
     F("rev", "Reverb", 0.f, 1.f, .25f, 1.f, pct);
     F("vol", "Volume", 0.f, 1.f, .7f, 1.f, pct);
+    // Lot E (identifiants ajoutés en fin de liste ; valeurs par défaut = ancien son)
+    C("mode", "Jeu", {"Poly", "Mono", "Legato"}, 0);
+    F("glide", "Glide", 0.f, 2.f, 0.f, .35f, secs);
+    C("bend", "Pitch bend", {u8("±1"), u8("±2"), u8("±5"), u8("±12")}, 1);
+    F("detx", u8("Désaccord +"), 0.f, 50.f, 0.f, 1.f, [](float x, int) { return String(juce::roundToInt(x)) + " ct"; });
+    const StringArray lshape{"Sinus", "Triangle", "Scie", u8("Carré"), u8("Aléatoire")}, ldest{"Aucune", "Coupure", "Hauteur", "Volume", "FM", "Coupure 2"};
+    for (int i = 1; i <= 2; ++i) {
+        const String n = "LFO " + String(i), id = "l" + String(i);
+        l.add(std::make_unique<AudioParameterChoice>(ParameterID{(id + "shape").toRawUTF8(), 1}, n + " forme", lshape, 0));
+        l.add(std::make_unique<AudioParameterChoice>(ParameterID{(id + "dest").toRawUTF8(), 1}, n + " cible", ldest, 0));
+        l.add(std::make_unique<AudioParameterFloat>(ParameterID{(id + "rate").toRawUTF8(), 1}, n + " vitesse", NormalisableRange<float>(.05f, 30.f, 0.f, .35f), 2.f,
+                                                    AudioParameterFloatAttributes().withStringFromValueFunction([](float x, int) { return (x < 10.f ? String(x, 2) : String(x, 1)) + " Hz"; })));
+        l.add(std::make_unique<AudioParameterFloat>(ParameterID{(id + "depth").toRawUTF8(), 1}, n + " profondeur", NormalisableRange<float>(0.f, 1.f), 0.f,
+                                                    AudioParameterFloatAttributes().withStringFromValueFunction(pct)));
+    }
+    C("f2mode", "Filtre 2", {u8("Coupé"), "Passe-bas", "Passe-haut", "Passe-bande"}, 0);
+    F("f2cut", "Coupure 2", 0.f, 1.f, .5f, 1.f, hz);
+    F("f2res", u8("Résonance 2"), 0.f, 1.f, .2f, 1.f, pct);
     return l;
 }
 
@@ -72,6 +91,14 @@ osyn::Params OrbeSynthProcessor::readParams() const {
     p.sub = v("sub"); p.cut = v("cut"); p.res = v("res"); p.famt = v("famt"); p.fdec = v("fdec");
     p.a = v("a"); p.d = v("d"); p.s = v("s"); p.r = v("r");
     p.drive = v("drive"); p.cho = v("cho"); p.dly = v("dly"); p.dlyDiv = (int)v("dlydiv"); p.rev = v("rev"); p.vol = v("vol");
+    const int ver = loadedVersion.load();
+    p.aa = ver >= 3 ? 1 : 0; p.uniRand = ver >= 3 ? 1 : 0;   // BLEP 16 points et phases d'unisson aléatoires : un projet d'avant garde l'ancien son
+    p.mode = (int)v("mode"); p.glide = v("glide"); p.detx = v("detx");
+    static const float bends[4] = {1.f, 2.f, 5.f, 12.f};
+    p.bendSemi = bends[juce::jlimit(0, 3, (int)v("bend"))];
+    p.lfoShape[0] = (int)v("l1shape"); p.lfoDest[0] = (int)v("l1dest"); p.lfoRate[0] = v("l1rate"); p.lfoDepth[0] = v("l1depth");
+    p.lfoShape[1] = (int)v("l2shape"); p.lfoDest[1] = (int)v("l2dest"); p.lfoRate[1] = v("l2rate"); p.lfoDepth[1] = v("l2depth");
+    p.f2mode = (int)v("f2mode"); p.f2cut = v("f2cut"); p.f2res = v("f2res");
     return p;
 }
 
@@ -117,6 +144,8 @@ void OrbeSynthProcessor::setCurrentProgram(int i) {
     set("sub", p.sub); set("cut", p.cut); set("res", p.res); set("famt", p.famt); set("fdec", p.fdec);
     set("a", p.a); set("d", p.d); set("s", p.s); set("r", p.r);
     set("drive", p.drive); set("cho", p.cho); set("dly", p.dly); set("dlydiv", (float)p.dlyDiv); set("rev", p.rev); set("vol", p.vol);
+    // un preset d'usine ne touche pas au jeu (mode, glide, bend) ni à la modulation : modulation et filtre 2 reviennent à neutre
+    set("detx", 0.f); set("l1dest", 0.f); set("l2dest", 0.f); set("l1depth", 0.f); set("l2depth", 0.f); set("f2mode", 0.f);
 }
 
 const juce::String OrbeSynthProcessor::getProgramName(int i) {
@@ -128,11 +157,13 @@ bool OrbeSynthProcessor::presetModified() const {
     auto d = [](float x, float y) { return std::fabs(x - y) > 1e-3f * (1.f + std::fabs(y)); };
     return a.w1 != b.w1 || a.w2 != b.w2 || a.uni != b.uni || a.dlyDiv != b.dlyDiv || d(a.semi, b.semi) || d(a.mix, b.mix) || d(a.fm, b.fm) || d(a.det, b.det) || d(a.sub, b.sub)
         || d(a.cut, b.cut) || d(a.res, b.res) || d(a.famt, b.famt) || d(a.fdec, b.fdec) || d(a.a, b.a) || d(a.d, b.d) || d(a.s, b.s) || d(a.r, b.r)
-        || d(a.drive, b.drive) || d(a.cho, b.cho) || d(a.dly, b.dly) || d(a.rev, b.rev) || d(a.vol, b.vol);
+        || d(a.drive, b.drive) || d(a.cho, b.cho) || d(a.dly, b.dly) || d(a.rev, b.rev) || d(a.vol, b.vol)
+        || a.detx > .5f || a.lfoDest[0] != 0 || a.lfoDest[1] != 0 || a.f2mode != 0;
 }
 
 void OrbeSynthProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto st = apvts.copyState();
+    kit::stampState(st, loadedVersion.load());
     st.setProperty("program", program, nullptr);
     if (auto xml = st.createXml()) copyXmlToBinary(*xml, dest);
 }
@@ -141,6 +172,7 @@ void OrbeSynthProcessor::setStateInformation(const void* data, int size) {
     auto xml = getXmlFromBinary(data, size);
     if (!xml || !xml->hasTagName(apvts.state.getType())) return;
     auto tree = juce::ValueTree::fromXml(*xml);
+    loadedVersion = kit::stateVersionOf(tree);   // avant replaceState : < 3 = ancien son (PolyBLEP 2 points, unisson en phase)
     apvts.replaceState(tree);
     program = juce::jlimit(0, getNumPrograms() - 1, (int)tree.getProperty("program", 0));
 }

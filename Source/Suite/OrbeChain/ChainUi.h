@@ -12,7 +12,7 @@ namespace oc {
 // Pont entre l'hôte et le moteur : latence, bypass compensé, compteurs pour l'interface.
 struct Host {
     Chain chain; BypassDelay byp; bypassfx::Fader fader;
-    std::atomic<float> peak{0.f}, level{0.f}, reduction{0.f}, shift{0.f};
+    std::atomic<float> peak{0.f}, level{0.f}, reduction{0.f}, shift{0.f}, autoGain{0.f};   // autoGain : correction du niveau automatique (dB)
     std::atomic<int> keyPc{-1}, keyScale{1};
     int prepare(double sr, int block) { chain.prepare(sr); byp.init(chain.latency()); fader.prepare(sr, chain.latency(), juce::jmax(4096, block)); return chain.latency(); }
     void bypassed(juce::AudioBuffer<float>& b, bool stereoIn) { if (b.getNumChannels() >= 2) byp.process(b.getWritePointer(0), b.getWritePointer(1), b.getNumSamples(), stereoIn); }
@@ -24,7 +24,7 @@ struct Host {
         float* l = b.getWritePointer(0); float* r = b.getWritePointer(1);
         kit::sanitize(l, b.getNumSamples()); if (stereoIn) kit::sanitize(r, b.getNumSamples());   // NaN/inf d'un plugin précédent : remplacés par 0
         fader.run(l, r, b.getNumSamples(), stereoIn, bypass, [&](float* cl, float* cr, int c) { chain.process(cl, stereoIn ? cr : nullptr, cl, cr, c); });
-        peak.store(chain.outPeak()); level.store(std::sqrt(chain.outMeanSquare())); reduction.store(chain.gainReduction()); shift.store(chain.shiftSemis());
+        peak.store(chain.outPeak()); level.store(std::sqrt(chain.outMeanSquare())); reduction.store(chain.gainReduction()); shift.store(chain.shiftSemis()); autoGain.store(chain.autoGainDb());
         keyPc.store(chain.keyKnown() ? chain.detectedKey() : -1); keyScale.store(chain.detectedScale());
     }
 };

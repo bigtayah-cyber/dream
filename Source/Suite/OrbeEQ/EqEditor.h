@@ -45,7 +45,7 @@ private:
     std::unique_ptr<EqGraph> graph;
     std::unique_ptr<BandChips> chips;
     std::unique_ptr<EqField> fFreq, fGain, fQ;
-    juce::ComboBox typeBox;
+    juce::ComboBox typeBox, slopeBox;   // slopeBox : pente du coupe-bas / coupe-haut (lot E)
     kit::v3::rk::Key onKey, aKey, bKey;
     kit::v3::bridge::Power power;
     std::unique_ptr<of::Pot> outPot;

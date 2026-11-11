@@ -123,6 +123,41 @@ int main() {
         CHECK(hd[0] > -12.0, "attaque pas assez saturee (%.1f dB)", hd[0]);
         CHECK(hd[3] < hd[0] - 15.0, "pas de bloom : %.1f dB a 1,2 s contre %.1f dB a 50 ms", hd[3], hd[0]);
     }
+    {   // lot E : relance immédiate. Une note qui interrompt la précédente part à l'échantillon près (fondu croisé de 2,5 ms) : plus de trou.
+        const double sr = 48000;
+        double gap[2];
+        for (int k = 0; k < 2; ++k) {
+            o808::Engine e; e.prepare(sr); o808::Params p; p.click = 0; p.punch = 0; p.drive = 0; p.len = 2; p.retrigMs = k ? 2.5f : 0.f; e.setParams(p);
+            std::vector<float> y((size_t)sr); const int t2 = 14400;
+            e.noteOn(69, 1.f); e.render(y.data(), t2); e.noteOff(69); e.noteOn(76, 1.f); e.render(y.data() + t2, (int)sr - t2);
+            auto rms = [&](int i) { double s = 0; for (int j = 0; j < 48; ++j) s += (double)y[(size_t)(i + j)] * y[(size_t)(i + j)]; return std::sqrt(s / 48); };
+            const double ref = [&] { double s = 0; for (int j = 0; j < 480; ++j) s += (double)y[(size_t)(t2 - 480 + j)] * y[(size_t)(t2 - 480 + j)]; return std::sqrt(s / 480); }();
+            int under = 0; for (int i = t2 + e.latency(); i < t2 + e.latency() + 1440; i += 4) if (rms(i) < 0.3 * ref) under += 4;
+            gap[k] = under / 48.0;
+            CHECK(finite(y) && peakOf(y, 0, y.size()) <= 1.f, "relance : sortie non bornee");
+        }
+        std::printf("808 relance : duree sous 30 %% du niveau : ancien %.1f ms, fondu %.1f ms\n", gap[0], gap[1]);
+        CHECK(gap[0] > 2.0 && gap[1] < 0.3, "relance : trou ancien %.1f ms, nouveau %.1f ms", gap[0], gap[1]);
+    }
+    {   // lot E : « Pliée » (foldScale 0,5) : erreur de repliement contre un rendu à 192 kHz décimé, alignement fractionnaire. Repliée d'origine : -25..-34 dB.
+        auto render = [](double sr, int note, float drive, float fold, int n) { o808::Engine e; e.prepare(sr); o808::Params p; p.sat = 2; p.drive = drive; p.tone = 0.45f; p.cut = 1; p.click = 0; p.punch = 0; p.len = 8; p.foldScale = fold; e.setParams(p);
+            std::vector<float> L((size_t)n); e.noteOn(note, 1.f); for (int i = 0; i < n; i += 256) e.render(&L[(size_t)i], std::min(256, n - i)); return L; };
+        double worst[2] = {-400, -400};
+        for (int k = 0; k < 2; ++k) for (int note : {33, 45}) {
+            const float fold = k ? 0.5f : 1.f;
+            auto a = render(48000, note, 1.f, fold, 48000), b = render(192000, note, 1.f, fold, 192000);
+            const int T = 255; std::vector<double> h((size_t)T); double sum = 0;
+            for (int i = 0; i < T; ++i) { const double m = i - (T - 1) / 2.0, x = 2 * 20000.0 / 192000.0 * m, sc = m == 0 ? 1 : std::sin(3.14159265358979 * x) / (3.14159265358979 * x), w = 0.42 - 0.5 * std::cos(2 * 3.14159265358979 * i / (T - 1)) + 0.08 * std::cos(4 * 3.14159265358979 * i / (T - 1)); h[(size_t)i] = sc * w; sum += h[(size_t)i]; }
+            for (auto& x : h) x /= sum;
+            std::vector<float> d(48000); for (int i = 0; i < 48000; ++i) { double acc = 0; for (int q = 0; q < T; ++q) { const int j = i * 4 + q - (T - 1) / 2; if (j >= 0 && j < 192000) acc += h[(size_t)q] * b[(size_t)j]; } d[(size_t)i] = (float)acc; }
+            auto at = [&](double pos) { const int i = (int)std::floor(pos); const double f = pos - i, y0 = a[(size_t)i - 1], y1 = a[(size_t)i], y2 = a[(size_t)i + 1], y3 = a[(size_t)i + 2]; return y1 + 0.5 * f * (y2 - y0 + f * (2 * y0 - 5 * y1 + 4 * y2 - y3 + f * (3 * (y1 - y2) + y3 - y0))); };
+            double best = 1e30;
+            for (double lag = 30; lag <= 38; lag += 0.02) { double e2 = 0, r2 = 0; for (int i = 24000; i < 36000; ++i) { const double x = at(i + lag), y = d[(size_t)i]; e2 += (x - y) * (x - y); r2 += y * y; } best = std::min(best, e2 / r2); }
+            worst[k] = std::max(worst[k], 10 * std::log10(best));
+        }
+        std::printf("808 repliement (erreur vs 192 kHz, drive 1, pire de A1/A2) : Repliee d'origine %.1f dB, Pliee %.1f dB\n", worst[0], worst[1]);
+        CHECK(worst[1] < -40.0 && worst[1] < worst[0] - 15.0, "Pliee : erreur de repliement %.1f dB (origine %.1f)", worst[1], worst[0]);
+    }
     std::printf(fails ? "orbe808_test : %d echec(s)\n" : "orbe808_test : OK\n", fails);
     return fails ? 1 : 0;
 }

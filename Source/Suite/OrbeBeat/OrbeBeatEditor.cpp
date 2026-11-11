@@ -97,12 +97,14 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
     chainSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("chain"), juce::StringArray{"Aucun", "A B", "A B C D"}, pal);
     midiSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("midimap"), juce::StringArray{"GM + 808", u8("Canal 10 = batterie")}, pal);
     modeSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("mode"), juce::StringArray{"Mineur", "Majeur"}, pal);
+    outSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("outs"), juce::StringArray{"Mix", "Mix + 8", "8 seules"}, pal);
+    outSeg->setTooltip(u8("Sorties séparées : activez les bus « Piste 1 à 8 » dans l'hôte (une piste par sortie : kick, snare, clap, charleston fermé et ouvert, rim, tom, 808). Mix : sortie principale seule. Mix + 8 : la principale garde tout. 8 seules : la principale se tait."));
     accSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("accid"), kit::v3::notes::accidentalLabels(), pal);
     accSeg->setTooltip(kit::v3::notes::accidentalTip());
     patSeg->setTooltip(u8("Pattern à éditer et à jouer (A à D)"));
     chainSeg->setTooltip(u8("Joue les patterns à la suite, un par durée de pattern, en suivant le transport"));
     midiSeg->setTooltip(u8("GM + 808 : les notes de batterie GM déclenchent les pistes, les autres notes jouent l'808. Canal 10 = batterie : seul le canal 10 est de la batterie, le reste joue l'808."));
-    for (auto* c : {(juce::Component*)patSeg.get(), (juce::Component*)stepsSeg.get(), (juce::Component*)chainSeg.get(), (juce::Component*)midiSeg.get(), (juce::Component*)modeSeg.get(), (juce::Component*)accSeg.get(), (juce::Component*)&grid}) addAndMakeVisible(c);
+    for (auto* c : {(juce::Component*)outSeg.get(), (juce::Component*)patSeg.get(), (juce::Component*)stepsSeg.get(), (juce::Component*)chainSeg.get(), (juce::Component*)midiSeg.get(), (juce::Component*)modeSeg.get(), (juce::Component*)accSeg.get(), (juce::Component*)&grid}) addAndMakeVisible(c);
 
     for (auto* b : {&genB, &varyB, &clearB, &auditionB}) addAndMakeVisible(b);
     genB.setTooltip(u8("Remplit le pattern courant avec un motif adapté au kit"));
@@ -171,7 +173,7 @@ OrbeBeatEditor::OrbeBeatEditor(OrbeBeatProcessor& p) : AudioProcessorEditor(&p),
         swingK.setVisible(!n3); masterK.setVisible(!n3);
         for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
         const auto* tp = skin.tp();
-        for (auto* s : {patSeg.get(), stepsSeg.get(), chainSeg.get(), midiSeg.get(), modeSeg.get(), accSeg.get()}) { s->T = tp; s->px = 11.5f; s->repaint(); }
+        for (auto* s : {patSeg.get(), stepsSeg.get(), chainSeg.get(), midiSeg.get(), modeSeg.get(), accSeg.get(), outSeg.get()}) { s->T = tp; s->px = 11.5f; s->repaint(); }
         for (auto* b : {&genB, &varyB, &clearB, &auditionB, &toolB[0], &toolB[1], &toolB[2], &toolB[3]}) b->T = tp;
         for (int i = 0; i < kLanes; ++i) { muteB[i].T = tp; soloB[i].T = tp; }
         help.T = tp; handle->T = tp; grid.T = tp; repaint();
@@ -211,6 +213,7 @@ void OrbeBeatEditor::resized() {
     modeSeg->setBounds(Si(796, 470, 92, 28));
     seqB.setBounds(Si(660, 534, 200, 22));
     handle->setBounds(Si(900, 470, 176, 74));
+    outSeg->setBounds(Si(900, 556, 176, 28));
     repaint();
 }
 
@@ -340,6 +343,7 @@ void OrbeBeatEditor::resized3() {
     modeSeg->setBounds(Si(788, 474, 94, 30));
     seqB.setBounds(Si(660, 540, 200, 24));
     handle->setBounds(Si(904, 474, 168, 78));
+    outSeg->setBounds(Si(904, 562, 168, 30));
     repaint();
 }
 

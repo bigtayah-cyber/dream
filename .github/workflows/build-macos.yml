@@ -37,7 +37,7 @@ jobs:
           done
           # deux paquets (GitHub refuse un fichier de plus de 100 Mo) : effets et instruments
           mkdir -p dist-instruments
-          for N in "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne"; do
+          for N in "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" "Orbe Rythme"; do
             mv "dist/$N.vst3" "dist/$N.component" dist-instruments/ 2>/dev/null || true
           done
           mkdir -p dist-studio
@@ -52,13 +52,13 @@ jobs:
           ditto -c -k dist-studio dreamaws-studio-macOS.zip
           ditto -c -k dist-instruments dreamaws-instruments-macOS.zip
 
-      - name: Vérifier les 26 plugins (VST3 et AU)
+      - name: Vérifier les 27 plugins (VST3 et AU)
         run: |
-          # Un plugin absent fait échouer le job (la liste est explicite : 26 plugins).
+          # Un plugin absent fait échouer le job (la liste est explicite : 27 plugins).
           MISSING=0
           for N in "Voile" "Grain Nord" "Gorge" "Poupee" "Patine" \
                    "Orbe Looks" "Orbe Atelier" "Orbe Autotune" "Orbe Denoiser" "Orbe DeEsser" "Orbe Relance" \
-                   "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" \
+                   "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" "Orbe Rythme" \
                    "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix" "Orbe Galet" "Orbe Accroc"; do
             for EXT in vst3 component; do
               F=$(ls -d dist/"$N.$EXT" dist-studio/"$N.$EXT" dist-instruments/"$N.$EXT" 2>/dev/null | head -1 || true)

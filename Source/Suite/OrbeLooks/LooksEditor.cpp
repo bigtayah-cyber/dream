@@ -38,6 +38,13 @@ LooksEditor::LooksEditor(LooksProcessor& p) : AudioProcessorEditor(&p), proc(p),
     keyBox.setTooltip(u8("Tonalité de la correction de hauteur. Auto : détection prudente, aucune correction tant qu'elle n'est pas sûre."));
     scaleBox.setTooltip(u8("Mode utilisé quand la tonalité est choisie à la main."));
     addAndMakeVisible(keyBox); addAndMakeVisible(scaleBox);
+    keyPaster.apply = [this](const kit::keyparse::Key& k) {
+        auto setP = [this](const char* id, int idx) { if (auto* q = proc.apvts.getParameter(id)) q->setValueNotifyingHost(q->convertTo0to1((float)idx)); };
+        setP("key", k.pc + 1); setP("scale", k.minor ? 1 : 0); };
+    keyPaster.attach(keyBox);
+    keepBtn.setButtonText(u8("Garder mes macros"));
+    keepBtn.setTooltip(u8("Allumé : changer de look garde vos 4 macros (comparez les looks avec vos réglages). Éteint : chaque look reprend ses macros d'origine."));
+    addAndMakeVisible(keepBtn); keepAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "keep", keepBtn);
     keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, "key", keyBox);
     scaleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, "scale", scaleBox);
     accSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "accid", v3::notes::accidentalLabels(), v3::notes::accidentalTip(), pal);
@@ -126,6 +133,7 @@ void LooksEditor::resized3() {
     k3[4]->setBounds(Si(631 - 40, 384, 80, mh)); k3[5]->setBounds(Si(709 - 40, 384, 80, mh));
     keyBox.setBounds(Si(782, 368, 84, 36)); scaleBox.setBounds(Si(872, 368, 90, 36));
     accSeg->setBounds(Si(912, 332, 50, 28)); accSeg->px = 14.f * u_;
+    keepBtn.setBounds(Si(770, 334, 138, 24));
 }
 
 void LooksEditor::resized() {
@@ -142,6 +150,7 @@ void LooksEditor::resized() {
     prev.setBounds(Si(30, 117, 20, 26)); next.setBounds(Si(410, 117, 20, 26));
     keyBox.setBounds(Si(28, 366, 100, 30)); scaleBox.setBounds(Si(136, 366, 100, 30));
     accSeg->setBounds(Si(244, 366, 60, 30));
+    keepBtn.setBounds(Si(28, 404, 200, 24));
 }
 
 void LooksEditor::timerCallback() {
@@ -152,6 +161,7 @@ void LooksEditor::timerCallback() {
     grDisp = juce::jmax(gr, grDisp - 0.5f);
     shiftDisp += (sh - shiftDisp) * 0.4f;
     moved = proc.macrosMoved();
+    autoGainDisp += (proc.host.autoGain.load() - autoGainDisp) * 0.3f;
     {   // état réel des modules : interrupteur du module × dosage effectif ; tout éteint si l'effet est court-circuité
         const auto st = proc.settings();
         const bool byp = proc.apvts.getRawParameterValue("bypass")->load() > 0.5f;
@@ -276,6 +286,8 @@ void LooksEditor::paint3(juce::Graphics& g) {
     g.setColour(T.scrInk);
     v3::tabular(g, v3::fmt::db(grDisp > 0.05f ? -(double)grDisp : 0.0, 1), S(676, 214, 140, 28), v3::font(22.f * u, true), juce::Justification::centredLeft);
     v3::tabular(g, outDb <= -59.f ? String(v3::fmt::minus()) + u8("∞") : v3::fmt::db(outDb, 1), S(826, 214, 140, 28), v3::font(22.f * u, true), juce::Justification::centredLeft);
+    g.setColour(T.scrMute); v3::caps(g, u8("Niveau auto"), S(676, 250, 130, 16), 11.f * u, juce::Justification::centredLeft);
+    g.setColour(T.scrInk); v3::tabular(g, v3::fmt::db(autoGainDisp, 1), S(826, 246, 140, 22), v3::font(16.f * u, true), juce::Justification::centredLeft);
     // tonalité détectée (carte)
     String txt; juce::Colour tc = T.ink;
     const int kp = proc.host.keyPc.load(), sc = proc.host.keyScale.load();

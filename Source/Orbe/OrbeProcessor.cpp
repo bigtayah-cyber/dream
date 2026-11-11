@@ -1,4 +1,5 @@
 #include "OrbeProcessor.h"
+#include "../Kit/StateVersion.h"
 #include "OrbeEditor.h"
 #include <algorithm>
 
@@ -38,11 +39,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrbeProcessor::makeLayout() 
 }
 
 juce::AudioProcessor::BusesProperties OrbeProcessor::makeBuses() {
-    auto b = BusesProperties();
-#ifdef ORBE_FX
-    b = b.withInput("Input", juce::AudioChannelSet::stereo(), true);
-#endif
-    return b.withOutput("Output", juce::AudioChannelSet::stereo(), true);
+    return BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true);
 }
 
 OrbeProcessor::OrbeProcessor()
@@ -62,11 +59,7 @@ OrbeProcessor::~OrbeProcessor() {
 }
 
 bool OrbeProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
-#ifdef ORBE_FX
-    return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() && l.getMainInputChannelSet() == juce::AudioChannelSet::stereo();
-#else
     return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() && l.getMainInputChannelSet().isDisabled();
-#endif
 }
 
 void OrbeProcessor::prepareToPlay(double sampleRate, int) {
@@ -137,6 +130,7 @@ void OrbeProcessor::setStateInformation(const void* data, int size) {
 
 void OrbeProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto tree = apvts.copyState();
+    kit::stampState(tree);
     tree.setProperty("seed", (int)seed, nullptr);
     tree.setProperty("leadSeed", (int)leadSeed, nullptr);
     String prog, lk;
@@ -249,7 +243,7 @@ void OrbeProcessor::publish() {
             r->ev.push_back({t, n.d, (uint8_t)n.n, (uint8_t)track, juce::jlimit(0.05f, 1.f, n.v * (1.f + j2 * 0.18f * human)), (uint8_t)n.gl});
         }
     };
-    add(song.nChords, 0); add(song.nLead, 1); add(song.nBass, 2); add(song.nDrums, 3);
+    add(song.nChords, 0); add(song.nLead, 1); add(song.nBass, 2);   // piste 3 (batterie) : jouée par Orbe Rythme
     std::sort(r->ev.begin(), r->ev.end(), [](const OrbeEv& a, const OrbeEv& b) { return a.t < b.t; });
     publishReq = false;
     const auto now = juce::Time::getMillisecondCounter();
@@ -278,9 +272,7 @@ juce::File OrbeProcessor::writeMidiFile(bool c, bool l, bool b, bool d) {
 void OrbeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
     juce::ScopedNoDenormals nd;
     const int n = buffer.getNumSamples();
-#ifndef ORBE_FX
-    buffer.clear();  // version effet : l'audio entrant passe tel quel, l'aperçu s'y ajoute
-#endif
+    buffer.clear();
     if (buffer.getNumChannels() < 2) return;
 
     const OrbeRendered* r = live.load(std::memory_order_acquire);
@@ -311,7 +303,7 @@ void OrbeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         for (int k = 0; k < 2; ++k)
             for (const auto& e : r->ev) {
                 const double te = (double)e.t + k * L;
-                if (te < p0 || te >= p1 || nt >= 512 || mute[e.track]) continue;
+                if (te < p0 || te >= p1 || nt >= 512 || e.track > 2 || mute[e.track]) continue;
                 trigs[nt++] = {juce::jlimit(0, n - 1, (int)((te - p0) / sps)), e.track, e.n, std::max(1, (int)((double)e.d / sps)), e.v * vol[e.track], e.gl != 0};
             }
     }
@@ -320,7 +312,6 @@ void OrbeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     int pos = 0;
     float* Lc = buffer.getWritePointer(0);
     float* Rc = buffer.getWritePointer(1);
-    // MASTER ne règle que l'aperçu généré : dans Orbe FX, l'audio entrant traverse inchangé
     const float master = prMaster->load();
     static const int chans[4] = {1, 2, 3, 10};
     for (int i = 0; i < nt; ++i) {

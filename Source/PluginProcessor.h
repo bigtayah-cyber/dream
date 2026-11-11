@@ -53,6 +53,8 @@ private:
     // bypass : sortie = entrée retardée de la latence, fondu de 10 ms ; le moteur tourne toujours (queues à jour, aucun fantôme)
     void run(juce::AudioBuffer<float>&, bool bypassed);
 
+    static constexpr int kDspVersion = 2;   // 1 : Mordant non compensé et Halo presque mono (projets d'avant) ; 2 : compensé, stéréo
+    std::atomic<int> dspVersion{kDspVersion};
     voile::Engine engine;
     bypassfx::Fader fader;
     juce::RangedAudioParameter* bypass = nullptr;  // choix à 2 valeurs (0 actif, 1 contourné), déclaré en dernier

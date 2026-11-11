@@ -244,7 +244,7 @@ void MixMeter::reset() {
     hi.clear(); hs.clear();
     for (auto* b : {&kA[0], &kA[1], &kB[0], &kB[1]}) b->x1 = b->x2 = b->y1 = b->y2 = 0;
     segFill = segCount = 0; aSum = bSum = 0; std::fill(segP, segP + 30, 0.0);
-    std::memset(hx, 0, sizeof hx);
+    tp4.reset();
     peakLin = tpLin = sL = sR = LL = RR = LR = cl = cr = clr = 0; run = clips = 0; total = 0; ring = 0; nFrames = 0;
     std::fill(rm.begin(), rm.end(), 0.0); std::fill(rs.begin(), rs.end(), 0.0); std::fill(pm.begin(), pm.end(), 0.0); std::fill(ps.begin(), ps.end(), 0.0); std::fill(live.begin(), live.end(), 0.f);
 }
@@ -266,15 +266,8 @@ void MixMeter::process(const float* L, const float* R, int n) {
         peakLin = std::max(peakLin, m); sL += l; sR += r; LL += l * l; RR += r * r; LR += l * r;
         cl = cl * al + l * l * (1 - al); cr = cr * al + r * r * (1 - al); clr = clr * al + l * r * (1 - al);
         if (m >= .9995) { if (++run == 3) ++clips; } else run = 0;
-        const double thr = peakLin * .6;
-        for (int c = 0; c < (mono ? 1 : 2); ++c) {
-            double* h = hx[c]; h[0] = h[1]; h[1] = h[2]; h[2] = h[3]; h[3] = c ? r : l;
-            if (std::abs(h[1]) < thr && std::abs(h[2]) < thr) continue;
-            for (double t : {.25, .5, .75}) {
-                const double c0 = h[1], c1 = .5 * (h[2] - h[0]), c2 = h[0] - 2.5 * h[1] + 2 * h[2] - .5 * h[3], c3 = .5 * (h[3] - h[0]) + 1.5 * (h[1] - h[2]);
-                tpLin = std::max(tpLin, std::abs(((c3 * t + c2) * t + c1) * t + c0));
-            }
-        }
+        // pic vrai : sur-échantillonnage ×4 polyphasé (code commun avec Orbe Master, voir Dsp/TruePeak.h)
+        tpLin = std::max(tpLin, (double)tp4.push((float)l, (float)r));
         const double kl = kA[1].run(kA[0].run(l)), kr = mono ? kl : kB[1].run(kB[0].run(r));
         aSum += kl * kl; bSum += kr * kr;
         rm[(size_t)ring] = (l + r) * .5; rs[(size_t)ring] = (l - r) * .5; ring = (ring + 1) & 4095; ++total;

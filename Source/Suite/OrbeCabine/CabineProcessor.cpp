@@ -1,4 +1,5 @@
 #include "CabineProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "CabineEditor.h"
 #include "../../Kit/Kit.h"
 #include "../../Kit/Sanitize.h"
@@ -22,6 +23,9 @@ const Def kDefs[] = {
     {"rev",  "Reverb",      0.f, 1.f, 0.01f, 0.f, " %", &cab::Params::rev},
     {"dly",  "Delay",       0.f, 1.f, 0.01f, 0.f, " %", &cab::Params::dly},
     {"out",  "Sortie",      -24.f, 12.f, 0.1f, 0.f, " dB", &cab::Params::out},
+    // Lot E (ajoutés en fin : identifiants existants inchangés). Neutres par défaut ; un état d'avant la v3 les remet à 0 au chargement.
+    {"ingain", "Entr\xC3\xA9" "e",  -24.f, 24.f, 0.1f, 0.f, " dB", &cab::Params::in},
+    {"deess",  "Sifflantes", 0.f, 1.f, 0.01f, 0.f, " %", &cab::Params::des},
 };
 }  // namespace
 
@@ -35,7 +39,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout CabineProcessor::makeLayout(
         NormalisableRange<float> r(d.lo, d.hi, d.step);
         if (d.centre > 0.f) r.setSkewForCentre(d.centre);
         const bool pct = String(d.unit) == " %";
-        l.add(std::make_unique<AudioParameterFloat>(ParameterID{d.id, 1}, u8(d.name), r, def.*d.field,
+        const float dv = String(d.id) == "ingain" ? 0.f : def.*d.field;   // gain d'entrée neutre ; sifflantes = celles du preset par défaut (v3)
+        l.add(std::make_unique<AudioParameterFloat>(ParameterID{d.id, 1}, u8(d.name), r, dv,
             AudioParameterFloatAttributes().withStringFromValueFunction([d, pct](float v, int) {
                 if (pct) return String(juce::roundToInt(v * 100.f)) + " %";
                 if (String(d.id) == "lp" && v >= 19900.f) return u8("coup\xC3\xA9");
@@ -122,11 +127,19 @@ void CabineProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 }
 
 void CabineProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, dest);
+    auto st = apvts.copyState();
+    kit::stampState(st, kit::kStateVersionDsp);
+    if (auto xml = st.createXml()) copyXmlToBinary(*xml, dest);
 }
 void CabineProcessor::setStateInformation(const void* data, int size) {
     if (auto xml = getXmlFromBinary(data, size))
-        if (xml->hasTagName(apvts.state.getType())) apvts.replaceState(juce::ValueTree::fromXml(*xml));
+        if (xml->hasTagName(apvts.state.getType())) {
+            auto tree = juce::ValueTree::fromXml(*xml);
+            const int ver = kit::stateVersionOf(tree);
+            apvts.replaceState(tree);
+            if (ver < kit::kStateVersionDsp)   // projet d'avant : sans de-esser ni gain d'entrée, son inchangé
+                for (const char* id : {"ingain", "deess"}) if (auto* a = apvts.getParameter(id)) a->setValueNotifyingHost(a->convertTo0to1(0.f));
+        }
 }
 
 juce::AudioProcessorEditor* CabineProcessor::createEditor() { return new CabineEditor(*this); }

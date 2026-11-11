@@ -28,6 +28,10 @@ struct S {
     float lmOn = 1, lmCeil = -1;
     float mix = 1, out = 0, lvBias = 0;  // lvBias : décalage du niveau automatique (dB), interne
     float agInit = 0;                     // gain de départ du niveau automatique (dB, = trim statique du look) : pas de 1re phrase trop forte
+    // Niveau automatique : temps de montée et de descente du gain (s). v1 : 0,6 et 0,1 (pompe à l'échelle de la phrase) ; v2 (Looks) : 2 et 0,8.
+    float agRise = 0.6f, agFall = 0.1f;
+    float dsFirst = 0;   // 1 : le de-esser passe avant le compresseur (juste après l'EQ) au lieu d'après la saturation (Atelier ; réglage de session, jamais dans un preset)
+    float agRange = 0;   // > 0 : la correction automatique reste à ± agRange dB du gain statique du look (v2 de Looks : 3 dB) ; 0 : libre (0,1 à 3)
 };
 
 // Contournement : l'entrée exactement retardée de la latence déclarée.
@@ -109,6 +113,10 @@ public:
         if (!agPrimed) ag = std::pow(10.f, s.agInit / 20.f);   // aucune voix encore entendue : départ au gain calibré du look
         else if (lastValid && s.agInit != last.agInit) {       // changement de look : saut de gain calibré, fondu sur 20 ms
             const float r = std::pow(10.f, (s.agInit - last.agInit) / 20.f); ag = std::clamp(ag * r, 0.1f, 3.f); agK.v /= r; }
+        if (!lastValid || s.agRise != last.agRise) agC = 1.f - std::exp(-1.f / (std::max(0.05f, s.agRise) * sr));
+        if (!lastValid || s.agFall != last.agFall) agD = 1.f - std::exp(-1.f / (std::max(0.02f, s.agFall) * sr));
+        if (s.agRange > 0.f) { const float st = std::pow(10.f, s.agInit / 20.f), k = std::pow(10.f, s.agRange / 20.f); agLo = st / k; agHi = st * k; }
+        else { agLo = 0.1f; agHi = 3.f; }
         last = s; lastValid = true;
     }
     void setBpm(double b) { bpm = (float)(b > 20.0 ? b : 120.0); }
@@ -120,6 +128,7 @@ public:
     float outMeanSquare() const { return meanSq; }
     float gainReduction() const { return comp.gr * cpE.v; }
     float shiftSemis() const { return shiftSm; }
+    float autoGainDb() const { return 20.f * std::log10(std::max(1e-4f, ag * agK.v)); }   // correction du niveau automatique (dB), pour la jauge
     void setAutoLevel(bool on) { autoLevel = on; }
 
     // Entrée mono (inR nul) ou stéréo -> sortie stéréo. Fonctionne en place.
@@ -149,6 +158,8 @@ public:
             const float e = eqE.next(P.eqOn > 0.5f ? 1.f : 0.f);
             if (e > 1e-4f) { const float q = b2F.process(b1F.process(lsF.process(hpF.process(y)))); y += (hsF.process(q) - y) * e; }
             else { hpF.process(y); }
+            const float de = dsE.next(P.dsOn > 0.5f ? 1.f : 0.f);
+            if (P.dsFirst > 0.5f) { const float z = ds.process(y); y += (z - y) * de; }   // « De-ess avant comp » : les sifflantes ne sont ni comprimées ni saturées
             const float ce = cpE.next(P.cpOn > 0.5f ? 1.f : 0.f), cm = cpMS.next(P.cpMix) * ce;
             {   // silence : l'enveloppe du compresseur reste à son niveau de phrase (déclin ~2 s) ; l'attaque suivante est tenue dès
                 // le premier échantillon au lieu de passer plein pot avec le gain de compensation (claque à la reprise).
@@ -174,9 +185,8 @@ public:
                 y = yd + (dc - yd) * sm;
             } else y = sat.bypass(y);
 
-            // 5. de-ess
-            const float de = dsE.next(P.dsOn > 0.5f ? 1.f : 0.f);
-            { const float z = ds.process(y); y += (z - y) * de; }
+            // 5. de-ess (ordre d'origine)
+            if (P.dsFirst <= 0.5f) { const float z = ds.process(y); y += (z - y) * de; }
 
             // 6. doubleur (deux voix décalées en hauteur, ouvertes en stéréo)
             const float m = dbS.next(P.dbOn > 0.5f ? P.dbMix : 0.f) * 0.7f;
@@ -200,7 +210,10 @@ public:
 
             // niveau automatique lent (Orbe Looks) : le traité garde le niveau de la voix d'entrée
             outMs += (0.5f * (wl * wl + wr * wr) - outMs) * rmsC;
-            if (autoLevel && inMs > 1e-4f) { agPrimed = true; const float t = std::clamp(std::sqrt(inMs / (outMs + 1e-9f)) * std::pow(10.f, P.lvBias / 20.f), 0.1f, 3.f); ag += (t - ag) * (t < ag ? agD : agC); }
+            if (autoLevel && inMs > 1e-4f) {
+                agPrimed = true;
+                const float t = std::clamp(std::sqrt(inMs / (outMs + 1e-9f)) * std::pow(10.f, P.lvBias / 20.f), agLo, agHi); ag += (t - ag) * (t < ag ? agD : agC);
+            }
             if (!autoLevel) ag = 1.f;
             { const float k = ag * agK.next(1.f); wl *= k; wr *= k; }
 
@@ -279,6 +292,7 @@ private:
     Smooth eqE, cpE, saE, dsE, dbS, dyS, rvS, mixS, outS, drvS, crS, saMS, cpMS;
     float ratio = 1.f, ratioT = 1.f, ratioC = 0.01f, shiftSm = 0.f, shiftT = 0.f, acc = 0.f, held = 0.f, dcX = 0.f, dcY = 0.f;
     float cpHold = 0.f, gateC = 1e-5f; Smooth agK, vGate; bool agPrimed = false, voiced = false;
+    float agLo = 0.1f, agHi = 3.f;
     float inMs = 1e-6f, outMs = 1e-6f, ag = 1.f, agC = 1e-4f, agD = 1e-3f, rmsC = 1e-4f, lvl = 0.f, peak = 0.f, meanSq = 0.f;
     int decCount = 0, hopCount = 0, holdCnt = 0, hold = 0, lastTgt = -1;
     float hist[12] = {}, wgt = 0.f; int keyTick = 0, effKey = 0, effScale = 1; bool haveKey = false, autoLevel = false;

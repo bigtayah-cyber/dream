@@ -22,7 +22,7 @@ private:
 class MidiHandle : public juce::Component {
 public:
     MidiHandle(OrbeProcessor& p, const kit::Palette& pal) : proc(p), P(pal) { setMouseCursor(juce::MouseCursor::DraggingHandCursor); }
-    bool chord = true, lead = true, bass = true, drums = true;
+    bool chord = true, lead = true, bass = true, drums = false;   // la batterie est exportée par Orbe Rythme
     const kit::v3::Theme* T = nullptr;
     void paint(juce::Graphics& g) override;
     void mouseDrag(const juce::MouseEvent& e) override;
@@ -47,6 +47,7 @@ public:
     static kit::Palette palette();
 
 private:
+    static constexpr int kNT = 3;   // pistes d'Orbe : accords, lead, basse (la batterie est dans Orbe Rythme ; piste 3 du moteur inchangée)
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboAtt = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;

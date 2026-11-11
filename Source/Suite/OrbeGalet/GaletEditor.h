@@ -37,6 +37,9 @@ private:
     juce::OwnedArray<kit::v3::rk::Key> modKeys;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> modAtts;
     kit::v3::rk::Key snapKey;
+    std::unique_ptr<kit::v3::rk::Key> linkKey;                 // lot E : formes séparées par module
+    juce::OwnedArray<kit::v3::rk::Key> modSel;                  // module dont on édite la forme (visible quand les formes sont séparées)
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAtt;
     juce::OwnedArray<kit::v3::bridge::PushKey> starts;
     juce::ComboBox presets;
     kit::v3::bridge::Power power;

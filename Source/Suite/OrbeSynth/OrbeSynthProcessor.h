@@ -36,6 +36,7 @@ public:
     std::atomic<float> bend{0.f}, mod{0.f};  // molettes (écran ou MIDI), -1..1 et 0..1
     std::atomic<int> voices{0};
     std::atomic<float> hostBpm{0.f};
+    std::atomic<int> loadedVersion{3};   // version d'état lue (nouvelle instance : 3) ; < 3 : ancien son des oscillateurs
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout();

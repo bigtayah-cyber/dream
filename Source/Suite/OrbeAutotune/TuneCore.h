@@ -44,6 +44,14 @@ struct Params {
     // au 2e ordre (glissement glideMs), voix corrigée jamais mélangée au sec quand la correction frôle zéro (pas de peigne).
     bool satin = false;
     float glideMs = 40.f;
+    // ---- P1/P2 (valeurs par défaut = comportement historique)
+    int stabMs = 0;           // stabilisateur de notes : une nouvelle note doit tenir ce temps (ms) avant d'être adoptée (Direct : borné à 40)
+    float warble = 1.f;       // 1 = bascule de note libre sur un vibrato à cheval (historique) ... 0 = la note se décide sur le centre lent
+    float human = 0.f;        // 0..1 : la vitesse se relâche quand la note dure (sustain)
+    float transMs = 0.f;      // vitesse de transition entre notes (ms) ; 0 = celle de speedMs
+    float overshoot = 0.f;    // 0..1 : dépassement de la cible au changement de note (vitesse « négative »)
+    float track = 0.f;        // 0 = suivi serré (historique) ... 1 = souple (voix soufflées)
+    bool attack = false;      // Direct : attaque voisée accordée dès les premières ms (estimateur court)
 };
 
 // État publié à chaque trame d'analyse (aligné sur l'échantillon qui sort du décaleur).
@@ -58,7 +66,7 @@ struct State {
 
 class TuneCore {
 public:
-    static constexpr int kRing = 16384, kMask = kRing - 1, kK = 5, kF = 16, kKRing = 128, kMaxP = 80;
+    static constexpr int kRing = 16384, kMask = kRing - 1, kK = 5, kF = 16, kKRing = 128, kMaxP = 80, kWq = 64;
 
     void prepare(double sampleRate, int directLatency, int qualityLatency) {
         sr = sampleRate;
@@ -115,6 +123,7 @@ public:
         st = State{}; sCur = sTgt = sStep = 0.f; offCur = offStep = 0.f; wetG = 0.f; wetTgt = 0.f;
         c1 = c2a = c2b = 0.f; vibVar = 0.f; glideRun = 0.f; glideSign = 0; slope = 0.f; pPrev = 0.f; noteCur = -1.f; unvHops = 1000; glide = 0.f; c1Prev = 0.f; heldS = 0.f;
         sG = 0.f; pH[0] = pH[1] = pH[2] = 0.f; nP = 0; t0S = 0.f;
+        noteAge = 0.f; candN = -1.f; candAge = 0.f; transT = 0.f; ovS = 0.f; atkT = 0.f; qPrev = 0.f;
         dryA = 0.f;
     }
 
@@ -149,8 +158,7 @@ public:
             wetG += clampf(wetTgt - wetG, -wetRate, wetRate);
             const float semi = (wetG > 0.f) ? sCur + offCur * 0.01f : 0.f;
             const float ratio = std::exp2(semi * (1.f / 12.f));
-            const float cents = std::fabs(semi) * 100.f;
-            const float a = Pm.satin ? wetG : sat((cents - 0.5f) * 0.4f) * wetG;   // Satin : pas de mélange partiel sec/corrigé (retards différents = peigne)
+            const float a = wetG;   // jamais de mélange partiel sec/corrigé : deux copies à retards différents font un peigne (2,5 dB RMS mesurés à +2 ct)
             float out[2];
             const bool useRes = Pm.formants;
             if (a <= 0.f) {
@@ -299,7 +307,7 @@ private:
             // période (2T, 3T...) qu'à T ; on perdrait la bonne octave.
             float gmin = 1.f;
             for (int t = tMin + 1; t < tMax; ++t) gmin = std::min(gmin, cm[(size_t)t]);
-            const float thr = std::min(0.6f, gmin + 0.3f);
+            const float thr = std::min(0.6f + 0.15f * Pm.track, gmin + 0.3f);
             for (int t = tMin + 1; t < tMax && F.n < kK; ++t) {
                 const float v = cm[(size_t)t];
                 if (!(v < thr && v <= cm[(size_t)t - 1] && v < cm[(size_t)t + 1])) continue;
@@ -316,7 +324,9 @@ private:
         // score de voisement : périodicité x pas de bruit haute fréquence x énergie suffisante
         const float per = 1.f - cmin;
         const float gate = (rms > 2.5e-4f && rms > 0.008f * rmsPeak) ? 1.f : 0.f;
-        const float v = sat((per - 0.5f) / 0.3f) * sat((0.42f - hf) / 0.22f) * gate;
+        // Suivi (track) : 0 = seuils historiques ; 1 = voisement admis à périodicité plus faible et à souffle plus fort (voix soufflées)
+        const float trk = sat(Pm.track);
+        const float v = sat((per - (0.5f - 0.2f * trk)) / 0.3f) * sat(((0.42f + 0.3f * trk) - hf) / 0.22f) * gate;
         F.v = v; F.fric = hf; F.conf = per;
         // coûts locaux (pénalité de sous-harmonique : un candidat à tau/2 presque aussi bon = probable erreur d'octave basse)
         const float raw0[kK] = {F.cost[0], F.cost[1], F.cost[2], F.cost[3], F.cost[4]};
@@ -353,6 +363,47 @@ private:
             mn = std::min(mn, F.acc[j]);
         }
         for (int j = 0; j < ns; ++j) F.acc[j] -= mn;
+    }
+
+    // Attaque accordée (Direct) : tant que l'analyse normale n'a pas tranché, estimateur court (fenêtre de 64 éch. décimés, ~6 ms)
+    // sur l'anneau décimé, f0 >= ~150 Hz. NSDF, premier maximum >= 0,9 du meilleur ; accepté si très net, ou confirmé par la trame
+    // précédente. Affiné à pleine fréquence sur une fenêtre courte. Sert de « coup de glotte » accordé : correction dès ~10 ms.
+    bool quickPitch(float& midi, float& conf) {
+        const int tq = std::min(tMax, (int)(decSr / 150.f)), W2 = kWq;
+        const int64_t e = decW;
+        auto at = [&](int64_t i) { return dec[(size_t)(i & kMask)]; };
+        double en = 0.0; for (int j = 0; j < W2; ++j) { const float v = at(e - W2 + j); en += (double)v * v; }
+        const float rq = (float)std::sqrt(en / W2);
+        if (!(rq > 2.5e-4f && rq > 0.008f * rmsPeak)) { qPrev = 0.f; return false; }
+        float sc[256]; if (tq + 2 >= 256) { qPrev = 0.f; return false; }
+        float best = -2.f;
+        for (int t = tMin; t <= tq + 1; ++t) {
+            double xy = 0.0, ee = 1e-12;
+            for (int j = 0; j < W2; ++j) { const float u = at(e - W2 + j), v = at(e - W2 + j - t); xy += (double)u * v; ee += (double)u * u + (double)v * v; }
+            sc[t] = (float)(2.0 * xy / ee); if (t <= tq) best = std::max(best, sc[t]);
+        }
+        if (best < 0.9f) { qPrev = 0.f; return false; }
+        int bt = -1;
+        for (int t = tMin + 1; t <= tq; ++t) if (sc[t] >= 0.9f * best && sc[t] >= sc[t - 1] && sc[t] > sc[t + 1]) { bt = t; break; }
+        if (bt < 0) { qPrev = 0.f; return false; }
+        const float sm = sc[bt - 1], s0 = sc[bt], sp = sc[bt + 1], den = sm - 2.f * s0 + sp;
+        float tf = (float)bt; if (den < -1e-9f) tf += clampf(0.5f * (sm - sp) / den, -0.5f, 0.5f);
+        // affinage pleine fréquence, fenêtre courte
+        const float tc0 = tf * (float)D; const int R = D + 1, t0 = (int)std::lround(tc0), Wl = W2 * D;
+        float bs = -2.f, sr2[2 * 9 + 3]; int bi = 0;
+        for (int dt = -R; dt <= R; ++dt) {
+            double xy = 0.0, ee = 1e-12; const int tau = t0 + dt;
+            for (int j = 0; j < Wl; ++j) { const float u = midAt(nAbs - Wl + j), v = midAt(nAbs - Wl + j - tau); xy += (double)u * v; ee += (double)u * u + (double)v * v; }
+            const float q = (float)(2.0 * xy / ee); sr2[dt + R] = q; if (q > bs) { bs = q; bi = dt; }
+        }
+        float tfull = (float)(t0 + bi);
+        if (bi > -R && bi < R) { const float a = sr2[bi + R - 1], b = sr2[bi + R], c = sr2[bi + R + 1], d2 = a - 2.f * b + c; if (d2 < -1e-9f) tfull += clampf(0.5f * (a - c) / d2, -0.5f, 0.5f); }
+        const float m = hz2midi((float)sr / tfull);
+        if (m < 34.f || m > 90.f) { qPrev = 0.f; return false; }
+        const bool ok = best >= 0.95f || (qPrev > 0.f && std::fabs(m - qPrev) < 0.8f);
+        qPrev = m;
+        if (!ok) return false;
+        midi = m; conf = best; return true;
     }
 
     // Affinage plein débit : NSDF autour du retard décimé, interpolation parabolique.
@@ -400,19 +451,24 @@ private:
         ++frameIdx;
         // trame utilisée pour la correction : celle dont le centre d'analyse tombe sur l'échantillon qui sort
         const Frame& U = fr[(frameIdx - 1 - Dfr) & (kF - 1)];
-        const bool fricNow = !quality && e2 > 0.30f * 4.f * (e1 + 1e-12f);
-        correct(U.valid && U.dVoiced && !fricNow, U.dMidi, U.dConf);
+        const bool fricNow = !quality && e2 > (0.30f + 0.4f * sat(Pm.track)) * 4.f * (e1 + 1e-12f);
+        bool vNow = U.valid && U.dVoiced && !fricNow; float pNow = U.dMidi, cNow = U.dConf, qm = 0.f, qc = 0.f; bool quick = false;
+        const bool tryQuick = !quality && Pm.attack && !fricNow && (!vNow || atkT > 0.f);   // attaque : estimateur court seul, ou plus frais que l'analyse normale pendant les 40 premières ms
+        if (tryQuick && quickPitch(qm, qc) && (!vNow || std::fabs(qm - pNow) < 1.5f)) { vNow = true; pNow = qm; cNow = qc; quick = true; }
+        if (!tryQuick) qPrev = 0.f;
+        correct(vNow, pNow, cNow, quick);
     }
 
     // ------------------------------------------------------------ courbe de correction
-    void correct(bool voiced, float pRaw, float conf) {
+    void correct(bool voiced, float pRaw, float conf, bool quick = false) {
         const float dt = (float)hop / (float)sr;
         // Prédiction : l'estimation de hauteur décrit l'instant (fin de trame - fenêtre/2 - période/2) ; l'échantillon qui sort
         // est l'entrée d'il y a L. L'écart (positif en Direct, ~0 en Qualité) est compensé par extrapolation linéaire.
         float p = pRaw;
         if (voiced && pRaw > 0.f) {
             const float T0 = (float)sr / (440.f * std::exp2((pRaw - 69.f) / 12.f));
-            const float lead = ((float)(Dfr * hop) + 0.5f * (float)Wf + 0.5f * T0 - (float)L) / (float)sr;
+            const float win = quick ? (float)(kWq * D) : (float)Wf;   // l'estimateur court décrit un instant plus récent
+            const float lead = ((float)(Dfr * hop) + 0.5f * win + 0.5f * T0 - (float)L) / (float)sr;
             if (unvHops == 0 && pPrev > 0.f) slope += (1.f - std::exp(-dt / 0.008f)) * ((pRaw - pPrev) / dt - slope); else slope = 0.f;
             pPrev = pRaw;
             p = pRaw + clampf(slope * lead, -0.5f, 0.5f);
@@ -427,12 +483,15 @@ private:
         const float exprU = edit && Pm.editExpr >= 0.f ? Pm.editExpr : Pm.expr;
         const float amount = edit ? Pm.editAmount : Pm.amount;
         // expression conservée : nulle à vitesse 0 (robot), pleine à partir de 50 ms
-        const float h = Pm.satin ? std::max(0.8f, sat(exprU)) : sat(exprU) * sat((speed - 5.f) / 45.f);   // Satin : le vibrato chanté reste (rapport quasi constant)
+        // Humanize / Sustain : plus la note dure, plus la vitesse se relâche (jusqu'à +120 ms) : les notes courtes restent dures
+        const float speedEff = speed + (edit ? 0.f : Pm.human * 120.f * sat((noteAge - 0.08f) / 0.4f));
+        const float h = Pm.satin ? std::max(0.8f, sat(exprU)) : sat(exprU) * sat((speedEff - 5.f) / 45.f);   // Satin : le vibrato chanté reste (rapport quasi constant)
         float desired = 0.f;
         if (voiced) {
             if (unvHops * dt > 0.06f || c1 <= 0.f) {   // début de phrase : centres repartis de la hauteur, correction depuis 0
                 c1 = c2a = c2b = c1Prev = p; noteCur = -1.f; vibVar = 0.f; glide = 0.f; glideRun = 0.f; glideSign = 0; heldS = 0.f;
                 sCur = sTgt = 0.f; sG = 0.f;
+                noteAge = 0.f; candN = -1.f; candAge = 0.f; ovS = 0.f; transT = 0.f; atkT = 0.04f;
             }
             unvHops = 0;
             const float a1 = 1.f - std::exp(-dt / 0.030f), a2 = 1.f - std::exp(-dt / 0.090f);
@@ -450,9 +509,28 @@ private:
             float N = -1.f;
             if (edit) N = Pm.editTarget;
             else if (Pm.forcedNote >= 0) { const float f = (float)Pm.forcedNote; N = f + 12.f * std::round((c1 - f) / 12.f); }
-            else if (Pm.mask & 0xFFF) N = pickNote(c1, Pm.mask, noteCur, Pm.satin ? 0.35f : 0.2f);
-            if (N >= 0.f && N != noteCur && noteCur >= 0.f) { c2a = c2b = c1; }
+            else if (Pm.mask & 0xFFF) {
+                // Warble : 1 = la note se décide sur c1 (bascule libre sur un vibrato à cheval) ; vers 0 elle se décide sur le centre lent
+                // et l'hystérésis s'élargit : le vibrato ne fait plus basculer la note
+                const float wb = sat(Pm.warble);
+                float pn = wb >= 0.999f ? c1 : c2b + wb * (c1 - c2b);
+                if (atkT > 0.f && Pm.attack && !quality && !Pm.satin) pn += clampf(slope * 0.03f, -0.5f, 0.5f);   // attaque : la note se décide sur la hauteur où va la voix (scoop), pas sur celle d'où elle part
+                N = pickNote(pn, Pm.mask, noteCur, (Pm.satin ? 0.35f : 0.2f) + (1.f - wb) * 0.25f);
+                // Stabilisateur : une nouvelle note doit rester la meilleure pendant stabMs avant d'être adoptée (notes brèves ignorées)
+                const float stab = quality ? (float)Pm.stabMs : std::min(40.f, (float)Pm.stabMs);
+                if (stab > 0.f && N >= 0.f && noteCur >= 0.f && N != noteCur) {
+                    if (N == candN) candAge += dt; else { candN = N; candAge = dt; }
+                    if (candAge * 1000.f < stab) N = noteCur;
+                } else { candN = -1.f; candAge = 0.f; }
+            }
+            if (N >= 0.f && N != noteCur && noteCur >= 0.f) {
+                c2a = c2b = c1;
+                transT = 0.06f; noteAge = 0.f;   // fenêtre de transition ; la note recommence son âge
+                if (!edit && Pm.overshoot > 0.f) ovS = Pm.overshoot * 0.15f * clampf(N - noteCur, -2.f, 2.f);   // dépassement de la cible (en demi-tons)
+            }
             noteCur = N;
+            noteAge += dt;
+            if (ovS != 0.f) { ovS *= std::exp(-dt / 0.012f); if (std::fabs(ovS) < 1e-4f) ovS = 0.f; }
             if (N >= 0.f) {
                 float ec = N - c2b;   // erreur du centre
                 const float tol = edit ? 0.f : Pm.tolCents * 0.01f;
@@ -461,6 +539,7 @@ private:
                 desired = amount * (ec + flat);
                 // glissando volontaire : la correction s'efface (jamais en édition ni en robot)
                 if (!edit) desired *= 1.f - h * glide;
+                desired += amount * ovS;
                 desired = clampf(desired, -12.f, 12.f);
             }
             heldS = desired;
@@ -469,7 +548,9 @@ private:
             desired = unvHops * dt <= 0.06f ? heldS : 0.f;
         }
         // pendant un glissando reconnu, la correction se retire vite (25 ms) quelle que soit la vitesse
-        const float spd = glide > 0.5f && voiced && !edit ? std::min(speed, 25.f) : speed;
+        float spd = glide > 0.5f && voiced && !edit ? std::min(speed, 25.f) : speed;
+        if (transT > 0.f) { transT -= dt; if (Pm.transMs > 0.f && !edit) spd = Pm.transMs; }   // vitesse de transition entre notes
+        if (spd == speed && speedEff != speed) spd = speedEff;
         const float al = spd > 0.5f ? 1.f - std::exp(-dt * 1000.f / spd) : 1.f;
         sTgt += al * (desired - sTgt);
         if (Pm.satin) {   // 2e pôle : glissement doux entre notes, aucun escalier dans le rapport
@@ -477,6 +558,8 @@ private:
             sG += ag * (sTgt - sG);
             sStep = (sG - sCur) / (float)hop;
         } else { sG = sTgt; sStep = (sTgt - sCur) / (float)hop; }
+        // attaque accordée (Direct, vitesse dure) : pendant les 30 premières ms d'une voix, la correction est posée sans rampe
+        if (atkT > 0.f) { atkT -= dt; if (Pm.attack && !quality && !Pm.satin && voiced && speed <= 10.f) { sCur = sG; sStep = 0.f; } }
         offStep = (Pm.offsetCents - offCur) / (float)hop;
         const bool active = voiced && (noteCur >= 0.f || std::fabs(Pm.offsetCents) > 0.4f);
         wetTgt = active ? 1.f : 0.f;
@@ -503,6 +586,11 @@ private:
     // sur le résidu. Dans le domaine du résidu (impulsions glottiques blanchies), le raccord ne déplace pas l'enveloppe.
     struct Splicer {
         float d = 0.f, dOld = 0.f, t0 = 300.f;
+        // Lecture « à impulsions conservées » (P2, résidu LPC, descente seulement) : autour de la fermeture glottique le résidu est lu à
+        // vitesse 1 (largeur d'impulsion intacte), le reste de la période est étiré ; la hauteur moyenne ne change pas. Rééchantillonner tout
+        // le résidu étirait l'impulsion : voix assombrie vers le bas (-2,7 dB/oct à -3 dt, -9,6 à -7 dt mesurés). Pondérée par la netteté
+        // des impulsions (énergie autour de la crête) : une voix sans fermeture nette garde la lecture uniforme.
+        double anc = 0.0; bool haveAnc = false, ancDone = false, lastDone = false; float wPulse = 0.f, outR = 1.f, lastRatio = -1.f;
         int xf = 0, xfLen = 64, xfCur = 64; bool xfOn = false, moving = false;
         void reset(TuneCore* o) { d = dOld = (float)o->L; xf = 0; xfOn = false; moving = false; t0 = 300.f; }
         void rest() { moving = false; xfOn = false; }
@@ -515,7 +603,8 @@ private:
             const bool q = o->quality;
             xfLen = q ? (int)clampf(0.75f * t0, 48.f, 480.f) : (int)clampf(0.5f * t0, 32.f, 160.f);
             if (o->Pm.satin) xfLen = (int)clampf(t0, 48.f, q ? 480.f : std::max(48.f, 0.6f * (float)o->L));   // fondu d'une période entière
-            const float rate = 1.f - ratio;
+            float rate = 1.f - ratio;
+            if (useRes && ratio < 0.998f && !o->Pm.satin) rate = 1.f - pulseSpeed(o, ratio);
             d += rate; if (xfOn) dOld += rate;
             const float L = (float)o->L, minD = 24.f;
             const float lo = std::max(minD, L - 0.5f * t0) + (rate < 0.f ? -rate * (float)xfLen : 0.f);
@@ -529,6 +618,52 @@ private:
                 if (g < 1.f) { const float vo = rd(o, b, dOld); v = vo + (v - vo) * g; }
                 e[c] = v;
             }
+        }
+        // vitesse de lecture du résidu (échantillons lus par échantillon sorti) ; `ratio` = lecture uniforme
+        float pulseSpeed(TuneCore* o, float ratio) {
+            const std::vector<float>& r0 = o->res[0];
+            const double pos = (double)(o->nAbs - 1) - (double)d;
+            const float T = t0;
+            auto absAt = [&](int64_t i) { return std::fabs(r0[(size_t)(i & kMask)]); };
+            if (!haveAnc || std::fabs(pos - anc) > 6.0 * T) {   // (ré)acquisition : crête du résidu sur la dernière période lue
+                int64_t bi = (int64_t)pos; float bv = -1.f;
+                for (int64_t i = (int64_t)(pos - T); i <= (int64_t)pos; ++i) { const float v = absAt(i); if (v > bv) { bv = v; bi = i; } }
+                anc = (double)bi; haveAnc = true; ancDone = false; wPulse = 0.f;
+            }
+            double ph = pos - anc;
+            ph -= std::floor(ph / T + 0.12) * T;   // phase dans [-0,12 T, 0,88 T[
+            if (ph < 0.45 * T) ancDone = false;
+            if (ph > 0.5 * T && !ancDone) {   // une fois par période : affine la prochaine crête (fenêtre bornée à ce qui existe)
+                ancDone = true;
+                const double nm = pos - ph + T;
+                const int64_t lo = (int64_t)(nm - 0.18 * T), hi = std::min<int64_t>((int64_t)(nm + 0.18 * T), o->nAbs - 2);
+                float bv = -1.f; int64_t bi = (int64_t)nm;
+                for (int64_t i = lo; i <= hi; ++i) { const float v = absAt(i); if (v > bv) { bv = v; bi = i; } }
+                if (hi - lo > 8) {
+                    double ePk = 0.0, eAll = 1e-12; const int64_t wq = (int64_t)(0.08 * T);
+                    for (int64_t i = bi - (int64_t)(0.5 * T); i < bi + (int64_t)(0.5 * T) && i < o->nAbs - 1; ++i) { const double v = absAt(i); eAll += v * v; if (i >= bi - wq && i <= bi + wq) ePk += v * v; }
+                    wPulse = clampf((float)(ePk / eAll) - 0.75f, 0.f, 0.1f) * 10.f;
+                    anc = nm + 0.3 * ((double)bi - nm);   // gain faible : phase de déformation régulière
+                }
+            }
+            if (wPulse <= 0.f) return ratio;
+            ph = pos - anc; ph -= std::floor(ph / T + 0.12) * T;
+            // profil de vitesse : 1 au centre de l'impulsion (cosinus relevé), `outR` ailleurs, résolu pour que la période de sortie vaille T / ratio
+            const float hw = 0.16f * T, pc = 0.06f * T;
+            auto W = [&](float x) { const float u = (x - pc) / hw; return std::fabs(u) < 1.f ? 0.5f + 0.5f * std::cos(kPi * u) : 0.f; };
+            if (ratio != lastRatio || ancDone != lastDone) {   // dichotomie : à chaque changement de rapport et une fois par période
+                lastRatio = ratio; lastDone = ancDone;
+                float lo = 0.2f, hi = 3.f;
+                for (int it = 0; it < 12; ++it) {
+                    const float m = 0.5f * (lo + hi); float tt = 0.f;
+                    for (int i = 0; i < 24; ++i) tt += 1.f / (m + (1.f - m) * W(((float)i + 0.5f) / 24.f * T - 0.12f * T));
+                    tt *= T / 24.f;
+                    if (tt > T / ratio) lo = m; else hi = m;
+                }
+                outR = 0.5f * (lo + hi);
+            }
+            const float v = outR + (1.f - outR) * W((float)ph);
+            return ratio + wPulse * (v - ratio);
         }
         static float rd(const TuneCore* o, const std::vector<float>& b, float D) {
             const double pos = (double)(o->nAbs - 1) - (double)D;
@@ -589,6 +724,7 @@ private:
     float sCur = 0.f, sTgt = 0.f, sStep = 0.f, offCur = 0.f, offStep = 0.f, wetG = 0.f, wetTgt = 0.f, wetRate = 1.f / 200.f;
     float c1 = 0.f, c2a = 0.f, c2b = 0.f, c1Prev = 0.f, vibVar = 0.f, noteCur = -1.f, glide = 0.f, heldS = 0.f, dryA = 0.f;
     float glideRun = 0.f, slope = 0.f, pPrev = 0.f, sG = 0.f, pH[3] = {}, t0S = 0.f;
+    float noteAge = 0.f, candN = -1.f, candAge = 0.f, transT = 0.f, ovS = 0.f, atkT = 0.f, qPrev = 0.f;
     int nP = 0;
     int unvHops = 1000, glideSign = 0;
     Splicer sp;

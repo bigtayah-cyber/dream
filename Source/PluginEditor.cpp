@@ -36,6 +36,10 @@ VoileEditor::VoileEditor(VoileProcessor& p) : AudioProcessorEditor(&p), proc(p),
     scaleBox.addItem("Chromatique", 1); scaleBox.addItem("Majeur", 2); scaleBox.addItem("Mineur", 3);
     keyBox.setTooltip(u8("Tonalité de la correction")); scaleBox.setTooltip(u8("Gamme de la correction"));
     addAndMakeVisible(keyBox); addAndMakeVisible(scaleBox);
+    keyPaster.apply = [this](const kit::keyparse::Key& k) {
+        auto setP = [this](const char* id, int idx) { if (auto* q = proc.apvts.getParameter(id)) q->setValueNotifyingHost(q->convertTo0to1((float)idx)); };
+        setP("key", k.pc); setP("scale", k.minor ? 2 : 1); };
+    keyPaster.attach(keyBox);
     keyAtt = std::make_unique<ComboAtt>(ap, "key", keyBox);
     scaleAtt = std::make_unique<ComboAtt>(ap, "scale", scaleBox);
     accSeg = std::make_unique<v3::bridge::Seg>(ap, "accid", v3::notes::accidentalLabels(), v3::notes::accidentalTip(), pal);

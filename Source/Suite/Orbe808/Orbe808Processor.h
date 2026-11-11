@@ -31,13 +31,14 @@ public:
     void setStateInformation(const void*, int) override;
 
     static juce::String presetLabel(int i);
-    static o808::Params paramsFrom(const juce::AudioProcessorValueTreeState&);
+    static o808::Params paramsFrom(const juce::AudioProcessorValueTreeState&, int stateVersion = 3);
 
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keys;           // clavier de l'interface
     std::atomic<int> sounding{-1};          // note audible (-1 = aucune)
     std::atomic<int> lastNote{33};
     std::atomic<float> meter{0.f};          // crête du dernier bloc
+    std::atomic<int> loadedVersion{3};      // version d'état lue (nouvelle instance : 3) ; < 3 : saturation « Repliée » d'origine
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout();

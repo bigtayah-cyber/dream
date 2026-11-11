@@ -301,6 +301,97 @@ inline Chs stretch(const Chs& chs, double factor, const std::atomic<bool>* cance
     return r;
 }
 
+// ---------------- WSOLA à transitoires préservés (lot E) ----------------
+// Détection des attaques (énergie de la dérivée, fenêtre 256, saut 64) puis découpe du signal en segments entre attaques. Chaque segment est étiré
+// par WSOLA à part ; son premier grain a un début plat (copie 1:1 sur plusieurs ms : l'attaque garde son pic, ni pré-écho ni doublon), et la
+// jonction se fait par un fondu de 48 échantillons juste AVANT l'attaque. La durée totale reste exactement celle de stretch().
+inline std::vector<int> attackPoints(const std::vector<float>& m, double sr) {
+    const int len = (int)m.size(), hop = 64, win = 256, minGap = (int)(0.04 * sr), nH = std::max(0, (len - win) / hop);
+    std::vector<int> out;
+    if (nH < 20) return out;
+    std::vector<double> E((size_t)nH);
+    for (int n = 0; n < nH; ++n) { double e = 0; for (int i = 1; i < win; ++i) { const double d = (double)m[(size_t)(n * hop + i)] - m[(size_t)(n * hop + i - 1)]; e += d * d; } E[(size_t)n] = e; }
+    double mx = 0; for (double e : E) mx = std::max(mx, e);
+    const double floorE = std::max(1e-9, mx * 1e-4);
+    int last = -minGap * 2;
+    for (int n = 12; n < nH - 1; ++n) {
+        double prev = 0; for (int q = 1; q <= 12; ++q) prev += E[(size_t)(n - q)]; prev /= 12.0;
+        if (E[(size_t)n] < floorE || E[(size_t)n] < 6.0 * prev + floorE * 0.5 || E[(size_t)n] < E[(size_t)n - 1] || E[(size_t)n] < E[(size_t)n + 1]) continue;
+        // position exacte : premier échantillon de la zone qui dépasse 15 % du pic de dérivée
+        const int a0 = std::max(1, (n - 2) * hop), b0 = std::min(len - 1, n * hop + win + hop);
+        double pk = 0; for (int i = a0; i < b0; ++i) pk = std::max(pk, (double)std::fabs(m[(size_t)i] - m[(size_t)i - 1]));
+        int t = a0; for (int i = a0; i < b0; ++i) if (std::fabs(m[(size_t)i] - m[(size_t)i - 1]) > 0.15 * pk) { t = i; break; }
+        if (t - last >= minGap && t > 96 && t < len - minGap) { out.push_back(t); last = t; }
+    }
+    return out;
+}
+inline Chs stretchTP(const Chs& chs, double factor, double sr, const std::atomic<bool>* cancel = nullptr) {
+    if (std::fabs(factor - 1) < 1e-3 || chs.empty() || chs[0].empty()) return chs;
+    const int len = (int)chs[0].size(), X = 48, Hs = 512, tol = 256;
+    std::vector<float> m((size_t)len, 0.f);
+    for (auto& c : chs) for (int i = 0; i < len; ++i) m[(size_t)i] += c[(size_t)i] / (float)chs.size();
+    const auto att = attackPoints(m, sr);
+    if (att.empty()) return stretch(chs, factor, cancel);
+    const int outLen = (int)std::ceil(len * factor);
+    std::vector<int> tB;   // bornes des segments (attaques), 0 au début
+    tB.push_back(0); for (int t : att) tB.push_back(t); tB.push_back(len);
+    const int nSeg = (int)tB.size() - 1;
+    Chs o(chs.size(), std::vector<float>((size_t)outLen + 4096, 0.f));
+    std::vector<float> fill((size_t)outLen + 4096, 0.f);   // poids de fondu cumulés
+    for (int sg = 0; sg < nSeg; ++sg) {
+        if (cancel && cancel->load()) break;
+        const int sA = sg == 0 ? 0 : tB[(size_t)sg] - X, sB = sg == nSeg - 1 ? len : tB[(size_t)sg + 1] - X;
+        const int oA = sg == 0 ? 0 : (int)std::lround(tB[(size_t)sg] * factor) - X;
+        const int oEnd = sg == nSeg - 1 ? outLen : (int)std::lround(tB[(size_t)sg + 1] * factor) - X;
+        const int sl = sB - sA, outN = std::max(1, oEnd - oA), outX = sg == nSeg - 1 ? 0 : X;   // outX : débord pour le fondu avec le segment suivant
+        int N = 2048; while (N > 256 && N * 2 > sl) N >>= 1;
+        if (sl < 2 * N || N < 256) {   // segment trop court pour WSOLA : copie rééchantillonnée
+            for (size_t c = 0; c < chs.size(); ++c) for (int i = 0; i < outN + outX; ++i) {
+                const double q = std::min((double)(sl - 1), (double)i * sl / (double)outN);
+                const int i0 = (int)q; const float f = (float)(q - i0), x0 = chs[c][(size_t)(sA + i0)], x1 = chs[c][(size_t)(sA + std::min(sl - 1, i0 + 1))];
+                const float w = sg > 0 && i < X ? (float)i / (float)X : 1.f, w2 = i >= outN ? 1.f - (float)(i - outN) / (float)std::max(1, outX) : 1.f;
+                if (oA + i >= 0 && oA + i < outLen) { o[c][(size_t)(oA + i)] += (x0 + (x1 - x0) * f) * w * w2; }
+            }
+            for (int i = 0; i < outN + outX; ++i) if (oA + i >= 0 && oA + i < outLen) fill[(size_t)(oA + i)] += (sg > 0 && i < X ? (float)i / (float)X : 1.f) * (i >= outN ? 1.f - (float)(i - outN) / (float)std::max(1, outX) : 1.f);
+            continue;
+        }
+        std::vector<float> win((size_t)N), win0((size_t)N);
+        for (int i = 0; i < N; ++i) { win[(size_t)i] = (float)(0.5 - 0.5 * std::cos(2 * kPi * i / N)); win0[(size_t)i] = i < N / 2 ? 1.f : win[(size_t)i]; }
+        const double Ha = (double)Hs * sl / (double)outN;
+        const int total = outN + outX;
+        std::vector<std::vector<float>> y(chs.size(), std::vector<float>((size_t)total + N, 0.f));
+        std::vector<float> ws((size_t)total + N, 0.f);
+        int prev = 0, k = 0;
+        for (int so = 0; so < total; so += Hs, ++k) {
+            const int ideal = std::min(sl - N, (int)std::lround(k * Ha));
+            int pos = ideal;
+            if (k > 0) {
+                const int nat = prev + Hs, lo = std::max(0, ideal - tol), hi = std::min(sl - N, ideal + tol);
+                float best = -INFINITY;
+                for (int p = lo; p <= hi; p += 2) {
+                    float sc = 0;
+                    for (int j = 0; j < 1024; j += 4) sc += m[(size_t)(sA + p + j)] * (nat + j < sl ? m[(size_t)(sA + nat + j)] : 0.f);
+                    if (sc > best) { best = sc; pos = p; }
+                }
+            } else pos = 0;
+            const std::vector<float>& w = k == 0 && sg > 0 ? win0 : (k == 0 ? win0 : win);   // début plat à chaque segment (aussi au tout début du fichier)
+            for (size_t c = 0; c < chs.size(); ++c) for (int j = 0; j < N; ++j) y[c][(size_t)(so + j)] += chs[c][(size_t)(sA + pos + j)] * w[(size_t)j];
+            for (int j = 0; j < N; ++j) ws[(size_t)(so + j)] += w[(size_t)j];
+            prev = pos;
+        }
+        for (int i = 0; i < total; ++i) {
+            const int po = oA + i;
+            if (po < 0 || po >= outLen) continue;
+            const float wi = sg > 0 && i < X ? (float)i / (float)X : 1.f, wo = i >= outN ? 1.f - (float)(i - outN) / (float)std::max(1, outX) : 1.f, g = wi * wo;
+            for (size_t c = 0; c < chs.size(); ++c) o[c][(size_t)po] += (ws[(size_t)i] > 0.1f ? y[c][(size_t)i] / ws[(size_t)i] : y[c][(size_t)i]) * g;
+            fill[(size_t)po] += g;
+        }
+    }
+    Chs r;
+    for (auto& y : o) { std::vector<float> z((size_t)outLen); for (int i = 0; i < outLen; ++i) z[(size_t)i] = fill[(size_t)i] > 1e-4f ? y[(size_t)i] / std::max(1.f, fill[(size_t)i]) * std::min(1.f, fill[(size_t)i]) : 0.f; r.push_back(std::move(z)); }
+    return r;
+}
+
 // ---------------- craquements de vinyle (graine fixe 11 : toujours identiques) ----------------
 inline void addCrackle(std::vector<float>& L, std::vector<float>& R, float amt, double sr) {
     uint64_t seed = 11;

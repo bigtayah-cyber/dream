@@ -1,4 +1,5 @@
 #include "OrbeBeatProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "OrbeBeatEditor.h"
 
 using juce::String;
@@ -44,11 +45,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrbeBeatProcessor::makeLayou
         l.add(std::make_unique<AudioParameterBool>(ParameterID{"solo" + String(i), 1}, n + " solo", false));
     }
     l.add(kit::v3::notes::makeAccidParam());   // ajouté en dernier : écriture dièses / bémols (noms seulement)
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"outs", 1}, "Sorties", juce::StringArray{"Mix seul", "Mix + sorties", "Sorties seules"}, 0));
     return l;
 }
 
 OrbeBeatProcessor::OrbeBeatProcessor()
-    : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor(kit::aux::withAux(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true), kLanes, "Piste")),
       apvts(*this, nullptr, "ORBEBEAT", makeLayout()) {
     for (auto& c : cells) c.store(0);
     for (auto& f : flash) f.store(0.f);
@@ -59,7 +61,7 @@ OrbeBeatProcessor::OrbeBeatProcessor()
     writePattern(0, pt);
 }
 
-bool OrbeBeatProcessor::isBusesLayoutSupported(const BusesLayout& l) const { return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo(); }
+bool OrbeBeatProcessor::isBusesLayoutSupported(const BusesLayout& l) const { return kit::aux::layoutOk(l); }
 
 void OrbeBeatProcessor::prepareToPlay(double sampleRate, int maxBlock) {
     sr = sampleRate;
@@ -67,6 +69,7 @@ void OrbeBeatProcessor::prepareToPlay(double sampleRate, int maxBlock) {
     engine.setKit(lastKit);
     engine.prepare(sampleRate);
     mono.assign((size_t)juce::jmax(512, maxBlock), 0.f);
+    for (auto& s : stemBuf) s.assign((size_t)juce::jmax(512, maxBlock), 0.f);
     lastValid = false; internalPpq = 0.0; wasAudition = false;
 }
 
@@ -88,7 +91,7 @@ void OrbeBeatProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     const int n = buffer.getNumSamples();
     buffer.clear();
     if (buffer.getNumChannels() < 2) return;
-    if ((int)mono.size() < n) mono.resize((size_t)n);
+    if ((int)mono.size() < n) { mono.resize((size_t)n); for (auto& s : stemBuf) s.resize((size_t)n); }   // hôte qui dépasse la taille annoncée
     if (const int k = (int)p("kit"); k != lastKit) { lastKit = k; engine.setKit(k); }
     engine.setLevel(p("master"));
 
@@ -158,19 +161,31 @@ void OrbeBeatProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 
     // 3. tri stable par position puis rendu par segments
     for (int i = 1; i < nev; ++i) { auto e = evs[(size_t)i]; int j = i - 1; while (j >= 0 && evs[(size_t)j].off > e.off) { evs[(size_t)j + 1] = evs[(size_t)j]; --j; } evs[(size_t)j + 1] = e; }
+    // sorties auxiliaires : une piste par bus stéréo activé par l'hôte (mono dupliqué en G et D)
+    const int outs = (int)p("outs");
+    const auto tp = kit::aux::taps(*this, buffer, kLanes);
+    float* stems[kLanes] = {};
+    bool useStems = false;
+    if (outs > 0 && tp.any) for (int k = 0; k < kLanes; ++k) if (tp.l[k]) { stems[k] = stemBuf[k].data(); useStems = true; }
+    auto renderSeg = [&](int from, int len) {
+        float* sp[kLanes];
+        for (int k = 0; k < kLanes; ++k) sp[k] = stems[k] ? stems[k] + from : nullptr;
+        engine.render(mono.data() + from, len, useStems ? sp : nullptr);
+    };
     int pos = 0;
     for (int i = 0; i < nev; ++i) {
         const auto& e = evs[(size_t)i];
-        if (e.off > pos) { engine.render(mono.data() + pos, e.off - pos); pos = e.off; }
+        if (e.off > pos) { renderSeg(pos, e.off - pos); pos = e.off; }
         if (e.release) engine.release808(e.note);
         else { engine.trigger(e.lane, e.v, e.note); flash[e.lane].store(juce::jmin(1.f, e.v)); }
     }
-    if (pos < n) engine.render(mono.data() + pos, n - pos);
+    if (pos < n) renderSeg(pos, n - pos);
 
     float pk = 0.f;
     for (int i = 0; i < n; ++i) pk = juce::jmax(pk, std::fabs(mono[(size_t)i]));
-    buffer.copyFrom(0, 0, mono.data(), n);
-    buffer.copyFrom(1, 0, mono.data(), n);
+    if (outs == 2 && tp.any) { buffer.clear(0, 0, n); buffer.clear(1, 0, n); }   // sorties seules : le bus principal se tait
+    else { buffer.copyFrom(0, 0, mono.data(), n); buffer.copyFrom(1, 0, mono.data(), n); }
+    if (useStems) for (int k = 0; k < kLanes; ++k) if (stems[k]) { std::copy(stems[k], stems[k] + n, tp.l[k]); std::copy(stems[k], stems[k] + n, tp.r[k]); }
     meter.store(pk);
     playStep.store(showStep); playPat.store(showPat);
 }
@@ -228,6 +243,7 @@ juce::File OrbeBeatProcessor::writeMidiFile() {
 
 void OrbeBeatProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto tree = apvts.copyState();
+    kit::stampState(tree);
     String hex;
     hex.preallocateBytes(cells.size() * 4 + 8);
     for (auto& c : cells) hex << String::toHexString((int)c.load()).paddedLeft('0', 4);

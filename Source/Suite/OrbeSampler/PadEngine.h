@@ -10,6 +10,7 @@ struct Bank {
     std::shared_ptr<const Sample> pcm;
     int nsl = 0;
     int a[16] = {}, b[16] = {};
+    mutable std::uint64_t gen = 0;   // génération attribuée par Swap::publish (durée de vie, voir Swap.h)
 };
 
 struct PadParams {
@@ -33,7 +34,7 @@ public:
     void setDelayBeats(float beats) { dlBeats = beats; }
     void allOff() { for (auto& v : vox) v.on = false; }
 
-    // La banque est lue par les voix : elle doit rester vivante tant que des voix l'utilisent.
+    // La banque est lue par les voix : elle doit rester vivante tant qu'une voix l'utilise (Swap, par générations).
     void trigger(const Bank* bank, int pad, float vel, const PadParams& p, bool gate) {
         if (!bank || !bank->pcm || pad < 0 || pad >= bank->nsl) return;
         const int a = bank->a[pad], b = bank->b[pad], len = b - a;
@@ -71,9 +72,11 @@ public:
         return -1.f;
     }
 
-    void render(float* outL, float* outR, int n) {
+    // Mix stéréo. Si `sl`/`sr` ne sont pas nuls, sl[k] et sr[k] (ou nul pour un pad ignoré) reçoivent en plus le pad k seul, sec (avant les
+    // envois de reverb et de delay, qui restent sur le mix), au même écrêtage doux.
+    void render(float* outL, float* outR, int n, float* const* sl = nullptr, float* const* sr_ = nullptr) {
         for (int i = 0; i < n; ++i) {
-            float l = 0, r = 0, sendR = 0, sendD = 0;
+            float l = 0, r = 0, sendR = 0, sendD = 0, pl[16] = {}, pr[16] = {};
             for (auto& v : vox) {
                 if (!v.on) continue;
                 if (v.age >= v.dur) { v.on = false; continue; }
@@ -94,6 +97,7 @@ public:
                 g *= v.amp;
                 const float ol = xl * g * v.gl, orr = xr * g * v.gr;
                 l += ol; r += orr;
+                if (sl && v.pad >= 0 && v.pad < 16) { pl[v.pad] += ol; pr[v.pad] += orr; }
                 const float m = 0.5f * (ol + orr);
                 sendR += m * v.rv; sendD += m * v.dl;
                 v.age += 1.0;
@@ -103,9 +107,16 @@ public:
             pp.process(sendD, std::min((float)(sr * 2.0), 60.f / bpm * dlBeats * (float)sr), 0.38f, dl, dr);
             outL[i] += softClip(l + 0.5f * rl + 0.6f * dl);
             outR[i] += softClip(r + 0.5f * rr + 0.6f * dr);
+            if (sl) for (int k = 0; k < 16; ++k) if (sl[k]) { sl[k][i] = softClip(pl[k]); sr_[k][i] = softClip(pr[k]); }
         }
     }
 
+    // Plus ancienne génération de banque encore lue par une voix active, ou `none` s'il n'y en a pas (annoncé à Swap::reportInUse).
+    std::uint64_t oldestGen(std::uint64_t none) const {
+        std::uint64_t g = none;
+        for (auto& v : vox) if (v.on && v.bank) g = std::min(g, v.bank->gen);
+        return g;
+    }
     int activeVoices() const { int c = 0; for (auto& v : vox) c += v.on; return c; }
 
 private:

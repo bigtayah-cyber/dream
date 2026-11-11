@@ -42,11 +42,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout PadsProcessor::makeLayout() 
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"play", 1}, "Lecture", juce::StringArray{"Un coup", "Tenue"}, 0));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"dlt", 1}, "Delay temps", juce::StringArray{"1/16", "1/8", "1/8 pointee", "1/4"}, 2));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID{"master", 1}, "Master", NormalisableRange<float>(0.f, 1.f), 0.85f, txt(pct)));
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"outs", 1}, "Sorties", juce::StringArray{"Mix seul", "Mix + sorties", "Sorties seules"}, 0));
     return l;
 }
 
 PadsProcessor::PadsProcessor()
-    : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor(kit::aux::withAux(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true), 16, "Pad")),
       apvts(*this, nullptr, "ORBEPADS", makeLayout()) {
     for (int i = 0; i < 16; ++i) {
         for (int k = 0; k < 11; ++k) pp[i][k] = apvts.getRawParameterValue("p" + String(i) + "_" + kPN[k]);
@@ -64,9 +65,12 @@ PadsProcessor::~PadsProcessor() {
     for (auto id : {"mode", "sens", "div"}) apvts.removeParameterListener(id, this);
 }
 
-bool PadsProcessor::isBusesLayoutSupported(const BusesLayout& l) const { return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo(); }
+bool PadsProcessor::isBusesLayoutSupported(const BusesLayout& l) const { return kit::aux::layoutOk(l); }
 
-void PadsProcessor::prepareToPlay(double sampleRate, int) { sr = sampleRate; engine.prepare(sampleRate); }
+void PadsProcessor::prepareToPlay(double sampleRate, int maxBlock) {
+    sr = sampleRate; engine.prepare(sampleRate); bank.quiesce();
+    for (int i = 0; i < 16; ++i) { stemL[i].assign((size_t)juce::jmax(512, maxBlock), 0.f); stemR[i].assign((size_t)juce::jmax(512, maxBlock), 0.f); }
+}  // voix coupées : plus aucune banque tenue
 
 osamp::PadParams PadsProcessor::read(int i) const {
     osamp::PadParams q;
@@ -91,6 +95,17 @@ void PadsProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const bool gate = pPlay->load() > 0.5f;
     float* L = buffer.getWritePointer(0);
     float* R = buffer.getWritePointer(1);
+    // sorties auxiliaires : un pad par bus stéréo activé par l'hôte (sec : sans reverb ni delay, qui restent sur le mix)
+    const int outs = (int)p("outs");
+    const auto tp = kit::aux::taps(*this, buffer, 16);
+    bool useStems = false;
+    if ((int)stemL[0].size() < n) for (int i = 0; i < 16; ++i) { stemL[i].resize((size_t)n); stemR[i].resize((size_t)n); }
+    if (outs > 0 && tp.any) for (int k = 0; k < 16; ++k) if (tp.l[k]) { useStems = true; }
+    auto renderSeg = [&](int from, int len) {
+        float* a[16]; float* b[16];
+        for (int k = 0; k < 16; ++k) { a[k] = tp.l[k] && useStems ? stemL[k].data() + from : nullptr; b[k] = tp.l[k] && useStems ? stemR[k].data() + from : nullptr; }
+        engine.render(L + from, R + from, len, useStems ? a : nullptr, useStems ? b : nullptr);
+    };
     auto trig = [&](int pad, float vel) { if (pad >= 0 && pad < 16) engine.trigger(bk, pad, vel, read(pad), gate); };
     for (int i = 0; i < 16; ++i) {
         if (const int v = uiOn[i].exchange(0)) trig(i, (float)v / 127.f);
@@ -100,14 +115,19 @@ void PadsProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     for (const auto meta : midi) {
         const auto m = meta.getMessage();
         const int pos = juce::jlimit(0, n, meta.samplePosition);
-        if (pos > cur) { engine.render(L + cur, R + cur, pos - cur); cur = pos; }
+        if (pos > cur) { renderSeg(cur, pos - cur); cur = pos; }
         if (m.isNoteOn()) trig(m.getNoteNumber() - kFirstNote, juce::jmax(0.05f, m.getFloatVelocity()));
         else if (m.isNoteOff()) { const int pad = m.getNoteNumber() - kFirstNote; if (pad >= 0 && pad < 16) engine.release(pad); }
         else if (m.isAllNotesOff() || m.isAllSoundOff()) engine.allOff();
     }
-    if (cur < n) engine.render(L + cur, R + cur, n - cur);
-    buffer.applyGain(pMaster->load());
+    if (cur < n) renderSeg(cur, n - cur);
+    const float mg = pMaster->load();
+    if (useStems) for (int k = 0; k < 16; ++k) if (tp.l[k]) for (int i = 0; i < n; ++i) { tp.l[k][i] = stemL[k][(size_t)i] * mg; tp.r[k][i] = stemR[k][(size_t)i] * mg; }
+    if (outs == 2 && tp.any) { buffer.clear(0, 0, n); buffer.clear(1, 0, n); }   // sorties seules : le bus principal se tait
+    else { for (int i = 0; i < n; ++i) { L[i] *= mg; R[i] *= mg; } }
     for (int i = 0; i < 16; ++i) padPos[i].store(engine.position(i));
+    // les banques lues par des voix encore actives restent vivantes (une voix peut durer plus de 30 s)
+    bank.reportInUse(engine.oldestGen(bank.currentGen()));
 }
 
 // ---------------- échantillon et repères ----------------

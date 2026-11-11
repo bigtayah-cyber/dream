@@ -344,6 +344,10 @@ EqEditor::EqEditor(EqProcessor& p)
         if (updating) return; auto* t = proc.par(sel, "t"); t->beginChangeGesture(); proc.setReal(t, (float)(typeBox.getSelectedId() - 1)); t->endChangeGesture();
     };
     addAndMakeVisible(typeBox);
+    slopeBox.addItem("12 dB/oct", 1); slopeBox.addItem("24 dB/oct", 2); slopeBox.addItem("48 dB/oct", 3);
+    slopeBox.setTooltip(u8("Pente du passe-haut / passe-bas : 12, 24 ou 48 dB par octave (sections de Q 0,707 ajout\xC3\xA9" "es derri\xC3\xA8re la premi\xC3\xA8re, qui garde le Q de la bande)."));
+    slopeBox.onChange = [this] { if (updating) return; auto* t = proc.par(sel, "s"); t->beginChangeGesture(); proc.setReal(t, (float)(slopeBox.getSelectedId() - 1)); t->endChangeGesture(); };
+    addAndMakeVisible(slopeBox);
     addAndMakeVisible(onKey);
     onKey.onClick = [this] { if (!updating) proc.setReal(proc.par(sel, "on"), onKey.getToggleState() ? 1.f : 0.f); };
     onKey.setTooltip(u8("Active ou coupe la bande s\xC3\xA9lectionn\xC3\xA9" "e."));
@@ -412,6 +416,7 @@ void EqEditor::refreshFields() {
     if (boundBand != sel) { fFreq->bind(proc.par(sel, "f"), true); fQ->bind(proc.par(sel, "q"), true); boundBand = sel; }
     fGain->bind(proc.par(sel, "g"), eq::hasGain(b.type)); fFreq->refresh(); fQ->refresh();
     typeBox.setSelectedId(b.type + 1, juce::dontSendNotification);
+    slopeBox.setSelectedId(juce::jlimit(0, 2, b.slope) + 1, juce::dontSendNotification); slopeBox.setEnabled(eq::isCut(b.type)); slopeBox.setAlpha(eq::isCut(b.type) ? 1.f : 0.35f);
     onKey.setToggleState(b.on, juce::dontSendNotification);
     updating = false;
 }
@@ -436,7 +441,7 @@ void EqEditor::resizedClassic() {
     help.layout(kit::w::helpSlot(content, u_, true).toNearestInt(), getLocalBounds());
     graph->setBounds(Si(32, 64, 836, 290)); chips->setBounds(Si(32, 360, 836, 30));
     fFreq->setBounds(Si(32, 424, 128, 44)); fGain->setBounds(Si(168, 424, 116, 44)); fQ->setBounds(Si(292, 424, 100, 44));
-    typeBox.setBounds(Si(404, 439, 130, 29)); onKey.setBounds(Si(544, 436, 112, 32));
+    slopeBox.setBounds(Si(404, 470, 130, 24)); typeBox.setBounds(Si(404, 439, 130, 29)); onKey.setBounds(Si(544, 436, 112, 32));
     outPot->setBounds(Si(674, 416, 104, 70)); rangeSeg->setBounds(Si(786, 440, 82, 28));
     prev.setBounds(Si(352, 13, 20, 24)); next.setBounds(Si(628, 13, 20, 24));
     aKey.setBounds(Si(660, 9, 44, 32)); bKey.setBounds(Si(708, 9, 44, 32));
@@ -480,7 +485,7 @@ void EqEditor::resized3() {
     aKey.setBounds(Si(690, 32, 48, 36)); bKey.setBounds(Si(744, 32, 48, 36));
     graph->setBounds(Si(20, 84, 1060, 360)); chips->setBounds(Si(20, 452, 1060, 42));
     fFreq->setBounds(Si(44, 552, 176, 64)); fGain->setBounds(Si(230, 552, 150, 64)); fQ->setBounds(Si(390, 552, 130, 64));
-    typeBox.setBounds(Si(552, 566, 170, 38)); onKey.setBounds(Si(738, 566, 112, 38));
+    slopeBox.setBounds(Si(552, 616, 170, 34)); typeBox.setBounds(Si(552, 566, 170, 38)); onKey.setBounds(Si(738, 566, 112, 38));
     outK3->setScale(u_); outK3->setBounds(Si(886, 540, 100, v3::Knob3::boxHeight(v3::KnobSize::S, false)));
     rangeSeg->setBounds(Si(992, 586, 84, 34)); rangeSeg->px = 12.f * u_;
 }

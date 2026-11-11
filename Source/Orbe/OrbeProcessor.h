@@ -7,6 +7,9 @@
 #include "OrbeSynth.h"
 #include "../Kit/v3/NoteNames.h"
 
+// Orbe = accords + lead + basse (MIDI). La batterie est générée par Orbe Rythme (Source/Suite/OrbeRythme) : le moteur et l'état gardent
+// la piste 3 (paramètres vol3 / mute3, notes « n3 », verrou et édition) pour qu'un ancien projet se relise à l'identique et que la
+// suite des tirages (accords, lead, basse) ne change pas, mais Orbe ne la joue ni ne l'envoie plus. Voir docs/orbe-rythme-migration.md.
 // Instantané lisible par le thread audio (créé sur le thread message, jamais modifié ensuite).
 struct OrbeEv { float t, d; uint8_t n, track; float v; uint8_t gl; };
 struct OrbeRendered { std::vector<OrbeEv> ev; int bars = 4; float bpm = 120.f; };
@@ -26,11 +29,7 @@ public:
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
-    #ifdef ORBE_FX
-    const juce::String getName() const override { return "Orbe FX"; }
-#else
     const juce::String getName() const override { return "Orbe"; }
-#endif
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return true; }
     bool isMidiEffect() const override { return false; }

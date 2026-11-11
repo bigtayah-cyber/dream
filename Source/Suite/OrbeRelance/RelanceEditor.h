@@ -2,6 +2,7 @@
 #include "../../Kit/Widgets.h"
 #include "RelanceProcessor.h"
 #include "../../Kit/v3/Widgets3.h"
+#include "../../Kit/KeyClipboard.h"
 
 // Face d'Orbe Relance, directement au design v3 (thèmes Clair par défaut, Sombre, Classique = graphite du rack).
 // Écran héros : enveloppe de la voix, voisement, seuil, fins de phrase et relances programmées (pastilles par caractère),
@@ -38,7 +39,9 @@ private:
     kit::v3::Trace trIn, trWet;
     float sIn[rel::Telemetry::N] = {}, sWet[rel::Telemetry::N] = {};
     char sVo[rel::Telemetry::N] = {};
-    juce::ComboBox presetBox, caracBox;
+    kit::KeyPaster keyPaster;
+    juce::ComboBox presetBox, caracBox, hkeyBox, hscaleBox;   // tonalité / mode de l'harmonie
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> hkeyAtt, hscaleAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> caracAtt;
     std::unique_ptr<kit::v3::bridge::Seg> delaySeg, lockSeg, outSeg;
     std::unique_ptr<kit::v3::InSwitch> inSw;

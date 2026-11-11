@@ -6,9 +6,10 @@ namespace v3 = kit::v3;
 
 namespace {
 using kit::w::kLilac, kit::w::kIce, kit::w::kPeach;
-constexpr float W = 1100.f, H = 660.f;
+constexpr float kDY = 224.f;                 // hauteur de la section 05 (modulation) insérée au-dessus du clavier
+constexpr float W = 1100.f, H = 660.f + kDY;
 // Sections (unités de conception) et cellules de potard.
-const Rectangle<float> kS1{20, 70, 560, 204}, kS2{596, 70, 484, 204}, kS3{20, 286, 560, 204}, kS4{596, 286, 484, 204};
+const Rectangle<float> kS1{20, 70, 560, 204}, kS2{596, 70, 484, 204}, kS3{20, 286, 560, 204}, kS4{596, 286, 484, 204}, kS5{20, 502, 1060, 212};
 String comma(String s) { return s.replace(".", ","); }
 float hzOf(float cut) { return 60.f * std::pow(300.f, cut); }
 String hzText(float f) { return f >= 1000.f ? comma(String(f / 1000.f, 1)) + " kHz" : String(juce::roundToInt(f)) + " Hz"; }
@@ -436,6 +437,20 @@ OrbeSynthEditor::OrbeSynthEditor(OrbeSynthProcessor& p)
     wave2->setTooltip(u8("Forme d'onde de l'oscillateur 2 ; sert aussi de modulateur pour la FM"));
     divSeg = std::make_unique<osui::Seg>(*ap.getParameter("dlydiv"), juce::StringArray{"1/16", "1/8", u8("1/8 p."), "1/4", u8("1/4 p."), "1/2"}, false, pal);
     divSeg->setTooltip(u8("Durée du delay, synchronisée sur le tempo de l'hôte"));
+    modeSeg = std::make_unique<osui::Seg>(*ap.getParameter("mode"), juce::StringArray{"Poly", "Mono", "Legato"}, false, pal);
+    modeSeg->setTooltip(u8("Poly : accords. Mono : une voix, l'enveloppe repart à chaque note. Legato : une voix, l'enveloppe ne repart pas si les notes se chevauchent"));
+    bendSeg = std::make_unique<osui::Seg>(*ap.getParameter("bend"), juce::StringArray{u8("±1"), u8("±2"), u8("±5"), u8("±12")}, false, pal);
+    bendSeg->setTooltip(u8("Étendue de la molette de pitch, en demi-tons"));
+    const juce::StringArray lsh{"Sin", "Tri", "Scie", u8("Car."), u8("Aléa")}, ldst{"Off", "Coup.", "Haut.", "Vol.", "FM", "Cp 2"};
+    for (int i = 1; i <= 2; ++i) {
+        auto sh = std::make_unique<osui::Seg>(*ap.getParameter(("l" + String(i) + "shape").toRawUTF8()), lsh, false, pal);
+        auto ds = std::make_unique<osui::Seg>(*ap.getParameter(("l" + String(i) + "dest").toRawUTF8()), ldst, false, pal);
+        sh->setTooltip(u8("Forme du LFO ") + String(i)); ds->setTooltip(u8("Cible du LFO ") + String(i) + u8(" : coupure, hauteur (±2 demi-tons), volume (trémolo), FM, coupure du filtre 2"));
+        (i == 1 ? l1shape : l2shape) = std::move(sh); (i == 1 ? l1dest : l2dest) = std::move(ds);
+    }
+    f2Seg = std::make_unique<osui::Seg>(*ap.getParameter("f2mode"), juce::StringArray{"Off", "LP", "HP", "BP"}, false, pal);
+    f2Seg->setTooltip(u8("Second filtre (12 dB/oct) placé après le premier : passe-bas, passe-haut ou passe-bande"));
+    for (auto* c : {(juce::Component*)modeSeg.get(), (juce::Component*)bendSeg.get(), (juce::Component*)l1shape.get(), (juce::Component*)l1dest.get(), (juce::Component*)l2shape.get(), (juce::Component*)l2dest.get(), (juce::Component*)f2Seg.get()}) addAndMakeVisible(c);
     for (auto* c : {(juce::Component*)wave1.get(), (juce::Component*)wave2.get(), (juce::Component*)divSeg.get(), (juce::Component*)&envView, (juce::Component*)&fltView,
                     (juce::Component*)&keyboard, (juce::Component*)&bendWheel, (juce::Component*)&modWheel})
         addAndMakeVisible(c);
@@ -453,6 +468,10 @@ OrbeSynthEditor::OrbeSynthEditor(OrbeSynthProcessor& p)
         {"s", "Sustain", "Niveau tenu tant que la touche est enfoncée"}, {"r", "Relâche", "Durée d'extinction après le relâchement"},
         {"drive", "Saturation", "Saturation douce (tanh) sur l'ensemble des voix"}, {"cho", "Chorus", "Chorus stéréo à deux voix"},
         {"dly", "Delay", "Niveau du delay synchronisé sur le tempo"}, {"rev", "Reverb", "Niveau de la réverbération"}, {"vol", "Volume", "Volume de sortie"},
+        {"glide", "Glide", "Durée du portamento (modes Mono et Legato)"}, {"detx", "Désaccord +", "Désaccord d'unisson supplémentaire, jusqu'à 100 ct au total avec le réglage Désaccord"},
+        {"l1rate", "Vitesse", "Vitesse du LFO 1"}, {"l1depth", "Profondeur", "Profondeur du LFO 1 sur sa cible"},
+        {"l2rate", "Vitesse", "Vitesse du LFO 2"}, {"l2depth", "Profondeur", "Profondeur du LFO 2 sur sa cible"},
+        {"f2cut", "Coupure 2", "Fréquence de coupure du second filtre, placé après le premier"}, {"f2res", "Résonance 2", "Résonance du second filtre"},
     };
     for (auto& k : ks) { knobs.push_back(std::make_unique<osui::Knob>(ap, k.id, u8(k.label), u8(k.tip), pal)); addAndMakeVisible(*knobs.back()); }
 
@@ -468,6 +487,7 @@ OrbeSynthEditor::OrbeSynthEditor(OrbeSynthProcessor& p)
         const bool n3 = skin.on(); const auto* tp = skin.tp();
         for (auto& x : knobs) x->setVisible(!n3);
         for (auto* x : k3) { x->setVisible(n3); x->setup(&skin.T, &skin.art); }
+        for (auto* sg : {modeSeg.get(), bendSeg.get(), l1shape.get(), l1dest.get(), l2shape.get(), l2dest.get(), f2Seg.get()}) sg->T = tp;
         presetBar.T = tp; wave1->T = tp; wave2->T = tp; divSeg->T = tp; envView.T = tp; fltView.T = tp; keyboard.T = tp; bendWheel.T = tp; modWheel.T = tp; help.T = tp;
         repaint();
     };
@@ -476,9 +496,10 @@ OrbeSynthEditor::OrbeSynthEditor(OrbeSynthProcessor& p)
         u8("- 01 Oscillateurs : formes d'onde, transposition et niveau de l'oscillateur 2, FM, unisson (1 à 7 voix) et désaccord, sub une octave plus bas."),
         u8("- 02 Filtre : coupure, résonance, enveloppe de filtre (quantité et déclin). L'écran montre la courbe du filtre."),
         u8("- 03 Enveloppe : attaque, déclin, sustain, relâche du volume. 04 Effets : delay synchronisé sur le tempo de l'hôte."),
-        u8("- Molettes : pitch bend (±2 demi-tons) et modulation (ouvre le filtre). Clavier : clic et glissé pour jouer.")});
+        u8("- 05 Jeu et modulation : mode Poly, Mono ou Legato avec glide ; étendue du bend ; désaccord d'unisson jusqu'à 100 ct ; deux LFO (forme, cible, vitesse, profondeur) ; second filtre en série."),
+        u8("- Molettes : pitch bend (±2 demi-tons par défaut) et modulation (ouvre le filtre). Clavier : clic et glissé pour jouer.")});
     setResizable(true, true);
-    setResizeLimits(825, 495, 2200, 1320);
+    setResizeLimits(825, (int)(825.f * H / W), 2200, (int)(2200.f * H / W));
     getConstrainer()->setFixedAspectRatio((double)W / (double)H);
     setSize((int)W, (int)H);
     skin.init(*this, look, W, H);
@@ -502,10 +523,27 @@ void OrbeSynthEditor::resized() {
     fltView.setBounds(Si(kS2.getX() + 16, kS2.getY() + 36, 452, 64));
     envView.setBounds(Si(kS3.getX() + 16, kS3.getY() + 36, 528, 64));
     divSeg->setBounds(Si(kS4.getX() + 16, kS4.getY() + 152, 300, 28));
-    bendWheel.setBounds(Si(26, 518, 36, 116)); modWheel.setBounds(Si(70, 518, 36, 116));
-    keyboard.setBounds(Si(122, 514, 958, 126));
+    layout5(false);
+    bendWheel.setBounds(Si(26, 518 + kDY, 36, 116)); modWheel.setBounds(Si(70, 518 + kDY, 36, 116));
+    keyboard.setBounds(Si(122, 514 + kDY, 958, 126));
     help.layout(kit::w::helpSlot(getLocalBounds().toFloat().reduced(18.f * u_, 0), u_, false, 56.f).toNearestInt(), getLocalBounds());
     repaint();
+}
+
+// Section 05 : jeu (colonne 1), LFO 1 et 2 (colonnes 2 et 3), second filtre (colonne 4). v3 : cellules de potard 94 x 104, classique 86 x 88.
+void OrbeSynthEditor::layout5(bool n3) {
+    const float x0 = kS5.getX() + 16, y0 = kS5.getY();
+    const float cx[4] = {x0, x0 + 250, x0 + 560, x0 + 870};
+    modeSeg->setBounds(Si(cx[0], y0 + 46, 230, 28)); bendSeg->setBounds(Si(cx[0], y0 + 80, 230, 28));
+    l1shape->setBounds(Si(cx[1], y0 + 46, 296, 28)); l1dest->setBounds(Si(cx[1], y0 + 80, 296, 28));
+    l2shape->setBounds(Si(cx[2], y0 + 46, 296, 28)); l2dest->setBounds(Si(cx[2], y0 + 80, 296, 28));
+    f2Seg->setBounds(Si(cx[3], y0 + 46, 158, 28));
+    const float ky = y0 + (n3 ? 108.f : 114.f), kw = n3 ? 94.f : 86.f;
+    auto place = [&](int i, float x) { if (n3) { k3[i]->setScale(u_); k3[i]->setBounds(Si(x, ky, kw, 100)); } else knobs[(size_t)i]->setBounds(Si(x, ky, kw, 88)); };
+    place(19, cx[0] + 20); place(20, cx[0] + 126);          // glide, désaccord +
+    place(21, cx[1] + 40); place(22, cx[1] + 170);          // LFO 1 : vitesse, profondeur
+    place(23, cx[2] + 40); place(24, cx[2] + 170);          // LFO 2
+    place(25, cx[3] - 6);  place(26, cx[3] + 68);          // filtre 2 : coupure, résonance
 }
 
 void OrbeSynthEditor::timerCallback() {
@@ -547,8 +585,8 @@ void OrbeSynthEditor::paint(juce::Graphics& g) {
     if (skin.on()) { paint3(g); return; }
     const float u = u_;
     kit::w::drawFace(g, pal, getLocalBounds(), u, {kit::w::Family::Instrument, "Orbe Synth", kit::w::serial::synth, 56.f});
-    g.setColour(Colour(0xFF000000).withAlpha(.5f)); g.fillRect(S(18, 502, W - 36, 1.5f));
-    g.setColour(juce::Colours::white.withAlpha(.06f)); g.fillRect(S(18, 503.5f, W - 36, 1.f));
+    g.setColour(Colour(0xFF000000).withAlpha(.5f)); g.fillRect(S(18, 502 + kDY, W - 36, 1.5f));
+    g.setColour(juce::Colours::white.withAlpha(.06f)); g.fillRect(S(18, 503.5f + kDY, W - 36, 1.f));
     paintHeader(g, u);
 
     section(g, u, kS1, "01", "Oscillateurs", u8("Deux oscillateurs · unisson · FM · sub"));
@@ -562,8 +600,11 @@ void OrbeSynthEditor::paint(juce::Graphics& g) {
     const float ms = 60000.f / bpm * osyn::divBeats()[proc.readParams().dlyDiv];
     g.setColour(kIce.withAlpha(.85f)); g.setFont(mono(10.f * u));
     g.drawText(String(juce::roundToInt(ms)) + " ms @ " + String(juce::roundToInt(bpm)) + " BPM", S(kS4.getX() + 336, kS4.getY() + 152, 132, 28).toNearestInt(), juce::Justification::centredRight);
-    engraved(g, pal, "Bend", S(18, 636, 52, 12), juce::Justification::centred, 8.5f * u, 1.6f * u);
-    engraved(g, pal, "Mod", S(62, 636, 52, 12), juce::Justification::centred, 8.5f * u, 1.6f * u);
+    section(g, u, kS5, "05", u8("Jeu et modulation"), u8("Mono / legato · glide · 2 LFO · filtre 2"));
+    for (auto [t, x] : {std::pair<const char*, float>{"Jeu", 16.f}, {"LFO 1", 266.f}, {"LFO 2", 576.f}, {"Filtre 2", 886.f}})
+        engraved(g, pal, t, S(kS5.getX() + x, kS5.getY() + 34, 120, 12), juce::Justification::centredLeft, 9.f * u, 1.8f * u);
+    engraved(g, pal, "Bend", S(18, 636 + kDY, 52, 12), juce::Justification::centred, 8.5f * u, 1.6f * u);
+    engraved(g, pal, "Mod", S(62, 636 + kDY, 52, 12), juce::Justification::centred, 8.5f * u, 1.6f * u);
 }
 
 void OrbeSynthEditor::paintHeader(juce::Graphics& g, float u) {
@@ -597,8 +638,9 @@ void OrbeSynthEditor::resized3() {
     fltView.setBounds(Si(kS2.getX() + 16, kS2.getY() + 34, 452, 58));
     envView.setBounds(Si(kS3.getX() + 16, kS3.getY() + 34, 528, 58));
     divSeg->setBounds(Si(kS4.getX() + 16, kS4.getY() + 166, 300, 30));
-    bendWheel.setBounds(Si(30, 520, 32, 112)); modWheel.setBounds(Si(74, 520, 32, 112));
-    keyboard.setBounds(Si(122, 514, 958, 126));
+    layout5(true);
+    bendWheel.setBounds(Si(30, 520 + kDY, 32, 112)); modWheel.setBounds(Si(74, 520 + kDY, 32, 112));
+    keyboard.setBounds(Si(122, 514 + kDY, 958, 126));
     repaint();
 }
 
@@ -609,9 +651,10 @@ void OrbeSynthEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
     v3::background(g, T, b);
     v3::brand(g, T, u, "Orbe", "Synth");
     v3::hero(g, T, R(392, 14, 372, 38), 14.f * u);
-    const struct { Rectangle<float> r; const char* num; String title, sub; Colour c; } secs[4] = {
+    const struct { Rectangle<float> r; const char* num; String title, sub; Colour c; } secs[5] = {
         {kS1, "01", "Oscillateurs", u8("Deux oscillateurs · unisson · FM · sub"), kPeach}, {kS2, "02", "Filtre", u8("Passe-bas résonant · 12 dB/oct"), kLilac},
-        {kS3, "03", u8("Enveloppe"), u8("ADSR exponentiel · volume"), kIce}, {kS4, "04", "Effets", u8("Saturation · chorus · delay · reverb"), Colour(0xFFF2A516)}};
+        {kS3, "03", u8("Enveloppe"), u8("ADSR exponentiel · volume"), kIce}, {kS4, "04", "Effets", u8("Saturation · chorus · delay · reverb"), Colour(0xFFF2A516)},
+        {kS5, "05", u8("Jeu et modulation"), u8("Mono / legato · glide · 2 LFO · filtre 2"), kLilac}};
     for (auto& s : secs) {
         v3::card(g, T, R(s.r.getX(), s.r.getY(), s.r.getWidth(), s.r.getHeight()), 18.f * u);
         g.setColour(s.c.withAlpha(T.dark ? 0.9f : 1.f)); g.fillEllipse(Rectangle<float>(9.f * u, 9.f * u).withCentre({(s.r.getX() + 24.f) * u, (s.r.getY() + 19.f) * u}));
@@ -621,9 +664,11 @@ void OrbeSynthEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
     v3::label(g, T, "Oscillateur 1", R(kS1.getX() + 18, kS1.getY() + 34, 250, 12), 10.f * u);
     v3::label(g, T, "Oscillateur 2", R(kS1.getX() + 296, kS1.getY() + 34, 250, 12), 10.f * u);
     v3::label(g, T, u8("Valeur du delay"), R(kS4.getX() + 18, kS4.getY() + 148, 200, 14), 10.5f * u);
-    v3::card(g, T, R(18, 506, 1064, 142), 18.f * u);
-    v3::label(g, T, "Bend", R(18, 640, 52, 14), 10.f * u, juce::Justification::centred);
-    v3::label(g, T, "Mod", R(62, 640, 52, 14), 10.f * u, juce::Justification::centred);
+    for (auto [t, x] : {std::pair<const char*, float>{"Jeu", 18.f}, {"LFO 1", 268.f}, {"LFO 2", 578.f}, {"Filtre 2", 888.f}})
+        v3::label(g, T, t, R(kS5.getX() + x, kS5.getY() + 34, 120, 12), 10.f * u);
+    v3::card(g, T, R(18, 506 + kDY, 1064, 142), 18.f * u);
+    v3::label(g, T, "Bend", R(18, 640 + kDY, 52, 14), 10.f * u, juce::Justification::centred);
+    v3::label(g, T, "Mod", R(62, 640 + kDY, 52, 14), 10.f * u, juce::Justification::centred);
 }
 
 void OrbeSynthEditor::paint3(juce::Graphics& g) {

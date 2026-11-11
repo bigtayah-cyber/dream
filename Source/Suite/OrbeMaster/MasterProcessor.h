@@ -38,12 +38,15 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     // compteurs lus par l'interface (dB) : crête entrée/sortie, réduction compresseur/limiteur, LUFS momentané entrée/sortie
     std::atomic<float> inPk{0.f}, outPk{0.f}, grComp{0.f}, grLim{0.f}, lufsIn{-70.f}, lufsOut{-70.f};
+    // LUFS de sortie : court terme (3 s) et intégré (portes -70 LUFS / -10 LU) ; remise à zéro de l'intégré par requestLufsReset()
+    std::atomic<float> lufsShort{-70.f}, lufsInt{-70.f};
+    void requestLufsReset() { engine.requestLufsReset(); }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout();
     // pointeurs de paramètres résolus une fois dans le constructeur : readParams() (appelé à chaque bloc) ne construit
     // aucune chaîne et ne fait aucune recherche par nom dans le fil audio
-    enum { kEqOn = mas::kBands, kCompOn, kCAmt, kCRatio, kCAtt, kCGain, kSatOn, kDrive, kSatMix, kStOn, kWidth, kMono, kMonoHz, kLimOn, kLGain, kCeil, kLRel, kNumP };
+    enum { kEqOn = mas::kBands, kCompOn, kCAmt, kCRatio, kCAtt, kCGain, kSatOn, kDrive, kSatMix, kStOn, kWidth, kMono, kMonoHz, kLimOn, kLGain, kCeil, kLRel, kTarget, kMatch, kDelta, kNumP };
     std::array<std::atomic<float>*, kNumP> pp{};
     mas::Engine engine;
     mas::BypassDelay byp;

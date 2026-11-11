@@ -148,6 +148,18 @@ int main() {
         std::printf("bypass, traitement très différent du sec : erreur %.1f dB, saut au basculement %.1f dBFS\n", m2.exactDb, m2.jumpDb);
         CHECK(m2.exactDb < -120.0, "bypass (cas dur) non exact : %.1f dB", m2.exactDb); CHECK(m2.jumpDb < -60.0, "clic (cas dur) : %.1f dBFS", m2.jumpDb);
     }
+    { // lot E : pentes 12 / 24 / 48 dB/oct (coupe-bas 200 Hz, une octave et deux octaves plus bas) ; la courbe affichée suit la mesure
+        for (int hpLp = 0; hpLp < 2; ++hpLp) for (int sl = 0; sl < 3; ++sl) {
+            eq::Params p; for (int i = 0; i < eq::kBands; ++i) { p.b[i] = eq::defaultBand(i); p.b[i].on = false; }
+            p.b[0].on = true; p.b[0].type = hpLp ? eq::HighCut : eq::LowCut; p.b[0].freq = hpLp ? 2000.f : 200.f; p.b[0].q = 0.7071f; p.b[0].slope = sl;
+            const double f1 = hpLp ? 4000.0 : 100.0, f2 = hpLp ? 8000.0 : 50.0;
+            const double m1 = measureDb(p, f1, sr), m2 = measureDb(p, f2, sr), t1 = eq::responseDb(p, f1, sr), t2 = eq::responseDb(p, f2, sr);
+            std::printf("%s %d dB/oct : %.1f / %.1f dB à 1 et 2 octaves (théorie %.1f / %.1f)\n", hpLp ? "passe-bas" : "passe-haut", 12 << sl, m1, m2, t1, t2);
+            CHECK(std::fabs(m1 - t1) < 0.3 && std::fabs(m2 - t2) < 0.5, "pente %d : mesure != courbe", sl);
+            if (sl == 2) CHECK(m2 < m1 - 30.0, "pente 48 dB/oct trop molle (%.1f / %.1f)", m1, m2);
+            if (sl == 0) { eq::Params q = p; q.b[0].slope = 0; CHECK(m1 > -20.0, "12 dB/oct trop raide"); }
+        }
+    }
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;
 }

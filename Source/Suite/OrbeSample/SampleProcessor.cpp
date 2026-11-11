@@ -99,7 +99,8 @@ bool SampleProcessor::isBusesLayoutSupported(const BusesLayout& l) const { retur
 
 void SampleProcessor::prepareToPlay(double sampleRate, int) {
     sr = sampleRate;
-    cur.pos = 0; old = {}; fadeLeft = 0; sv[0] = {}; sv[1] = {}; loopLevel = 0.f;
+    cur = {}; old = {}; fadeLeft = 0; sv[0] = {}; sv[1] = {}; loopLevel = 0.f;
+    out.quiesce();  // plus aucun pointeur tenu par le thread audio : les anciens rendus peuvent partir
 }
 
 void SampleProcessor::parameterChanged(const String& id, float) {
@@ -126,6 +127,7 @@ std::shared_ptr<Rendered> SampleProcessor::renderNow(Transformer& tf, const std:
     t.rev = p("rev") > 0.5f; t.tape = p("tape") > 0.5f; t.loop = p("loop") > 0.5f;
     static const int ch[5] = {0, 4, 8, 16, -1};
     t.chop = ch[juce::jlimit(0, 4, (int)p("chop"))];
+    t.tp = loadedVersion.load() >= 3;   // étirement à transitoires préservés (un projet d'avant garde l'ancien WSOLA)
     t.za = p("zoneA"); t.zb = juce::jmax(t.za + 0.002f, p("zoneB"));
     const bool ok = holder.state.load() == 2;
     return tf.render(src, t, ok ? holder.bpm.load() : 0.0, ok ? holder.pc.load() : -1, holder.minor.load() != 0, &cancel);
@@ -235,6 +237,12 @@ void SampleProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     for (int i = 0; i < n; ++i) { L[i] = softClip(L[i] * mg); R[i] = softClip(R[i] * mg); }
     playPos.store(loopLevel > 0.f && cur.r ? (float)(cur.pos / (double)cur.r->pcm->size()) : -1.f);
     slicePlaying.store(sv[svCur].on ? sv[svCur].idx : -1);
+    // les rendus encore lus (boucle, fondu, tranches) restent vivants tant qu'ils servent, quelle que soit leur durée
+    std::uint64_t oldest = out.currentGen();
+    if (cur.r) oldest = juce::jmin(oldest, cur.r->gen);
+    if (fadeLeft > 0 && old.r) oldest = juce::jmin(oldest, old.r->gen);
+    for (const auto& s : sv) if (s.on && s.r) oldest = juce::jmin(oldest, s.r->gen);
+    out.reportInUse(oldest);
 }
 
 // ---------------- échantillon, zone, préréglages ----------------
@@ -278,14 +286,15 @@ void SampleProcessor::applyPreset(int i) {
 
 void SampleProcessor::getStateInformation(juce::MemoryBlock& dest) {
     juce::MemoryOutputStream mo(dest, false);
-    writeState(mo, apvts, holder);
+    writeState(mo, apvts, holder, loadedVersion.load());
     mo.writeInt(presetIdx.load());
 }
 
 void SampleProcessor::setStateInformation(const void* data, int size) {
     juce::MemoryInputStream mi(data, (size_t)size, false);
     restoring = true;
-    if (readState(mi, apvts, holder)) presetIdx = mi.isExhausted() ? 0 : mi.readInt();
+    int ver = 0;
+    if (readState(mi, apvts, holder, &ver)) { loadedVersion = ver; presetIdx = mi.isExhausted() ? 0 : mi.readInt(); }   // version lue avant les paramètres : < 3 = ancien WSOLA
     restoring = false;
     worker.poke();
 }

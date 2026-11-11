@@ -1,6 +1,7 @@
 #pragma once
 #include "../OrbeChain/ChainUi.h"
 #include "../../Kit/v3/NoteNames.h"
+#include "../../Kit/KeyClipboard.h"
 
 class LooksProcessor : public juce::AudioProcessor {
 public:
@@ -27,7 +28,9 @@ public:
 
     static juce::String lookName(int i) { return kit::u8(oc::looks()[(size_t)juce::jlimit(0, oc::numLooks() - 1, i)].name); }
     int currentLook() const { return (int)apvts.getRawParameterValue("look")->load(); }
-    void applyLook(int i);        // choisit le look et ramène les 4 macros à leurs valeurs d'origine
+    void applyLook(int i);        // choisit le look ; ramène les 4 macros à leurs valeurs d'origine seulement si « Garder mes macros » est éteint
+    void resetMacros(int look);   // macros aux valeurs d'origine du look
+    bool keepMacros() const;
     bool macrosMoved() const;     // vrai si une macro a quitté la valeur d'origine du look
     static double macroDefault(const juce::String& id, int look);
     oc::S settings() const;
@@ -37,5 +40,7 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout();
     juce::AudioParameterBool* bypass = nullptr;
+    static constexpr int kLooksVersion = 2;   // 1 : niveau auto d'origine ; 2 : lent et borné à ±3 dB
+    std::atomic<int> lookVersion{kLooksVersion};
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LooksProcessor)
 };

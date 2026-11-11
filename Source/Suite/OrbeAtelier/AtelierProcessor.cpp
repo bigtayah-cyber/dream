@@ -7,7 +7,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtelierProcessor::makeLayout
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout l;
     StringArray names; for (int i = 0; i < atl::numPresets(); ++i) names.add(atl::presetName(i));
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"preset", 1}, "Preset", names, 0));
+    // « preset » : navigation, pas un réglage à automatiser (une automation rechargerait toute la chaîne en pleine lecture)
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"preset", 1}, "Preset", names, 0, AudioParameterChoiceAttributes().withAutomatable(false)));
     const oc::S def = atl::presetSettings(0);
     for (auto& d : atl::kP) {
         const ParameterID pid{d.id, 1};
@@ -23,6 +24,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AtelierProcessor::makeLayout
     }
     l.add(std::make_unique<AudioParameterBool>(ParameterID{"bypass", 1}, "Bypass", false));
     l.add(kit::v3::notes::makeAccidParam());   // ajouté en dernier : écriture dièses / bémols (noms seulement)
+    l.add(std::make_unique<AudioParameterBool>(ParameterID{"dsFirst", 1}, u8("De-ess avant comp"), false));   // ordre de la chaîne : réglage de session, hors presets
     return l;
 }
 
@@ -39,6 +41,7 @@ bool AtelierProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
 
 oc::S AtelierProcessor::settings() const {
     oc::S s; for (auto& d : atl::kP) s.*d.field = apvts.getRawParameterValue(d.id)->load();
+    s.dsFirst = apvts.getRawParameterValue("dsFirst")->load();
     return s;
 }
 

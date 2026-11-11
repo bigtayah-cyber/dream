@@ -58,9 +58,10 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout();
     void setPlain(const char* id, float v);
+    static int stabIndex(int ms) { return ms >= 200 ? 3 : ms >= 80 ? 2 : ms >= 40 ? 1 : 0; }
     void publishEdits();
     void initRaw();
-    enum RawId { rSpeed, rTol, rAmt, rTrans, rForm, rFormPres, rVd, rVr, rHarm, rHv, rDbl, rMix, rLat, rKey, rScale, rAlgo, rExpr, rRender, rGlide, rNum };
+    enum RawId { rSpeed, rTol, rAmt, rTrans, rForm, rFormPres, rVd, rVr, rHarm, rHv, rDbl, rMix, rLat, rKey, rScale, rAlgo, rExpr, rRender, rGlide, rStab, rWarb, rHuman, rTspd, rOvs, rTrack, rAttack, rNum };
     std::atomic<float>* rp[rNum] = {};
     std::atomic<float>* rx[12] = {};
     atn::Engine engine;

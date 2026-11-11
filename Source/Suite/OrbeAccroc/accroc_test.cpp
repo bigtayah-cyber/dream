@@ -185,6 +185,20 @@ int main() {
       std::printf("état : aller-retour %s, version inconnue refusée %s (%zu octets)\n", ok ? "oui" : "NON", rej ? "oui" : "NON", s.size());
       CHECK(ok && rej, "sérialisation de la séquence"); }
 
+    { // lot E : traîne d'écho après l'accident
+        const double sr = 48000; const size_t N = (size_t)(sr * 4);
+        auto x = sine(N, 440.0, sr, 0.4f); for (size_t i = 24000; i < N; ++i) x[i] = 0.f;   // 0,5 s de voix puis silence
+        Seq q; q.s[0] = {Stutter, 1.f, 1.f, 1};
+        auto go = [&](float tail, bool withSeq) { Engine e; e.prepare(sr, 512); Params p; p.tail = tail; p.tailDiv = 1; e.set(p); e.pushSeq(withSeq ? q : Seq{}); return run(e, x, {}, 256, sr); };
+        const Out a = go(0.f, true), b = go(0.6f, true), c = go(0.6f, false), d0 = go(0.f, false);
+        auto rms = [&](const Out& o, const Out& ref, size_t i0, size_t i1) { double t = 0; for (size_t i = i0; i < i1; ++i) { const double v = (double)o.l[i] - ref.l[i]; t += v * v; } return std::sqrt(t / (double)(i1 - i0)); };
+        const double near = rms(b, a, 24000, 48000), far = rms(b, a, 168000, 192000);
+        std::printf("traîne 60 %% : énergie ajoutée %.1f dB (0,5-1 s), %.1f dB (3,5-4 s)\n", db(near), db(far));
+        CHECK(near > 0.005, "pas de traîne (%.4f)", near); CHECK(far < near * 0.1, "la traîne ne s'éteint pas");
+        double dd = 0; for (size_t i = 0; i < c.l.size(); ++i) dd = std::max(dd, (double)std::fabs(c.l[i] - d0.l[i]));
+        CHECK(dd == 0.0, "traîne sans accident non nulle (%.3g)", dd);
+        bool fin = true; for (float v : b.l) fin &= std::isfinite(v) && std::fabs(v) <= 1.0f; CHECK(fin, "traîne non bornée");
+    }
     std::printf(fails ? "\n%d ECHEC(S)\n" : "\nTOUT EST BON\n", fails);
     return fails ? 1 : 0;
 }

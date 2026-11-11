@@ -4,9 +4,11 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <functional>
 #include <mutex>
+#include "../../Kit/StateVersion.h"
 #include "../../Kit/Widgets.h"
 #include "../../Kit/v3/Widgets3.h"
 #include "PadEngine.h"
+#include "Swap.h"
 #include "TransformEngine.h"
 
 namespace osamp {
@@ -20,29 +22,6 @@ inline const char* audioExtensions() { return "wav;aif;aiff;flac;ogg;mp3;m4a;caf
 inline const char* audioWildcards() { return "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3"; }
 inline const char* audioExtensions() { return "wav;aif;aiff;flac;ogg;mp3"; }
 #endif
-
-// Publication d'un objet immuable : le thread audio lit un pointeur brut, les autres threads gardent les propriétaires.
-// Les anciens objets restent vivants 30 s, largement plus que n'importe quelle voix.
-template <class T>
-class Swap {
-public:
-    void publish(std::shared_ptr<const T> p) {
-        std::lock_guard<std::mutex> l(m);
-        const double now = juce::Time::getMillisecondCounterHiRes();
-        raw.store(p.get(), std::memory_order_release);
-        cur = p;
-        hist.push_back({std::move(p), now});
-        hist.erase(std::remove_if(hist.begin(), hist.end(), [&](const Item& i) { return now - i.t > 30000.0 && i.p != cur; }), hist.end());
-    }
-    const T* get() const { return raw.load(std::memory_order_acquire); }
-    std::shared_ptr<const T> share() const { std::lock_guard<std::mutex> l(m); return cur; }
-private:
-    struct Item { std::shared_ptr<const T> p; double t; };
-    mutable std::mutex m;
-    std::atomic<const T*> raw{nullptr};
-    std::shared_ptr<const T> cur;
-    std::vector<Item> hist;
-};
 
 // L'échantillon source, son nom et le résultat de l'analyse (tempo, tonalité) calculée dans un thread de fond.
 class SampleHolder : private juce::Thread {
@@ -71,8 +50,8 @@ private:
 };
 
 // État commun : XML des paramètres + échantillon embarqué.
-void writeState(juce::MemoryOutputStream& mo, juce::AudioProcessorValueTreeState& apvts, const SampleHolder& h);
-bool readState(juce::MemoryInputStream& mi, juce::AudioProcessorValueTreeState& apvts, SampleHolder& h);
+void writeState(juce::MemoryOutputStream& mo, juce::AudioProcessorValueTreeState& apvts, const SampleHolder& h, int stateVersion = kit::kStateVersion);
+bool readState(juce::MemoryInputStream& mi, juce::AudioProcessorValueTreeState& apvts, SampleHolder& h, int* stateVersion = nullptr);   // stateVersion : version lue (0 si absente)
 
 inline juce::String fr(double v, int dec = 1) { return juce::String(v, dec).replace(".", ","); }
 juce::String noteName(int midi);  // MIDI 36 = C1, lettres uniquement

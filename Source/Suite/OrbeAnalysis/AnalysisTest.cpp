@@ -41,6 +41,25 @@ int main() {
         m.process(a.data(), a.data(), N); oa::MixSnap s; m.fill(s);
         CHECK(s.peak < -2.9 && s.tp > s.peak + 1.0 && s.tp < .3, "pic echantillon %.2f dBFS, pic vrai %.2f dBTP", s.peak, s.tp);
     }
+    {   // pic vrai ×4 polyphasé (Dsp/TruePeak.h) : sinus de 1 à 21 kHz, plusieurs phases, contre un sinc ×16 (ancienne mesure cubique : -0,66 dB à 12 kHz)
+        auto tp16 = [](const std::vector<float>& x) {
+            double best = 0; const int n = (int)x.size();
+            for (int i = 40; i < n - 41; ++i) for (int p = 0; p < 16; ++p) {
+                double sum = 0; const double f = p / 16.0;
+                for (int j = -32; j < 32; ++j) { const double d = j - f, sc = std::fabs(d) < 1e-9 ? 1.0 : std::sin(oa::kPi * d) / (oa::kPi * d), r = d / 33.0; sum += x[(size_t)(i + j)] * sc * (0.42 + 0.5 * std::cos(oa::kPi * r) + 0.08 * std::cos(2 * oa::kPi * r)); }
+                best = std::max(best, std::fabs(sum));
+            }
+            return 20 * std::log10(best);
+        };
+        double worst = 0;
+        for (double f : {1000.0, 6000.0, 12000.0, 15000.0, 18000.0, 21000.0}) for (double ph : {0.3, 0.9, 1.7}) {
+            const int N = 9600; std::vector<float> a((size_t)N);
+            for (int i = 0; i < N; ++i) a[(size_t)i] = (float)(0.7 * std::sin(2 * oa::kPi * f * i / 48000.0 + ph) * std::min(1.0, std::min(i / 2000.0, (N - i) / 2000.0)));
+            oa::MixMeter m; m.prepare(48000); m.process(a.data(), a.data(), N); oa::MixSnap s; m.fill(s);
+            worst = std::max(worst, std::fabs(s.tp - tp16(a)));
+        }
+        CHECK(worst < 0.1, "pic vrai x4 : ecart maximal a la reference x16 = %.3f dB (sinus 1-21 kHz)", worst);
+    }
     {   // YIN 220 Hz
         std::vector<float> x((size_t)(sr * 2), 0.f); addNote(x, sr, 220, 0, 2, .4);
         auto t = oa::analyzePitch(x.data(), (int)x.size(), sr); int ok = 0, tot = 0;

@@ -1,4 +1,5 @@
 #include "SamplerCommon.h"
+#include "../../Kit/StateVersion.h"
 
 using namespace kit;
 using juce::Rectangle, juce::String;
@@ -90,18 +91,20 @@ bool SampleHolder::readFrom(juce::MemoryInputStream& mi) {
     return true;
 }
 
-void writeState(juce::MemoryOutputStream& mo, juce::AudioProcessorValueTreeState& apvts, const SampleHolder& h) {
+void writeState(juce::MemoryOutputStream& mo, juce::AudioProcessorValueTreeState& apvts, const SampleHolder& h, int stateVersion) {
     mo.writeInt(0x4F534D50);  // « OSMP »
     mo.writeInt(1);
-    if (auto xml = apvts.copyState().createXml()) mo.writeString(xml->toString(juce::XmlElement::TextFormat().singleLine())); else mo.writeString({});
+    auto st = apvts.copyState();
+    kit::stampState(st, stateVersion);
+    if (auto xml = st.createXml()) mo.writeString(xml->toString(juce::XmlElement::TextFormat().singleLine())); else mo.writeString({});
     h.writeTo(mo);
 }
 
-bool readState(juce::MemoryInputStream& mi, juce::AudioProcessorValueTreeState& apvts, SampleHolder& h) {
+bool readState(juce::MemoryInputStream& mi, juce::AudioProcessorValueTreeState& apvts, SampleHolder& h, int* stateVersion) {
     if (mi.readInt() != 0x4F534D50 || mi.readInt() != 1) return false;
     if (auto xml = juce::parseXML(mi.readString())) {
         auto tree = juce::ValueTree::fromXml(*xml);
-        if (tree.hasType(apvts.state.getType())) apvts.replaceState(tree);
+        if (tree.hasType(apvts.state.getType())) { if (stateVersion) *stateVersion = kit::stateVersionOf(tree); apvts.replaceState(tree); }
     }
     return h.readFrom(mi);
 }

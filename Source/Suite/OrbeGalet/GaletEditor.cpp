@@ -396,6 +396,18 @@ GaletEditor::GaletEditor(GaletProcessor& p)
     snapKey.onClick = [this] { proc.snap = snapKey.getToggleState(); };
     snapKey.setTooltip(u8("Les points s'accrochent \xC3\xA0 la grille."));
     addAndMakeVisible(snapKey);
+    linkKey = std::make_unique<v3::rk::Key>(u8("S\xC3\xA9par\xC3\xA9"), pal, kJade); addAndMakeVisible(*linkKey);
+    linkKey->setTooltip(u8("Une forme par module : Volume, Filtre, Distorsion et Pan ont chacun la leur (choisir le module \xC3\xA0 droite). D\xC3\xA9sactiv\xC3\xA9 : une forme commune, comme avant."));
+    linkAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "shape_link", *linkKey);
+    {
+        const char* nm[4] = {"Vol", "Flt", "Dst", "Pan"}, *tp[4] = {"Volume", "Filtre", "Distorsion", "Pan"};
+        for (int i = 0; i < 4; ++i) {
+            auto* k = modSel.add(new v3::rk::Key(nm[i], pal, kJade)); addChildComponent(k);
+            k->setClickingTogglesState(true); k->setRadioGroupId(4417);
+            k->setTooltip(u8("\xC3\x89" "diter la forme du module ") + juce::String(tp[i]) + u8(" (formes s\xC3\xA9par\xC3\xA9" "es)."));
+            k->onClick = [this, i] { proc.setEditSlot(i); };
+        }
+    }
     for (int i = 0; i < gal::kNumStarts; ++i) {
         auto* b = starts.add(new v3::bridge::PushKey(u8(gal::kStartNames[i]), pal, kJade)); addAndMakeVisible(b);
         b->setTooltip(u8("Remplace la forme par une forme de d\xC3\xA9part (modifiable ensuite)."));
@@ -441,7 +453,7 @@ void GaletEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
     for (auto* sg : {syncSeg.get(), retrigSeg.get(), feelSeg.get(), interpSeg.get()}) { sg->T = tp; sg->repaint(); }
     for (auto* k : modKeys) k->T = tp;
-    snapKey.T = tp; for (auto* b : starts) b->T = tp;
+    snapKey.T = tp; linkKey->T = tp; for (auto* b : modSel) b->T = tp; for (auto* b : starts) b->T = tp;
     power.T = tp; help.T = tp;
     if (persist) v3::Prefs::setTheme("galet", m);
     if (v3::rk::fit(*this, n3, {kW3, kH3}, {kW, kH}, 0.583f, 1.75f, scale_)) resized();
@@ -488,6 +500,10 @@ void GaletEditor::timerCallback() {
     pots[0]->setAlpha(sync ? 1.f : 0.4f); pots[1]->setAlpha(sync ? 0.4f : 1.f); feelSeg->setAlpha(sync ? 1.f : 0.4f);
     k3[0]->setAlpha(sync ? 1.f : 0.4f); k3[1]->setAlpha(sync ? 0.4f : 1.f);
     for (auto* k : k3) k->tickMod(1.f / 30.f);
+    {   // formes séparées : sélecteur de module visible, module édité en surbrillance
+        const bool sep = !proc.linked();
+        for (int i = 0; i < modSel.size(); ++i) { modSel[i]->setVisible(sep); modSel[i]->setToggleState(sep && proc.editSlot() == i, juce::dontSendNotification); }
+    }
     if (proc.getCurrentProgram() != shownProgram) { shownProgram = proc.getCurrentProgram(); presets.setSelectedId(shownProgram + 1, juce::dontSendNotification); }
 }
 
@@ -518,8 +534,10 @@ void GaletEditor::resized3() {
     power.setBounds(Si(1090, 36, 70, 26));
     presets.setBounds(Si(360, 34, 270, 32));
     shapeView->setBounds(Si(20, 84, 740, 230)); transfer->setBounds(Si(780, 84, 380, 230));
-    syncSeg->setBounds(Si(40, 336, 140, 32)); retrigSeg->setBounds(Si(194, 336, 230, 32)); feelSeg->setBounds(Si(438, 336, 280, 32));
-    interpSeg->setBounds(Si(800, 336, 230, 32)); snapKey.setBounds(Si(1044, 336, 100, 32));
+    syncSeg->setBounds(Si(40, 336, 100, 32)); retrigSeg->setBounds(Si(148, 336, 170, 32)); feelSeg->setBounds(Si(326, 336, 240, 32));
+    interpSeg->setBounds(Si(574, 336, 190, 32)); snapKey.setBounds(Si(772, 336, 70, 32));
+    linkKey->setBounds(Si(850, 336, 92, 32));
+    for (int i = 0; i < 4; ++i) modSel[i]->setBounds(Si(950.f + 52.f * (float)i, 336, 48, 32));
     for (auto* s : {syncSeg.get(), retrigSeg.get(), feelSeg.get(), interpSeg.get()}) s->px = 12.f * u_;
     const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false), kw = 104.f;
     auto place = [&](int i, float cx, float y) { k3[i]->setScale(u_); k3[i]->setBounds(Si(cx - kw * 0.5f, y, kw, kh)); };

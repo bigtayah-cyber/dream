@@ -65,6 +65,13 @@ AtelierEditor::AtelierEditor(AtelierProcessor& p) : AudioProcessorEditor(&p), pr
         k->setPeach(true);
     }
     for (auto* k : k3) { k->setLabelPx(10.f); addChildComponent(k); }
+    keyPaster.apply = [this](const kit::keyparse::Key& k) {
+        auto setP = [this](const char* id, int idx) { if (auto* q = proc.apvts.getParameter(id)) q->setValueNotifyingHost(q->convertTo0to1((float)idx)); };
+        setP("key", k.pc + 1); setP("scale", k.minor ? 1 : 0); };
+    if (keyCombo) keyPaster.attach(*keyCombo);
+    dsFirstBtn.setButtonText(u8("De-ess avant comp"));
+    dsFirstBtn.setTooltip(u8("Allumé : le de-esser passe juste après l'EQ, avant le compresseur et la saturation (les sifflantes ne sont plus comprimées puis saturées). Réglage de session : un preset ne le change pas."));
+    addAndMakeVisible(dsFirstBtn); dsFirstAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "dsFirst", dsFirstBtn);
     addChildComponent(prev3); addChildComponent(next3);
     prev3.onClick = [this] { step(-1); }; next3.onClick = [this] { step(1); };
     prev3.setTooltip(u8("Preset précédent")); next3.setTooltip("Preset suivant");
@@ -135,6 +142,7 @@ void AtelierEditor::resized3() {
     themeBtn.setBounds(Si(994, 21, 28, 28));
     power.setBounds(Si(1084, 22, 96, 26));
     prev3.setBounds(Si(406, 17, 36, 36)); next3.setBounds(Si(758, 17, 36, 36));
+    dsFirstBtn.setBounds(Si(30, 24, 220, 24));
     panels3.clear(); labels3.clear();
     const float rowY[3] = {236, 390, 544}, ph = 142, gap = 10, mx = 20, pad = 6;
     const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false);
@@ -156,8 +164,8 @@ void AtelierEditor::resized3() {
                 const float c = cw * wOf(id);
                 if (id == "@tonal") {
                     labels3.push_back({{cx, rowY[row] + 38, c, 12}, u8("Tonalité")}); labels3.push_back({{cx, rowY[row] + 86, c, 12}, "Mode"});
-                    accSeg->setBounds(Si(cx + c - 56, rowY[row] + 56, 50, 20)); accSeg->px = 11.f * u_;
-                    combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 52, c - 64, 28)); combos[cmbI + 1]->setBounds(Si(cx + 4, rowY[row] + 100, c - 8, 28)); cmbI += 2;
+                    accSeg->setBounds(Si(cx + c - 44, rowY[row] + 58, 40, 18)); accSeg->px = 10.f * u_;
+                    combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 52, c - 52, 28)); combos[cmbI + 1]->setBounds(Si(cx + 4, rowY[row] + 100, c - 8, 28)); cmbI += 2;
                 } else if (id == "@dyDiv") {
                     labels3.push_back({{cx, rowY[row] + 60, c, 12}, "Division"});
                     combos[cmbI]->setBounds(Si(cx + 4, rowY[row] + 74, c - 8, 28)); ++cmbI;
@@ -198,8 +206,8 @@ void AtelierEditor::resized() {
             for (auto& id : m.ids) {
                 const Rectangle<float> cell(cx, kRowY[row] + 28, cw, 82.f);
                 if (id == "@tonal") {
-                    accSeg->setBounds(Si(cx + cw - 46, kRowY[row] + 44, 42, 18));
-                    combos[cmbI]->setBounds(Si(cx + 3, kRowY[row] + 42, cw - 52, 22)); combos[cmbI + 1]->setBounds(Si(cx + 3, kRowY[row] + 82, cw - 6, 22));
+                    accSeg->setBounds(Si(x + pw - 74, kRowY[row] + 4, 46, 18));
+                    combos[cmbI]->setBounds(Si(cx + 3, kRowY[row] + 42, cw - 6, 22)); combos[cmbI + 1]->setBounds(Si(cx + 3, kRowY[row] + 82, cw - 6, 22));
                     m.labels.push_back({cx, kRowY[row] + 30, cw, 10}); m.labels.push_back({cx, kRowY[row] + 70, cw, 10}); cmbI += 2;
                 } else if (id == "@dyDiv") {
                     combos[cmbI]->setBounds(Si(cx + 3, kRowY[row] + 56, cw - 6, 22)); m.labels.push_back({cx, kRowY[row] + 44, cw, 10}); ++cmbI;
@@ -211,6 +219,7 @@ void AtelierEditor::resized() {
     }
     pots[potI]->setScale(u_); pots[potI]->setBounds(Si(866, 56, 84, 74)); pots[potI + 1]->setScale(u_); pots[potI + 1]->setBounds(Si(966, 56, 84, 74));
     prev.setBounds(Si(258, 79, 18, 24)); next.setBounds(Si(634, 79, 18, 24));
+    dsFirstBtn.setBounds(Si(26, 64, 232, 22));
 }
 
 void AtelierEditor::timerCallback() {

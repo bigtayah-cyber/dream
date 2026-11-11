@@ -1,6 +1,7 @@
 #pragma once
 #include "AtelierProcessor.h"
 #include "../../Kit/v3/Widgets3.h"
+#include "../../Kit/KeyClipboard.h"
 
 class AtelierEditor : public juce::AudioProcessorEditor, private juce::Timer {
 public:
@@ -51,6 +52,9 @@ private:
     kit::v3::Chevron prev3{true}, next3{false};
     int lastPreset = -1;
     std::unique_ptr<kit::v3::bridge::Seg> accSeg;   // # / b (cellule Tune)
+    kit::KeyPaster keyPaster;   // clic droit sur Tonalité : coller la tonalité copiée depuis Orbe Détect
+    juce::ToggleButton dsFirstBtn{"De-ess avant comp"};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dsFirstAtt;
     juce::ComboBox* keyCombo = nullptr;
     bool flat_ = false;
     float scale_ = 1.f;

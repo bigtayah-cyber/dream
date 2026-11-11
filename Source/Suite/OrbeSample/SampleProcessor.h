@@ -65,6 +65,7 @@ public:
     std::atomic<double> hostBpm{0.0};
     std::atomic<bool> truncated{false};
     std::atomic<int> presetIdx{0};      // -1 = réglage personnalisé
+    std::atomic<int> loadedVersion{3};  // version d'état lue (nouvelle instance : 3) ; < 3 : ancien étirement WSOLA
     RenderThread worker;
 
 private:

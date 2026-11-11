@@ -17,8 +17,8 @@ int main(int argc, char** argv) {
         AutotuneProcessor p2; p2.setStateInformation(old.getData(), (int)old.getSize());
         std::printf("ancien projet : algo = %s (attendu Classique)\n", p2.orbeOn() ? "Orbe" : "Classique");
         const int r2 = juce::roundToInt(p2.raw("rendu")), r1 = juce::roundToInt(proc.raw("rendu"));
-        std::printf("rendu : ancien projet = %d (attendu 1 Precis), nouvelle instance = %d (attendu 0 Satin), doublage neuf = %.2f\n", r2, r1, proc.raw("dbl"));
-        const bool rOk = r2 == 1 && r1 == 0 && proc.raw("dbl") < 0.001f;
+        std::printf("rendu : ancien projet = %d (attendu 1 Precis), nouvelle instance = %d (attendu 1 Precis), doublage neuf = %.2f\n", r2, r1, proc.raw("dbl"));
+        const bool rOk = r2 == 1 && r1 == 1 && proc.raw("dbl") < 0.001f && p2.raw("attack") < 0.5f && p2.raw("warb") > 0.99f && p2.raw("stab") < 0.5f && proc.raw("attack") > 0.5f;   // ancien projet : comportement neutre ; instance neuve : attaque accordee
         std::vector<ned::Note> n(2); n[0].start = 1000; n[0].end = 9000; n[0].center = 60.2f; n[0].shift = 80.f; n[0].edited = 1; n[1].start = 9000; n[1].end = 20000; n[1].center = 64.f;
         proc.setNotes(n, true); juce::MemoryBlock m2; proc.getStateInformation(m2);
         AutotuneProcessor p3; p3.setStateInformation(m2.getData(), (int)m2.getSize());

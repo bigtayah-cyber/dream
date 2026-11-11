@@ -134,6 +134,7 @@ inline Shape stepShape(const char* pat) {
 struct Params {
     bool sync = true; int div = 4, feel = 0;     // division : 4 mes., 2 mes., 1/1, 1/2, 1/4, 1/8, 1/16, 1/32 ; droit / triolet / pointé
     float hz = 1.f, phase = 0.f;                 // Hz libre ; décalage de phase (degrés)
+    bool linked = true;                          // lot E : une seule forme pour les 4 modules (état d'avant) ; faux = une forme par module
     int retrig = 0;                              // 0 hôte (position PPQ), 1 note MIDI, 2 libre
     float smoothMs = 4.f; int interp = Free;
     bool volOn = true; float volDepth = 0.85f;
@@ -218,20 +219,21 @@ public:
         for (int c = 0; c < 2; ++c) { up1[c].init(h1); up2[c].init(h2); dn1[c].init(h1); dn2[c].init(h2); }
         for (auto* r : {&dryL, &dryR, &preL, &preR}) r->assign(kRing, 0.f);
         gR.fill(1.f); cR.fill(1.f); bR.fill(0.f); fbR.fill(0.f); blR.fill(0.f);
-        reset(); seenVer = -1; lutInterp = -1;
+        reset(); seenVer = -1; lutInterp = -1; lutLinked = true;
     }
     void reset() {
         for (int c = 0; c < 2; ++c) { up1[c].reset(); up2[c].reset(); dn1[c].reset(); dn2[c].reset(); ic1[c] = ic2[c] = 0; adPrev[c] = 0; dcX[c] = dcY[c] = 0; ex[c][0] = ex[c][1] = 0; }
         for (auto* r : {&dryL, &dryR, &preL, &preR}) std::fill(r->begin(), r->end(), 0.f);
-        w = 0; phase = 0; m1 = m2 = 0; fresh = true; xf = 0.f; gPrev[0] = gPrev[1] = 1.f;
+        w = 0; phase = 0; for (int k = 0; k < kMod; ++k) m1[k] = m2[k] = 0; fresh = true; xf = 0.f; gPrev[0] = gPrev[1] = 1.f;
     }
     int latency() const { return kLatency; }
     void set(const Params& np) { p = np; }
 
     // Forme : écrite par le fil de message, lue sans attente par le fil audio (essai de verrou, copie de 400 octets).
-    void pushShape(const Shape& s) {
+    // slot 0 = Volume (et forme commune si les modules sont liés), 1 = Filtre, 2 = Distorsion, 3 = Pan.
+    void pushShape(const Shape& s, int slot = 0) {
         while (busy.exchange(true, std::memory_order_acquire)) {}
-        box = s; ver.fetch_add(1, std::memory_order_relaxed);
+        box[(size_t)std::clamp(slot, 0, kMod - 1)] = s; ver.fetch_add(1, std::memory_order_relaxed);
         busy.store(false, std::memory_order_release);
     }
 
@@ -244,11 +246,17 @@ public:
         if (p.sync && p.retrig == 0 && h.playing && h.hasPos) phase = h.ppq / Q;   // calé sur la position de l'hôte
         else phase -= std::floor(phase);
         // nouvelle forme ou nouveau tracé : retabuler, fondu de 20 ms depuis ce qu'on entendait
-        if (seenVer != ver.load(std::memory_order_relaxed) || p.interp != lutInterp) {
+        if (seenVer != ver.load(std::memory_order_relaxed) || p.interp != lutInterp || p.linked != lutLinked) {
             if (!busy.exchange(true, std::memory_order_acquire)) {
-                local = box; seenVer = ver.load(std::memory_order_relaxed); busy.store(false, std::memory_order_release);
-                for (int i = 0; i <= kLut; ++i) prev[(size_t)i] = cur[(size_t)i] + xf * (prev[(size_t)i] - cur[(size_t)i]);
-                render(local, p.interp, cur.data()); lutInterp = p.interp;
+                for (int k = 0; k < kMod; ++k) local[(size_t)k] = box[(size_t)k];
+                seenVer = ver.load(std::memory_order_relaxed); busy.store(false, std::memory_order_release);
+                for (int k = 0; k < kMod; ++k) {   // ce qu'on entendait (selon l'ancien lien) devient le point de départ du fondu
+                    const size_t o = (size_t)(lutLinked ? 0 : k);
+                    for (int i = 0; i <= kLut; ++i) pn[(size_t)k][(size_t)i] = cur[o][(size_t)i] + xf * (prev[o][(size_t)i] - cur[o][(size_t)i]);
+                }
+                for (int k = 0; k < kMod; ++k) { prev[(size_t)k] = pn[(size_t)k]; render(local[(size_t)(p.linked ? 0 : k)], p.interp, cur[(size_t)k].data()); }
+                if (lutLinked && !p.linked) for (int k = 1; k < kMod; ++k) { m1[k] = m1[0]; m2[k] = m2[0]; }
+                lutInterp = p.interp; lutLinked = p.linked;
                 xf = fresh ? 0.f : 1.f;
             }
         }
@@ -270,18 +278,23 @@ public:
         if (fresh) {   // premier bloc : tout part de sa cible (rien ne glisse au chargement)
             sV = tV; sF = tF; sD = tD; sP = tP; sFreq = tFreq; sRes = tRes; for (int k = 0; k < 3; ++k) sW[k] = tW[k];
             sDrive = p.drive; sColor = p.color; sPan = p.pan; sWid = p.width; sMix = tMix; sOut = tOut;
-            const float v = lutAt((float)(phase + phOff - std::floor(phase + phOff))); m1 = m2 = v; fresh = false;
+            for (int k = 0; k < kMod; ++k) { const float v = lutAt(k, (float)(phase + phOff - std::floor(phase + phOff))); m1[k] = m2[k] = v; }
+            fresh = false;
         }
         for (int i = 0; i < n; ++i, ++pos) {
             while (evI < nEv && ev[(size_t)evI] <= pos) { if (p.retrig == 1) phase = 0; ++evI; }
             double ph = phase + phOff; ph -= std::floor(ph);
-            const float raw = lutAt((float)ph);
+            const int nm = lutLinked ? 1 : kMod;   // liés : une seule forme lissée, partagée (identique à l'ancien moteur)
+            float raw[kMod];
+            for (int k = 0; k < nm; ++k) raw[k] = lutAt(k, (float)ph);
             phase += inc;
             if (p.retrig != 0 || !p.sync) phase -= std::floor(phase);
-            m1 += aM * (raw - m1); m2 += aM * (m1 - m2);
-            if (std::fabs(raw - m2) < 1e-7f && std::fabs(raw - m1) < 1e-7f) m1 = m2 = raw;
+            for (int k = 0; k < nm; ++k) {
+                m1[k] += aM * (raw[k] - m1[k]); m2[k] += aM * (m1[k] - m2[k]);
+                if (std::fabs(raw[k] - m2[k]) < 1e-7f && std::fabs(raw[k] - m1[k]) < 1e-7f) m1[k] = m2[k] = raw[k];
+            }
             if (xf > 0.f) xf = std::max(0.f, xf - aX);
-            const float m = m2;
+            const float m = m2[0], mF = m2[lutLinked ? 0 : 1], mD = m2[lutLinked ? 0 : 2], mP = m2[lutLinked ? 0 : 3];
             sm(sV, tV, aP); sm(sF, tF, aP); sm(sD, tD, aP); sm(sP, tP, aP); sm(sFreq, tFreq, aP); sm(sRes, tRes, aP);
             for (int k = 0; k < 3; ++k) sm(sW[k], tW[k], aP);
             sm(sDrive, p.drive, aP); sm(sColor, p.color, aP); sm(sPan, p.pan, aP); sm(sWid, p.width, aP); sm(sMix, tMix, aP); sm(sOut, tOut, aP);
@@ -289,7 +302,7 @@ public:
             const float x0 = inL[i], x1 = inR ? inR[i] : x0;
             float l = x0, r = x1;
             // --- filtre
-            const float eF = sF * m;
+            const float eF = sF * mF;
             if (eF > 0.f || sF > 0.f) {
                 const float lOpen = sW[0] * lOpenLP + sW[1] * std::min(sFreq + 2.08f, std::log(nyq)) + sW[2] * lOpenHP;
                 const float fc = std::exp(lOpen + (sFreq - lOpen) * eF);
@@ -307,14 +320,14 @@ public:
             // --- volume
             const float gV = 1.f - sV * m; l *= gV; r *= gV;
             // --- pan / largeur
-            const float eP = sP * m;
+            const float eP = sP * mP;
             if (eP != 0.f) {
                 const float wd = 1.f + sWid * eP, pn = std::clamp(sPan * eP, -1.f, 1.f);
                 if (wd != 1.f) { const float M = 0.5f * (l + r), S = 0.5f * (l - r) * wd; l = M + S; r = M - S; }
                 l *= pn > 0.f ? std::cos(pn * (float)kPi * 0.5f) : 1.f; r *= pn < 0.f ? std::cos(-pn * (float)kPi * 0.5f) : 1.f;
             }
             // --- distorsion lisse (×4) : drive aligné sur le signal sur-échantillonné, mélange aligné sur la sortie
-            const float eD = sD * m;
+            const float eD = sD * mD;
             const double gNow = std::pow(10.0, (double)(sDrive * eD) / 20.0), bNow = sColor * 0.6;
             const size_t iw = (size_t)(w & kPm);
             gR[iw] = (float)gNow; bR[iw] = (float)bNow; cR[iw] = (float)compensation(type, gNow, bNow);
@@ -343,11 +356,12 @@ public:
 private:
     static inline void sm(float& v, float t, float a) { v += a * (t - v); if (std::fabs(t - v) < 1e-7f) v = t; }
     static inline float blendOf(float e) { const float t = std::min(1.f, e * 5.f); return t * t * (3.f - 2.f * t); }
-    inline float lutAt(float ph) const {
+    inline float lutAt(int k, float ph) const {
+        const auto& c = cur[(size_t)k]; const auto& pv = prev[(size_t)k];
         const float x = ph * (float)kLut; const int i = std::min(kLut - 1, (int)x); const float t = x - (float)i;
-        const float a = cur[(size_t)i] + t * (cur[(size_t)i + 1] - cur[(size_t)i]);
+        const float a = c[(size_t)i] + t * (c[(size_t)i + 1] - c[(size_t)i]);
         if (xf <= 0.f) return a;
-        const float b = prev[(size_t)i] + t * (prev[(size_t)i + 1] - prev[(size_t)i]);
+        const float b = pv[(size_t)i] + t * (pv[(size_t)i + 1] - pv[(size_t)i]);
         return a + xf * (b - a);
     }
     inline float oversample(int c, float x, float g, float b, float comp, float fb, int type) {
@@ -374,11 +388,12 @@ private:
     HalfUp up1[2], up2[2]; HalfDown dn1[2], dn2[2];
     std::vector<float> dryL, dryR, preL, preR;
     std::array<float, kRing> gR{}, bR{}, cR{}, fbR{}, blR{};
-    std::array<float, kLut + 1> cur{}, prev{};
+    static constexpr int kMod = 4;
+    std::array<std::array<float, kLut + 1>, kMod> cur{}, prev{}, pn{};
     std::array<int, 128> ev{};
-    Shape box, local; std::atomic<bool> busy{false}; std::atomic<int> ver{0}; int seenVer = -1, lutInterp = -1;
+    std::array<Shape, kMod> box, local; std::atomic<bool> busy{false}; std::atomic<int> ver{0}; int seenVer = -1, lutInterp = -1; bool lutLinked = true;
     int nEv = 0, evI = 0, pos = 0; unsigned w = 0;
-    float m1 = 0, m2 = 0, xf = 0; bool fresh = true;
+    float m1[kMod] = {}, m2[kMod] = {}, xf = 0; bool fresh = true;
     float sV = 0, sF = 0, sD = 0, sP = 0, sFreq = 6, sRes = 0, sW[3] = {1, 0, 0}, sDrive = 0, sColor = 0, sPan = 0, sWid = 0, sMix = 1, sOut = 1;
     float ic1[2] = {}, ic2[2] = {}, dcX[2] = {}, dcY[2] = {}, ex[2][2] = {}, gPrev[2] = {1, 1};
     double adPrev[2] = {};

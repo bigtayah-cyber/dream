@@ -176,22 +176,23 @@ int main(int argc, char** argv) {
         const float inDb = rmsDb(take.l, take.r);
         std::vector<float> sn((size_t)(sr * 3)); for (size_t i = 0; i < sn.size(); ++i) sn[i] = 0.5012f * std::sin(2 * oc::kPi * 220.f * (float)i / sr);   // sinus à -6 dBFS
         float worstV = 0.f, worstS = 0.f;
-        for (int mode = 0; mode < 2; ++mode) {
-            std::printf("niveau %s (entrée %.1f dB) :", mode ? "Atelier (trim)" : "Looks (auto)", inDb);
+        for (int mode = 0; mode < 3; ++mode) {   // 0 Looks auto v1, 1 Atelier (trim), 2 Looks auto v2 (lent, borné ±3 dB)
+            std::printf("niveau %s (entrée %.1f dB) :", mode == 1 ? "Atelier (trim)" : mode == 2 ? "Looks (auto v2)" : "Looks (auto)", inDb);
             for (int k = 0; k < NL; ++k) {
                 const char* nm = oc::looks()[(size_t)k].name; const float tol = k < 10 ? 2.f : 3.f;
-                oc::Chain c; c.prepare(sr); c.setAutoLevel(mode == 0); oc::S s = oc::lookDefaults(k); if (mode == 0) s.out = 0; c.set(s);
+                oc::Chain c; c.prepare(sr); c.setAutoLevel(mode != 1); oc::S s = oc::lookDefaults(k); if (mode != 1) s.out = 0; if (mode == 2) { s.agRise = 2.f; s.agFall = 0.8f; s.agRange = 3.f; } c.set(s);
                 std::vector<float> oL, oR; run(c, take.l, take.r, oL, oR);
                 const float d = rmsDb(oL, oR, (size_t)(sr * 1.5f)) - rmsDb(take.l, take.r, (size_t)(sr * 1.5f));
                 float pk = 0; bool ok = true; for (size_t i = 0; i < oL.size(); ++i) { ok &= std::isfinite(oL[i]) && std::isfinite(oR[i]); pk = std::max(pk, std::max(std::fabs(oL[i]), std::fabs(oR[i]))); }
                 std::printf(" %s %+.1f", nm, d); worstV = std::max(worstV, std::fabs(d));
-                CHECK(std::fabs(d) <= tol, "niveau hors ±%.0f dB : %s %s %+.1f", tol, mode ? "Atelier" : "Looks", nm, d);
-                CHECK(ok, "NaN sur la prise : %s %s", mode ? "Atelier" : "Looks", nm); CHECK(pk <= ceilLin, "crête %.2f dBFS > -1 dBFS sur la prise : %s", 20 * std::log10(pk), nm);
+                CHECK(std::fabs(d) <= tol, "niveau hors ±%.0f dB : %s %s %+.1f", tol, mode == 1 ? "Atelier" : "Looks", nm, d);
+                CHECK(ok, "NaN sur la prise : %s %s", mode == 1 ? "Atelier" : "Looks", nm); CHECK(pk <= ceilLin, "crête %.2f dBFS > -1 dBFS sur la prise : %s", 20 * std::log10(pk), nm);
+                if (mode == 2) { const float gdb = c.autoGainDb(); const float st = s.agInit; CHECK(gdb >= st - 3.05f && gdb <= st + 3.05f, "gain auto v2 hors ±3 dB du statique : %s %.1f / %.1f", nm, gdb, st); }
                 // sinus à -6 dBFS : ni NaN ni crête > -1 dBFS (les deux modes) ; niveau auto à ±3 dB (le trim statique de l'Atelier est réglé pour une voix, pas pour un sinus)
-                oc::Chain c2; c2.prepare(sr); c2.setAutoLevel(mode == 0); c2.set(s); std::vector<float> pL, pR; run(c2, sn, sn, pL, pR);
+                oc::Chain c2; c2.prepare(sr); c2.setAutoLevel(mode != 1); c2.set(s); std::vector<float> pL, pR; run(c2, sn, sn, pL, pR);
                 float ps = 0; bool oks = true; for (size_t i = 0; i < pL.size(); ++i) { oks &= std::isfinite(pL[i]) && std::isfinite(pR[i]); ps = std::max(ps, std::max(std::fabs(pL[i]), std::fabs(pR[i]))); }
                 const float ds = rmsDb(pL, pR, (size_t)(sr * 1.5f)) - rmsDb(sn, sn, (size_t)(sr * 1.5f));
-                CHECK(oks, "NaN sur le sinus : %s", nm); CHECK(ps <= ceilLin, "crête %.2f dBFS > -1 dBFS sur le sinus : %s %s", 20 * std::log10(ps), mode ? "Atelier" : "Looks", nm);
+                CHECK(oks, "NaN sur le sinus : %s", nm); CHECK(ps <= ceilLin, "crête %.2f dBFS > -1 dBFS sur le sinus : %s %s", 20 * std::log10(ps), mode == 1 ? "Atelier" : "Looks", nm);
                 if (mode == 0) { worstS = std::max(worstS, std::fabs(ds)); CHECK(std::fabs(ds) <= 3.f, "niveau du sinus hors ±3 dB : %s %+.1f", nm, ds); }
             }
             std::printf("\n");
@@ -260,6 +261,27 @@ int main(int argc, char** argv) {
             CHECK(over <= 3.f, "claque : %s dépasse le plafond de %.1f dB sans limiteur", oc::looks()[(size_t)k].name, over);
         }
         std::printf("claques (voix rap -6 dBFS, limiteur coupé) : pire dépassement du plafond %+.1f dB (%s)\n", worst, wn);
+    }
+    { // « De-ess avant comp » (Atelier) : l'interrupteur change bien l'ordre (rendu différent), le de-esser agit toujours dans les deux ordres et la voyelle ne bouge pas
+        const float sr = 48000.f; std::mt19937 rng(5); std::normal_distribution<float> N(0.f, 1.f); std::vector<float> x;
+        for (int ph = 0; ph < 6; ++ph) {
+            onek::Biquad h; h.highpass(sr, 5500.f); h.reset();
+            for (int i = 0; i < (int)(0.09f * sr); ++i) x.push_back(0.35f * h.process(N(rng)));
+            double p = 0; for (int i = 0; i < (int)(0.25f * sr); ++i) { p += 150.0 / sr; x.push_back(0.3f * (float)std::sin(2 * 3.14159265 * p) * std::min(1.f, (float)i / 200.f)); }
+        }
+        double sib[3], vow[3];   // 0 sans de-ess, 1 ordre d'origine, 2 de-ess avant comp
+        for (int f = 0; f < 3; ++f) {
+            oc::S s; s.eqOn = 0; s.cpOn = 1; s.thr = -24; s.ratio = 4; s.atk = 5; s.rel = 80; s.mk = 6; s.cpMix = 1; s.saOn = 1; s.drive = 0.5f; s.saMix = 1; s.dsOn = f > 0; s.dsF = 6000; s.dsAmt = 1; s.dsThr = -35; s.lmOn = 0; s.dsFirst = (float)(f == 2);
+            oc::Chain c; c.prepare(sr); c.setAutoLevel(false); c.set(s); std::vector<float> oL, oR; run(c, x, x, oL, oR);
+            const int lat = c.latency(), per = (int)(0.34f * sr); double hs = 0, vs = 0;
+            onek::Biquad hp5; hp5.highpass(sr, 5000.f); hp5.reset(); std::vector<float> hf(oL.size()); for (size_t i = 0; i < oL.size(); ++i) hf[i] = hp5.process(oL[i]);
+            for (int ph = 1; ph < 6; ++ph) { for (int i = 0; i < (int)(0.09f * sr); ++i) { const double v = hf[(size_t)(ph * per + lat + i)]; hs += v * v; }
+                for (int i = (int)(0.1f * sr); i < (int)(0.3f * sr); ++i) { const double v = oL[(size_t)(ph * per + lat + i)]; vs += v * v; } }
+            sib[f] = 10 * std::log10(hs / 5 / (0.09 * sr) + 1e-12); vow[f] = 10 * std::log10(vs / 5 / (0.2 * sr) + 1e-12);
+        }
+        std::printf("de-ess avant comp : sibilante 5 kHz+ %.1f dB (sans de-ess) / %.1f dB (ordre d'origine) / %.1f dB (avant comp) ; voyelle %.1f / %.1f / %.1f dB\n", sib[0], sib[1], sib[2], vow[0], vow[1], vow[2]);
+        CHECK(sib[2] < sib[0] - 1.0 && sib[1] < sib[0] - 1.0, "le de-esser n'agit plus dans un des deux ordres"); CHECK(std::fabs(sib[2] - sib[1]) > 0.5, "l'interrupteur d'ordre est sans effet");
+        CHECK(std::fabs(vow[2] - vow[0]) < 1.0, "de-ess avant comp : la voyelle bouge de %.1f dB", vow[2] - vow[0]);
     }
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;

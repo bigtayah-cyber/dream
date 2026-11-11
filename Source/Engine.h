@@ -24,6 +24,9 @@ struct Params {
     float deadCents = 0.f;   // zone morte autour de la note (cents)
     float retuneMs = -1.f;   // constante de temps de la correction ; < 0 : dérivée de `tension`
     bool formants = true;    // décaleur à formants préservés (sinon le timbre suit la hauteur)
+    // Options « v2 » de Voile (désactivées par défaut : les autres plugins et les anciens projets gardent exactement l'ancien son).
+    bool mordComp = false;     // Mordant compensé en niveau : le traité garde le niveau de l'entrée (gain lent, ~400 ms)
+    bool haloStereo = false;   // Halo réellement stéréo : un double par côté, graves (< 250 Hz) laissés au centre
 };
 
 inline bool allowedNote(int midi, int key, int scale) {
@@ -508,6 +511,8 @@ public:
         mixS.v = P.mix; mordS.v = P.mordant; haloS.v = P.halo; brumeS.v = P.brume;
         outS.v = std::pow(10.f, P.outDb / 20.f);
         ratioC = 1.f - std::exp(-1.f / (0.003f * sr));
+        mcC = 1.f - std::exp(-1.f / (0.4f * sr)); mcAtk = 1.f - std::exp(-1.f / (0.12f * sr)); mcRel = 1.f - std::exp(-1.f / (0.5f * sr));
+        mcIn = mcOut = 0.f; mcG = 1.f; fhpC = std::exp(-2.f * kPi * 250.f / sr); fhp1 = fhp2 = 0.f;
         dcR = std::exp(-2.f * kPi * 38.2f / sr);   // coupe-continu : 38,2 Hz = ancien 0.995 a 48 kHz (meme son a 48 kHz, identique a toute frequence)
         ratio = ratioT = 1.f;
         shiftSm = shiftT = 0.f;
@@ -587,13 +592,28 @@ public:
                 const float wd = std::min(1.f, m * 50.f);
                 if (wd < 1.f) { const float yd = sat.dry(); y = yd + (y - yd) * wd; }
             } else y = sat.bypass(tuned);
+            if (P.mordComp) {
+                // compensation lente : le niveau (RMS ~400 ms) de la sortie saturée est ramené à celui de l'entrée de la saturation.
+                // Le gain est gelé sous -70 dBFS (aucun gonflement du bruit entre deux phrases) et ne dépasse jamais +1,5 dB.
+                mcIn += (tuned * tuned - mcIn) * mcC; mcOut += (y * y - mcOut) * mcC;
+                if (m <= 0.0005f) mcG += (1.f - mcG) * mcAtk;   // Mordant coupé : retour rapide au gain 1
+                else if (mcIn > 1e-7f) {
+                    const float t = std::min(1.19f, std::max(0.2f, std::sqrt(mcIn / (mcOut + 1e-12f))));
+                    mcG += (t - mcG) * (t < mcG ? mcAtk : mcRel);
+                }
+                y *= mcG;
+            }
             const float mainS = y - dcX + dcR * dcY;
             dcX = y; dcY = mainS;
 
             // doubles « seconde prise » (ADT, unisson qui bouge), un peu plus à gauche / un peu plus à droite
             const float h = haloS.next(P.halo);
-            const float d1 = dbl1.process(mainS, voiced) * h * 0.35f;
-            const float d2 = dbl2.process(mainS, voiced) * h * 0.30f;
+            float d1 = dbl1.process(mainS, voiced) * h * 0.35f;
+            float d2 = dbl2.process(mainS, voiced) * h * 0.30f;
+            if (P.haloStereo) {   // Focus : les doubles ne reprennent que le médium et l'aigu (le grave reste mono, au centre)
+                fhp1 = fhpC * fhp1 + (1.f - fhpC) * d1; d1 -= fhp1;
+                fhp2 = fhpC * fhp2 + (1.f - fhpC) * d2; d2 -= fhp2;
+            }
 
             // delay + reverb, avec ducking du delay sous la voix
             const float b = brumeS.next(P.brume);
@@ -605,8 +625,9 @@ public:
             pre.push((sendLp - sendHp) * b * 0.5f);
             rev.process(pre.read((float)(0.02f * sr)), 0.35f, rL, rR);
 
-            const float wl = mainS + 0.4f * d1 + 0.8f * d2 + duck * dL + rL;
-            const float wr = mainS + 0.8f * d1 + 0.4f * d2 + duck * dR + rR;
+            // Halo : d1 seulement à gauche, d2 seulement à droite (l'ancien dosage 0,4 / 0,8 envoyait les deux doubles des deux côtés)
+            const float wl = P.haloStereo ? mainS + 1.25f * d1 + duck * dL + rL : mainS + 0.4f * d1 + 0.8f * d2 + duck * dL + rL;
+            const float wr = P.haloStereo ? mainS + 1.25f * d2 + duck * dR + rR : mainS + 0.8f * d1 + 0.4f * d2 + duck * dR + rR;
             const float mx = mixS.next(P.mix), og = outS.next(std::pow(10.f, P.outDb / 20.f));
             outL[i] = softClip((dry * (1.f - mx) + wl * mx) * og);
             outR[i] = softClip((dry * (1.f - mx) + wr * mx) * og);
@@ -783,6 +804,7 @@ private:
     PingPong pp;
     Reverb rev;
     Smooth mixS, mordS, haloS, brumeS, outS;
+    float mcIn = 0.f, mcOut = 0.f, mcG = 1.f, mcC = 1e-4f, mcAtk = 1e-3f, mcRel = 1e-4f, fhpC = 0.97f, fhp1 = 0.f, fhp2 = 0.f;
     float ratio = 1.f, ratioT = 1.f, ratioC = 0.01f, shiftSm = 0.f, shiftT = 0.f;
     float accum = 0.f, lvl = 0.f, held = 0.f, dcX = 0.f, dcY = 0.f, dcR = 0.995f;
     int decCount = 0, hopCount = 0, holdCnt = 0, hold = 0, lastTgt = -1;

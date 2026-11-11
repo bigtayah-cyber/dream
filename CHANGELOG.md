@@ -4,6 +4,19 @@ Version courante : branche `vague2-wip` (10 novembre 2026), par rapport à la pr
 Statut : travail en cours, non validé. Les mesures viennent des tests console (sans JUCE) et de pluginval niveau 10 (sans tests d'interface). Rien de ce qui change au son n'a encore été écouté dans FL Studio ; la liste « à écouter » est en bas.
 CI du 10 novembre (branche `main`, qui contient la vague 2) : Windows, 25 VST3 sur 25 réussis à pluginval ; macOS, 25 VST3 sur 25 réussis, mais 0 AU sur 25. Les échecs AU venaient de la CI, pas des plugins : voir « CI et paquets » plus bas.
 
+## Orbe scindé, Orbe Rythme, Orbe FX réel (vague 2, 11 novembre)
+
+- **Orbe** ne joue plus la batterie (accords, lead, basse) ; identifiants et états inchangés.
+- **Orbe Rythme** (nouveau) : la batterie, avec migration des anciens états d'Orbe (voir `docs/orbe-rythme-migration.md`).
+- **Orbe FX** devient un vrai effet audio (filtre, saturation, chorus, delay, réverbe, 4 macros, 12 préréglages). Un ancien état d'Orbe FX est ignoré.
+- CI : 27 plugins vérifiés. Non écouté dans FL Studio ; AU non validé.
+
+## Lot E : studio et instruments (11 novembre)
+
+- **Synth** : repliement de −44 à −85 dB, unisson à phases aléatoires, filtre 2, 2 LFO, glide, mode mono/legato. **808** : relance sans trou (fondu de 2,5 ms), mode « Pliée » moins repliée. **Sample** : étirement qui garde les attaques. Ces trois-là, et **Cabine**, écrivent la version d'état 3 : un projet d'avant garde son ancien son.
+- **Beat** et **Pads** : sorties auxiliaires par piste ou par pad (désactivées par défaut). **Cabine** : de-esser, gain d'entrée, presets tous distincts. **Galet** : une forme par module. **Accroc** : traîne d'écho. **Master** : cible LUFS, écoute à niveau égal, Delta. **EQ** : pentes 12/24/48 dB/oct.
+- Identifiants existants inchangés, nouveaux en fin, neutres par défaut. Détail et mesures : `docs/audit4/lotE-etat.md`. Rien n'a été écouté dans FL Studio.
+
 ## Attention : changements audibles dans les projets existants
 
 La vague 2A change le son de **Voile, Looks, Atelier, Cabine, Synth, Pads et Sample**. Un projet enregistré avant cette version sonnera différemment à la réouverture : ces 7 plugins n'ont pas de mode « ancien son ».
@@ -60,9 +73,18 @@ Ce que l'utilisateur doit savoir :
 
 ### Orbe Master
 - Saturation compensée en niveau. Garde d'entrée NaN/infini.
+- Lot A : limiteur avec **maintien de 30 ms** avant la relâche (DHT à 40 Hz, 8 dB de réduction : 1,16 % avant, 0,000 % après) ; **pic vrai** ×4 polyphasé de 48 coefficients (`Dsp/TruePeak.h`), marge de 0,15 dB : plafond −1 dBTP tenu (avant : −0,68). Latence totale 183 échantillons à 48 kHz (171 avant), toujours déclarée à l'hôte. Le son du limiteur change légèrement sur les graves : à écouter.
+- LUFS **court terme** (3 s) et **intégré** (portes −70 LUFS et −10 LU) de sortie dans l'écran ; double-clic sur les LUFS : remise à zéro de l'intégré.
 
 ### Orbe Synth, Orbe Pads, Orbe Sample
 - Reverb partagée nouvelle. Pads et Sample lisent aussi le MP3 sous Windows (M4A et CAF restent réservés au Mac).
+- Lot A, **crash corrigé (A10 de l'audit 3)** : Pads et Sample lisaient un pointeur brut vers une banque libérée 30 s après son remplacement, alors qu'une voix peut durer 240 s. Les banques vivent maintenant tant qu'une voix les lit (`OrbeSampler/Swap.h`, par générations). Test ASan, UBSan et TSan dans `sampler_test`.
+
+### Orbe Mix
+- Lot A : **pic vrai** ×4 polyphasé (même code que Master). Sinus 12 kHz à −3,10 dBTP : −3,76 affiché avant, −3,10 après ; écart maximal à la référence ×16 : 0,07 dB.
+
+### Version d'état (lot A)
+- Propriété `stateVersion` = 2 écrite par Orbe et Orbe FX, Master, Mix, Cabine, Detect, EQ, Galet, Synth, 808, Beat, Pads et Sample (aucun identifiant de paramètre touché, anciens états relus à l'identique). Patron : `docs/audit4/lotA-etat.md`.
 
 ### Orbe DeEsser
 - Un NaN ou un infini en entrée ne rend plus la sortie NaN pour toujours (G2 de l'audit 2, encore ouvert pour ce plugin). Test ajouté.
@@ -112,3 +134,17 @@ Ce que l'utilisateur doit savoir :
 
 Les 8 points de `docs/tune-algo.md` § 10 ; le son des anciens projets Voile, Looks et un-potard avant et après la vague 2 ; la nouvelle reverb sur les presets de Cabine, Synth, Pads et Sample ; Galet (« Pompe », distorsion à fort drive) ; le bloom de la 808 ; la liste de contrôle FL n° 8 (compensation de latence Autotune), n° 9 (bypass) et n° 12 (rechargement de projet).
 La vague 2 a été compilée sous MSVC par la CI du 10 novembre (25 VST3, pluginval niveau 10 réussi, sans tests d'interface). Les AU n'ont pas encore été validés (voir « CI et paquets »).
+
+## Lot D : famille voix (audit 4), branche `vague2-wip`
+
+Rien de ce qui change au son n'a été écouté dans FL Studio. Mesures : tests console. Aucun identifiant de paramètre existant n'a changé ; les nouveaux sont en fin de liste.
+
+- **Voile** : Mordant compensé en niveau (traité à -0,1 à -0,4 dB du sec, contre +3,7 à +10,9 dB avant), Halo réellement stéréo (un double par côté, graves laissés au centre ; corrélation G/D 0,985 -> 0,917), les 8 presets ne touchent plus la tonalité ni la gamme et sortent à 0 dB. Un état sans propriété `dspv` (projet d'avant) garde l'ancien son.
+- **Orbe Looks** : « Garder mes macros » (paramètre `keep`, allumé par défaut : changer de look ne remet plus les 4 macros à zéro), `look` non automatisable, jauge « Niveau auto », niveau automatique v2 (montée 2 s, descente 0,8 s, borné à ±3 dB autour du gain statique du look) ; Verre Pilé recalé (+2,1 dB -> +1,3 dB). Un état sans propriété `lkv` garde le niveau automatique d'origine.
+- **Orbe Atelier** : `preset` non automatisable ; « De-ess avant comp » (paramètre `dsFirst`, réglage de session hors presets).
+- **Orbe Relance** : harmonie dans la gamme (quinte diatonique : Si en Do majeur reçoit un Fa, plus un Fa dièse) ; tonalité Auto (histogramme des notes chantées, quinte juste tant qu'elle n'est pas sûre) ou imposée (`hkey`, `hscale`). Un état sans `stateVersion` 2 garde la quinte juste fixe.
+- **Orbe Denoiser** : mode Prise (`live`, FFT 512, latence 512 échantillons au lieu de 2048, réduction plafonnée à 12 dB), « Entre les phrases » (`gap`, 0 à 20 dB, voisement sur 100 Hz-4 kHz), réduction par bande (`blo`, `bhi`), l'adaptatif continue pendant l'apprentissage, la fréquence d'échantillonnage est enregistrée avec le profil (recalage en Hz à la relecture).
+- **Orbe DeEsser** : lookahead réglable de 0 à 10 ms (`look`, 1 ms par défaut), liaison stéréo (`link`), détecteur « CH » séparé 2,5-5 kHz avec garde de voisement (`chamt`), bouton Auto-seuil (5 s).
+- **Orbe Fredonne** : la vélocité du MIDI en direct est celle du fichier .MID (tirée du niveau de la note), plus 106 partout.
+- **Orbe Détect** : carte des fausses notes (bouton « Carte voix » : part du temps chanté hors gamme, justesse par note en cents, ligne de temps) ; clic droit sur la tonalité : copier (« Fm »), coller une tonalité de référence. Voile, Looks, Atelier et Relance : clic droit sur le menu Tonalité pour coller.
+- Tests : `orbechain_test`, `orbedenoiser_test`, `orbedeesser_test`, `orbe_relance_test`, `voile_offline_test`, `orbedetect_test` (nouveau).

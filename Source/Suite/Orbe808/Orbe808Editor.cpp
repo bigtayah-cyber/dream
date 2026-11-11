@@ -98,7 +98,7 @@ Orbe808Editor::Orbe808Editor(Orbe808Processor& p)
     juce::StringArray pl;
     for (int i = 0; i <= o808::kNumPresets; ++i) pl.add(Orbe808Processor::presetLabel(i));
     presetSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("preset"), pl, pal, 2);
-    satSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("sat"), juce::StringArray{u8("Douce"), u8("Écrêtée"), u8("Repliée")}, pal);
+    satSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("sat"), juce::StringArray{u8("Douce"), u8("Écrêtée"), u8("Pliée")}, pal);
     bendSeg = std::make_unique<v3::GridSeg>(*ap.getParameter("bend"), juce::StringArray{u8("±1"), u8("±2"), u8("±5"), u8("±12")}, pal);
     for (auto* c : {(juce::Component*)presetSeg.get(), (juce::Component*)satSeg.get(), (juce::Component*)bendSeg.get(), (juce::Component*)&keysUi}) addAndMakeVisible(c);
     presetSeg->setTooltip(u8("Six sons de départ ; toucher un réglage passe en « Perso »"));

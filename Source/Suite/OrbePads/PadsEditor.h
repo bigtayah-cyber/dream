@@ -45,7 +45,7 @@ private:
     std::unique_ptr<kit::v3::Knob3> masterK3;
     void resized3(); void paint3(juce::Graphics&); void paintBackdrop3(juce::Graphics&, juce::Rectangle<float>);
     osamp::WaveView wave;
-    kit::v3::GridSeg modeSeg, divSeg, playSeg, dltSeg;
+    kit::v3::GridSeg modeSeg, divSeg, playSeg, dltSeg, outSeg;
     std::unique_ptr<kit::v3::GridSeg> grpSeg;
     juce::Slider sens;
     std::unique_ptr<SliderAtt> sensAtt;

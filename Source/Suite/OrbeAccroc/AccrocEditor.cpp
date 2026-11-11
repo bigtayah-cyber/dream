@@ -262,7 +262,9 @@ AccrocEditor::AccrocEditor(AccrocProcessor& p)
         {"cr_smooth", "Lissage", "Adoucit les marches : 0 = num\xC3\xA9rique dur, 100 % = lo-fi feutr\xC3\xA9."},
         {"skip_range", "Port\xC3\xA9" "e", "Saut maximal en arri\xC3\xA8re, en doubles-croches."},
         {"gate_div", "Grille", "Taille des cases de micro-coupure."},
-        {"gate_dens", "Densit\xC3\xA9", "Part des cases coup\xC3\xA9" "es (rampes de 2 ms, sans clic)."}};
+        {"gate_dens", "Densit\xC3\xA9", "Part des cases coup\xC3\xA9" "es (rampes de 2 ms, sans clic)."},
+        {"tail", "Tra\xC3\xAEne", "\xC3\x89" "cho synchronis\xC3\xA9 en ping-pong qui prolonge l'accident (aliment\xC3\xA9 par l'accident seul, jamais par le sec). 0 : aucune tra\xC3\xAEne."},
+        {"tail_div", "Dur\xC3\xA9" "e tra\xC3\xAEne", "Retard de l'\xC3\xA9" "cho : croche, croche point\xC3\xA9" "e ou noire. Le nombre de r\xC3\xA9p\xC3\xA9titions monte avec la tra\xC3\xAEne."}};
     for (auto& d : defs) {
         auto* pt = pots.add(new Pot(proc.apvts, d.id, u8(d.lab), u8(d.tip), pal)); pt->setStyle(kit::KnobStyle::Cap); addAndMakeVisible(pt);
         auto* k = k3.add(new v3::Knob3(proc.apvts, d.id, u8(d.lab), u8(d.tip), v3::KnobSize::S));
@@ -320,7 +322,7 @@ void AccrocEditor::setThemeMode(v3::Mode m, bool persist) {
     setLookAndFeel(n3 ? static_cast<juce::LookAndFeel*>(&skin.look3) : static_cast<juce::LookAndFeel*>(&look));
     const v3::Theme* tp = skin.tp();
     seqView->setTheme(tp); status->setTheme(tp);
-    for (auto* p : pots) p->setVisible(!n3);
+    for (int i = 0; i < pots.size() - 2; ++i) pots[i]->setVisible(!n3);   // les deux potards de traîne (lot E) n'existent que dans la face v3
     for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
     for (auto* sg : {stepSeg.get(), clockSeg.get()}) { sg->T = tp; sg->repaint(); }
     for (auto* b : brushes) b->T = tp;
@@ -420,9 +422,10 @@ void AccrocEditor::resized3() {
     for (int i = 0; i < brushes.size(); ++i) brushes[i]->setBounds(Si(20.f + bw * (float)i + 2.f, 326, bw - 4.f, 44));
     reroll.setBounds(Si(820, 326, 194, 44)); clear.setBounds(Si(1026, 326, 194, 44));
     const float kh = v3::Knob3::boxHeight(v3::KnobSize::S, false), kw = 112.f;
-    auto place = [&](int i, float cx, float y) { k3[i]->setScale(u_); k3[i]->setBounds(Si(cx - kw * 0.5f, y, kw, kh)); };
+    auto place = [&](int i, float cx, float y, float w = 0.f) { const float ww = w > 0.f ? w : kw; k3[i]->setScale(u_); k3[i]->setBounds(Si(cx - ww * 0.5f, y, ww, kh)); };
     for (int i = 0; i < 3; ++i) place(i, 40.f + 120.f * ((float)i + 0.5f), kRowA + 34.f);
-    place(3, 776.f + 60.f, kRowA + 34.f); place(4, 776.f + 180.f, kRowA + 34.f);
+    place(3, 836.f, kRowA + 34.f, 100.f); place(4, 940.f, kRowA + 34.f, 100.f);
+    place(21, 1056.f, kRowA + 34.f, 100.f); place(22, 1160.f, kRowA + 34.f, 100.f);
     stepSeg->setBounds(Si(440, kRowA + 44, 300, 34)); clockSeg->setBounds(Si(440, kRowA + 90, 300, 34));
     stepSeg->px = clockSeg->px = 12.f * u_;
     const int n1[4] = {3, 1, 2, 2}, n2[4] = {2, 3, 1, 2};
@@ -446,12 +449,12 @@ void AccrocEditor::paint3(juce::Graphics& g) {
             if (!dot.isTransparent()) { ig.setColour(t.dark ? dot : dot.darker(0.25f)); ig.fillEllipse(R(x, y + 5, 9, 9)); tx += 16; }
             v3::rk::label(ig, c, k, title, tx, y, 260);
         };
-        sec(u8("Hasard"), 40, kRowA + 12); sec(u8("Pas \xC2\xB7 horloge"), 440, kRowA + 12); sec(u8("Sortie"), 776, kRowA + 12);
+        sec(u8("Hasard"), 40, kRowA + 12); sec(u8("Pas \xC2\xB7 horloge"), 440, kRowA + 12); sec(u8("Sortie"), 776, kRowA + 12); sec(u8("Tra\xC3\xAEne"), 1000, kRowA + 12);
         sec("Stutter", kX1[0], kRow1 + 12, kTypeCol[acr::Stutter]); sec("Retour", kX1[1], kRow1 + 12, kTypeCol[acr::Reverse]);
         sec(u8("Arr\xC3\xAAt bande"), kX1[2], kRow1 + 12, kTypeCol[acr::TapeStop]); sec("Gel granulaire", kX1[3], kRow1 + 12, kTypeCol[acr::Freeze]);
         sec(u8("B\xC3\xA9gaiement"), kX2[0], kRow2 + 12, kTypeCol[acr::Stammer]); sec("Crush", kX2[1], kRow2 + 12, kTypeCol[acr::Crush]);
         sec("Saut", kX2[2], kRow2 + 12, kTypeCol[acr::Skip]); sec("Micro-coupures", kX2[3], kRow2 + 12, kTypeCol[acr::Gate]);
-        for (float x : {420.f, 756.f}) v3::rk::sep(ig, t, k, x, kRowA + 14, 120);
+        for (float x : {420.f, 756.f, 990.f}) v3::rk::sep(ig, t, k, x, kRowA + 14, 120);
         for (float x : {414.f, 562.f, 830.f}) v3::rk::sep(ig, t, k, x, kRow1 + 14, 120);
         for (float x : {294.f, 682.f, 830.f}) v3::rk::sep(ig, t, k, x, kRow2 + 14, 120);
     });

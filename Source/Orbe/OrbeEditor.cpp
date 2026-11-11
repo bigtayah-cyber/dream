@@ -143,7 +143,7 @@ OrbeEditor::OrbeEditor(OrbeProcessor& p) : AudioProcessorEditor(&p), proc(p), pa
     humAtt = std::make_unique<SliderAtt>(ap, "human", humanK);
     masterAtt = std::make_unique<SliderAtt>(ap, "master", masterK);
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kNT; ++i) {
         fader[i].setSliderStyle(juce::Slider::LinearVertical); fader[i].setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
         addAndMakeVisible(fader[i]);
         volAtt[i] = std::make_unique<SliderAtt>(ap, "vol" + String(i), fader[i]);
@@ -152,7 +152,7 @@ OrbeEditor::OrbeEditor(OrbeProcessor& p) : AudioProcessorEditor(&p), proc(p), pa
     }
     midiOut.setButtonText("Sortie MIDI"); addAndMakeVisible(midiOut);
     midiAtt = std::make_unique<ButtonAtt>(ap, "midiout", midiOut);
-    midiOut.setTooltip(u8("Envoie aussi les notes en MIDI (canaux 1, 2, 3 et 10) vers les instruments de ton DAW"));
+    midiOut.setTooltip(u8("Envoie aussi les notes en MIDI (canaux 1, 2 et 3) vers les instruments de ton DAW"));
 
     for (auto* b : {&auditionB, &genAll, &genChords, &genLead}) addAndMakeVisible(b);
     {   // v3 : potards haut de gamme sur les mêmes paramètres
@@ -183,7 +183,7 @@ OrbeEditor::OrbeEditor(OrbeProcessor& p) : AudioProcessorEditor(&p), proc(p), pa
     handle = std::make_unique<MidiHandle>(proc, pal);
     addAndMakeVisible(*handle);
     const char* cn[4] = {"Acc", "Lead", "Bas", "Bat"};
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kNT; ++i) {
         chip[i].setButtonText(cn[i]); chip[i].setClickingTogglesState(true); chip[i].setToggleState(true, juce::dontSendNotification);
         chip[i].onClick = [this, i] { bool v = chip[i].getToggleState(); (i == 0 ? handle->chord : i == 1 ? handle->lead : i == 2 ? handle->bass : handle->drums) = v; };
         addAndMakeVisible(chip[i]);
@@ -221,14 +221,14 @@ void OrbeEditor::resized() {
     auditionB.setBounds(Si(24, 520, 124, 40)); genAll.setBounds(Si(160, 520, 124, 40));
     genChords.setBounds(Si(24, 570, 124, 36)); genLead.setBounds(Si(160, 570, 124, 36));
 
-    for (int i = 0; i < 4; ++i) {
-        const float x = 324.f + (float)i * 84.f;
+    for (int i = 0; i < kNT; ++i) {
+        const float x = 324.f + (float)i * 112.f;
         fader[i].setBounds(Si(x + 16, 534, 40, 68));
         mute[i].setBounds(Si(x + 2, 604, 70, 22));
     }
     masterK.setBounds(Si(668, 524, 84, 84));
     handle->setBounds(Si(764, 508, 212, 70));
-    for (int i = 0; i < 4; ++i) chip[i].setBounds(Si(764.f + (float)i * 53.f, 608.f, 50, 17));
+    for (int i = 0; i < kNT; ++i) chip[i].setBounds(Si(764.f + (float)i * 53.f, 608.f, 50, 17));
     midiOut.setBounds(Si(764, 582, 160, 22));
     repaint();
 }
@@ -257,7 +257,7 @@ int rowOfDrum(int n) { for (int i = 0; i < 7; ++i) if (kDrumRow[i] == n) return 
 std::vector<OrbeEditor::Btn> OrbeEditor::buttons() const {
     std::vector<Btn> v;
     const float y = 213, h = 22;
-    for (int i = 0; i < 4; ++i) { v.push_back({S(304.f + (float)i * 84.f, y, 50, h), 0, i}); v.push_back({S(304.f + (float)i * 84.f + 52, y, 24, h), 1, i}); }
+    for (int i = 0; i < kNT; ++i) { v.push_back({S(304.f + (float)i * 112.f, y, 50, h), 0, i}); v.push_back({S(304.f + (float)i * 112.f + 52, y, 24, h), 1, i}); }
     v.push_back({S(648, y, 54, h), 2, 0}); v.push_back({S(706, y, 54, h), 2, 1});
     v.push_back({S(840, y, 64, h), 3, 0}); v.push_back({S(908, y, 68, h), 4, 0});
     return v;
@@ -436,8 +436,8 @@ void OrbeEditor::paint(juce::Graphics& g) {
     // pistes
     const char* tn[4] = {"Accords", "Lead", "Basse", "Batterie"};
     const Colour tc[4] = {kLilac, kIce, kPeach, Colour(0xFFE9E7F0)};
-    for (int i = 0; i < 4; ++i) {
-        const float x = 324.f + (float)i * 84.f;
+    for (int i = 0; i < kNT; ++i) {
+        const float x = 324.f + (float)i * 112.f;
         g.setColour(tc[i]);
         g.fillRoundedRectangle(S(x + 18, 513, 36, 3), 1.5f * u);
         engraved(g, pal, tn[i], S(x - 4, 518, 80, 12), juce::Justification::centred, 9.f * u, 1.6f * u);
@@ -455,7 +455,7 @@ void OrbeEditor::paintHeader(juce::Graphics& g, float u) {
     g.setColour(kLilac.withAlpha(0.8f)); g.drawEllipse(cx - r * 1.28f, cy - r * 1.28f, r * 2.56f, r * 2.56f, 1.f * u);
     engraved(g, pal, "Orbe", S(84, 18, 200, 34), juce::Justification::centredLeft, 28.f * u, 9.f * u, true);
     g.setColour(pal.mute); g.setFont(fnt(10.f * u));
-    g.drawText(u8("Accords · mélodie · basse · batterie"), S(290, 26, 280, 20).toNearestInt(), juce::Justification::centredLeft);
+    g.drawText(u8("Accords · mélodie · basse"), S(290, 26, 280, 20).toNearestInt(), juce::Justification::centredLeft);
 
     const auto& st = proc.style();
     const auto& ap = proc.apvts;
@@ -618,11 +618,7 @@ void OrbeEditor::paintRoll(juce::Graphics& g, float u) {
     auto hiA = ov.withHeight(ov.getHeight() * 0.45f), bsA = ov.withTrimmedTop(ov.getHeight() * 0.47f).withHeight(ov.getHeight() * 0.25f), drA = ov.withTrimmedTop(ov.getHeight() * 0.76f);
     { auto [lo, hi] = laneOf({&song.nChords, &song.nLead}); drawLane(hiA, song.nChords, lo, hi, kLilac, 0.45f); drawLane(hiA, song.nLead, lo, hi, kIce, 0.95f); }
     { auto [lo, hi] = laneOf({&song.nBass}); drawLane(bsA, song.nBass, lo, hi, kPeach, 0.85f); }
-    for (auto& n : song.nDrums) {
-        const int row = rowOfDrum(n.n) == 6 ? 0 : (n.n == 38 || n.n == 39 || n.n == 37) ? 1 : 2;
-        g.setColour(Colour(0xFFE9E7F0).withAlpha(0.25f + 0.6f * n.v));
-        g.fillRect(Rectangle<float>(area.getX() + n.t * stepW, drA.getY() + drA.getHeight() / 3.f * (float)row, juce::jmax(1.5f, stepW * 0.7f), drA.getHeight() / 3.f - 0.5f));
-    }
+    juce::ignoreUnused(drA);   // la batterie vit désormais dans Orbe Rythme
 
     // tête de lecture
     const float step = proc.playStep.load();
@@ -648,14 +644,14 @@ void OrbeEditor::resized3() {
     for (int i = 0; i < 2; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(34.f + 134.f * (float)i, 346, 108, 112)); }
     auditionB.setBounds(Si(24, 520, 124, 40)); genAll.setBounds(Si(160, 520, 124, 40));
     genChords.setBounds(Si(24, 570, 124, 36)); genLead.setBounds(Si(160, 570, 124, 36));
-    for (int i = 0; i < 4; ++i) {
-        const float x = 324.f + (float)i * 84.f;
+    for (int i = 0; i < kNT; ++i) {
+        const float x = 324.f + (float)i * 112.f;
         fader[i].setBounds(Si(x + 16, 534, 40, 68));
         mute[i].setBounds(Si(x + 2, 606, 70, 22));
     }
     k3[2]->setScale(u_); k3[2]->setBounds(Si(660, 516, 100, 112));
     handle->setBounds(Si(768, 508, 208, 70));
-    for (int i = 0; i < 4; ++i) chip[i].setBounds(Si(768.f + (float)i * 52.f, 606.f, 48, 20));
+    for (int i = 0; i < kNT; ++i) chip[i].setBounds(Si(768.f + (float)i * 52.f, 606.f, 48, 20));
     midiOut.setBounds(Si(768, 582, 170, 22));
     repaint();
 }
@@ -679,8 +675,8 @@ void OrbeEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
     g.setColour(T.dark ? juce::Colours::white.withAlpha(0.07f) : Colour(0x14101828)); g.fillRect(R(28, 296, 252, 1));
     const char* tn[4] = {"Accords", "Lead", "Basse", "Batterie"};
     const Colour tc[4] = {T.accent, T.mod, T.out, T.inkMute};
-    for (int i = 0; i < 4; ++i) {
-        const float x = 324.f + (float)i * 84.f;
+    for (int i = 0; i < kNT; ++i) {
+        const float x = 324.f + (float)i * 112.f;
         g.setColour(kTrackCol[i].darker(T.dark ? 0.f : 0.25f)); g.fillRoundedRectangle(R(x + 6, 520, 8, 8), 4.f * u);
         v3::label(g, T, tn[i], R(x + 18, 516, 70, 16), 10.f * u);
         juce::ignoreUnused(tc);
@@ -703,7 +699,7 @@ void OrbeEditor::paintHeader3(juce::Graphics& g, float u) {
     g.setColour(juce::Colours::white.withAlpha(0.5f)); g.fillEllipse(cx - r * 0.62f, cy - r * 0.78f, r * 0.7f, r * 0.42f);
     g.setColour(T.accent.withAlpha(0.8f)); g.drawEllipse(cx - r * 1.28f, cy - r * 1.28f, r * 2.56f, r * 2.56f, 1.f * u);
     v3::brand(g, T, u, "Orbe", "", 72.f);
-    g.setColour(T.inkMute); g.setFont(v3::font(12.f * u)); g.drawText(u8("Accords · mélodie · basse · batterie"), S(250, 28, 320, 20), juce::Justification::centredLeft, false);
+    g.setColour(T.inkMute); g.setFont(v3::font(12.f * u)); g.drawText(u8("Accords · mélodie · basse"), S(250, 28, 320, 20), juce::Justification::centredLeft, false);
     const auto& st = proc.style(); const auto& ap = proc.apvts;
     const int key = (int)ap.getRawParameterValue("key")->load(), sc = (int)ap.getRawParameterValue("scale")->load();
     const float hb = proc.hostBpm.load(); const int bpm = hb > 0.f ? juce::roundToInt(hb) : st.bpm;

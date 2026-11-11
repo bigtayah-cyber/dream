@@ -36,6 +36,10 @@ private:
     float modLevel[8] = {};
     juce::OwnedArray<oc::ui::Pot> pots;
     juce::ComboBox keyBox, scaleBox;
+    kit::KeyPaster keyPaster;   // clic droit sur Tonalité : coller la tonalité copiée depuis Orbe Détect
+    juce::ToggleButton keepBtn{"Garder mes macros"};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> keepAtt;
+    float autoGainDisp = 0.f;
     std::unique_ptr<kit::v3::bridge::Seg> accSeg;   // # / b
     bool flat_ = false;
     juce::ArrowButton prev{"prev", 0.5f, kit::w::kSilk.withAlpha(0.7f)}, next{"next", 0.f, kit::w::kSilk.withAlpha(0.7f)};

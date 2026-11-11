@@ -36,7 +36,7 @@ private:
     std::vector<float> stash[2];
     int ab = 0, preset = 0, maxBlock = 2048;
     eq::Engine engine;
-    std::array<std::array<std::atomic<float>*, 5>, eq::kBands> rawPtr{};   // f, g, q, type, on de chaque bande
+    std::array<std::array<std::atomic<float>*, 6>, eq::kBands> rawPtr{};   // f, g, q, type, on, pente de chaque bande
     std::atomic<float>* outPtr = nullptr;
     std::vector<float> mono;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EqProcessor)

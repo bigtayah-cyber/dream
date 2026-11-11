@@ -17,3 +17,6 @@ target_sources(OrbeDetect PRIVATE ${ORBE_AN_SRC}
     Source/Suite/OrbeDetect/DetectProcessor.cpp Source/Suite/OrbeDetect/DetectEditor.cpp)
 target_compile_definitions(OrbeDetect PUBLIC ${ORBE_SUITE_DEFS})
 target_link_libraries(OrbeDetect PRIVATE juce::juce_audio_utils PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
+
+# Test console (sans JUCE) : carte des fausses notes et collage de tonalité. cmake --build . --target orbedetect_test
+add_executable(orbedetect_test EXCLUDE_FROM_ALL Source/Suite/OrbeDetect/falsenotes_test.cpp ${ORBE_AN_SRC})

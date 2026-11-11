@@ -52,7 +52,7 @@ MasterEditor::MasterEditor(MasterProcessor& p) : AudioProcessorEditor(&p), proc(
         u8("- Chaque module a son interrupteur \xC3\xA0 voyant. Double-clic sur un potard : valeur d'origine."),
         u8("- Compresseur : 1 \xC3\xA0 2 dB de r\xC3\xA9" "duction suffisent. Mono sous : remet les basses en mono sous la fr\xC3\xA9quence choisie."),
         u8("- Limiteur : Gain fixe le niveau final ; Plafond -1 dBTP conseill\xC3\xA9 pour la diffusion."),
-        u8("- Afficheurs : barres de cr\xC3\xAAte entr\xC3\xA9" "e/sortie et r\xC3\xA9" "duction (compresseur, limiteur) ; LUFS momentan\xC3\xA9 de sortie et d'entr\xC3\xA9" "e ; VU de sortie (voyant : cr\xC3\xAAte au-dessus de -0,5 dBFS)."),
+        u8("- Afficheurs : barres de cr\xC3\xAAte entr\xC3\xA9" "e/sortie et r\xC3\xA9" "duction (compresseur, limiteur) ; LUFS momentan\xC3\xA9 de sortie et d'entr\xC3\xA9" "e, LUFS court terme (3 s) et int\xC3\xA9gr\xC3\xA9 de sortie (double-clic sur les LUFS : remise \xC3\xA0 z\xC3\xA9ro de l'int\xC3\xA9gr\xC3\xA9) ; VU de sortie (voyant : cr\xC3\xAAte au-dessus de -0,5 dBFS)."),
         u8("- Latence du limiteur : ") + String(proc.getLatencySamples()) + u8(" \xC3\xA9" "chantillons, d\xC3\xA9" "clar\xC3\xA9" "e \xC3\xA0 l'h\xC3\xB4te.")});
     powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "bypass", power);
     // --- v3 : potards haut de gamme (mêmes paramètres), sélecteur de thème
@@ -62,6 +62,14 @@ MasterEditor::MasterEditor(MasterProcessor& p) : AudioProcessorEditor(&p), proc(
     };
     for (int i = 0; i < mas::kBands; ++i) addK("eq" + String(i), u8(kEqLabel[i]), u8(kEqTip[i]));
     for (auto& d : kOther) addK(d.id, u8(d.label), u8(d.tip));
+    targetSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "target", juce::StringArray{"Off", "-14", "-11", "-9"},
+        u8("Cible de volume (LUFS court terme) : le gain d'entr\xC3\xA9" "e du limiteur suit lentement (au plus 1 dB/s) pour atteindre -14 (streaming), -11 ou -9 LUFS. Off : le r\xC3\xA9glage Gain reste seul."), pal);
+    matchKey = std::make_unique<v3::rk::Key>(u8("Niveau \xC3\xA9gal"), pal, kIce); deltaKey = std::make_unique<v3::rk::Key>("Delta", pal, kIce);
+    addChildComponent(*targetSeg); addChildComponent(*matchKey); addChildComponent(*deltaKey);
+    matchKey->setTooltip(u8("\xC3\x89" "coute \xC3\xA0 niveau \xC3\xA9gal : la sortie est att\xC3\xA9nu\xC3\xA9" "e pour avoir le m\xC3\xAAme LUFS court terme que l'entr\xC3\xA9" "e (jamais amplifi\xC3\xA9e). On compare le son, pas le volume."));
+    deltaKey->setTooltip(u8("Delta : n'\xC3\xA9" "coute que ce que la cha\xC3\xAEne a chang\xC3\xA9 (sortie moins entr\xC3\xA9" "e retard\xC3\xA9" "e)."));
+    matchAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "match", *matchKey);
+    deltaAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "delta", *deltaKey);
     addAndMakeVisible(skin.btn);
     skin.btn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
     skin.btn.onScale = [this](float s) { setUiScale(s); };
@@ -79,7 +87,8 @@ void MasterEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto* p : pots) p->setVisible(!n3);
     for (auto* k : k3) { k->setVisible(n3); k->setup(&skin.T, &skin.art); }
     const v3::Theme* tp = skin.tp();
-    resetBtn.T = tp; power.T = tp; help.T = tp;
+    resetBtn.T = tp; power.T = tp; help.T = tp; targetSeg->T = tp; matchKey->T = tp; deltaKey->T = tp;
+    targetSeg->setVisible(n3); matchKey->setVisible(n3); deltaKey->setVisible(n3);
     if (persist) v3::Prefs::setTheme("master", m);
     if (v3::rk::fit(*this, n3, {kW3, kH3}, {kW, kH}, 0.6f, 1.8f, scale_)) resized();
     sendLookAndFeelChange();
@@ -116,7 +125,7 @@ void MasterEditor::timerCallback() {
     fall(dIn, db(proc.inPk.load()), 0.8f); fall(dOut, db(proc.outPk.load()), 0.8f);
     dGc = juce::jmax(proc.grComp.load(), dGc - 0.25f); dGl = juce::jmax(proc.grLim.load(), dGl - 0.5f);
     holdOut = juce::jmax(db(proc.outPk.load()), holdOut - 0.15f);
-    lufsO = proc.lufsOut.load(); lufsI = proc.lufsIn.load();
+    lufsO = proc.lufsOut.load(); lufsI = proc.lufsIn.load(); lufsS = proc.lufsShort.load(); lufsInt = proc.lufsInt.load();
     vu.step(lufsO > -69.5f ? std::sqrt(std::pow(10.0, (lufsO + 0.691) / 10.0)) : 0.0, 1.0 / 30.0);   // LUFS momentané (K) → tension efficace
     bool eqChanged = false;
     for (int i = 0; i < mas::kBands; ++i) { const float v = proc.raw(("eq" + String(i)).toRawUTF8()) * (proc.raw("eqOn") > 0.5f ? 1.f : 0.f); if (v != eqCache[i]) { eqCache[i] = v; eqChanged = true; } }
@@ -252,6 +261,8 @@ void MasterEditor::resized3() {
     const int sec[8] = {0, 0, 0, 0, 1, 1, 2, 2}, pos[8] = {0, 1, 2, 3, 0, 1, 0, 1};
     for (int i = 0; i < 8; ++i) { auto* k = k3[mas::kBands + i]; k->setScale(u_); k->setBounds(Si(sx[sec[i]] + 88.f * ((float)pos[i] + 0.5f) - kw * 0.5f, kModY + 34.f, kw, kh)); }
     for (int i = 0; i < 3; ++i) { auto* k = k3[mas::kBands + 8 + i]; k->setScale(u_); k->setBounds(Si(800.f + 120.f * ((float)i + 0.5f) - kw * 0.5f, kLimY + 34.f, kw, kh)); }
+    targetSeg->setBounds(Si(900, kEqY + 40, 240, 32)); targetSeg->px = 12.f * u_;
+    matchKey->setBounds(Si(820, kEqY + 96, 150, 32)); deltaKey->setBounds(Si(990, kEqY + 96, 150, 32));
     // toggles : eqOn, compOn, satOn, stOn, mono, limOn
     toggles[0]->setBounds(Si(24, 80, 130, 22)); toggles[1]->setBounds(Si(366, kModY + 12, 24, 22)); toggles[2]->setBounds(Si(554, kModY + 12, 24, 22));
     toggles[3]->setBounds(Si(752, kModY + 12, 24, 22)); toggles[4]->setBounds(Si(690, kModY + 12, 60, 22)); toggles[5]->setBounds(Si(1130, 80, 24, 22));
@@ -271,6 +282,8 @@ void MasterEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
     v3::rk::label(g, T.inkMute, u, u8("Compresseur de bus"), 40, kModY + 14, 200);
     v3::rk::label(g, T.inkMute, u, u8("Saturation"), 404, kModY + 14, 120);
     v3::rk::label(g, T.inkMute, u, u8("St\xC3\xA9r\xC3\xA9o M/S"), 592, kModY + 14, 100);
+    v3::card(g, T, R(800, kEqY, 360, 150), 18.f * u);
+    v3::rk::label(g, T.inkMute, u, u8("Cible \xC2\xB7 \xC3\xA9" "coute"), 822, kEqY + 14, 240); v3::rk::label(g, T.inkMute, u, "LUFS", 822, kEqY + 46, 70);
     v3::rk::label(g, T.inkMute, u, u8("Limiteur true-peak"), 802, 82, 240);
     v3::rk::label(g, T.inkMute, u, u8("Limiteur \xC2\xB7 r\xC3\xA9glages"), 822, kLimY + 14, 240);
     v3::rk::sep(g, T, u, 392, kModY + 14, 132); v3::rk::sep(g, T, u, 582, kModY + 14, 132);
@@ -349,6 +362,12 @@ void MasterEditor::paintLufs3(juce::Graphics& g, Rectangle<float> r) {
     const float d = (lufsO <= -69.5f || lufsI <= -69.5f) ? 0.f : lufsO - lufsI;
     g.setColour(T.scrMute); g.setFont(v3::font(13.f * u));
     g.drawText(u8("\xCE\x94 ") + v3::fmt::signedNum(d, 1) + u8("\xC2\xA0LU"), Rectangle<float>(r.getX(), r.getY() + 160 * u, r.getWidth(), 18 * u), juce::Justification::centredLeft, false);
+    g.drawText(u8("Court terme ") + txt(lufsS), Rectangle<float>(r.getX(), r.getY() + 182 * u, r.getWidth(), 18 * u), juce::Justification::centredLeft, false);
+    g.drawText(u8("Int\xC3\xA9gr\xC3\xA9 ") + txt(lufsInt), Rectangle<float>(r.getX(), r.getY() + 200 * u, r.getWidth(), 18 * u), juce::Justification::centredLeft, false);
+}
+
+void MasterEditor::mouseDoubleClick(const juce::MouseEvent& e) {
+    if (isV3() && S(1014, 104, 140, 230).contains(e.position)) proc.requestLufsReset();
 }
 
 void MasterEditor::paint3(juce::Graphics& g) {

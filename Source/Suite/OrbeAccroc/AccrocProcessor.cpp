@@ -15,14 +15,14 @@ juce::String integer(float v) { return String(juce::roundToInt(v)); }
 struct Preset { const char* name; const char* types; const char* lens; float inten; void (*tune)(acr::Params&); };
 const Preset kPresets[] = {
     {"B\xC3\xA9gaiement trap", "....B.......B.b.", "1111111111112121", 0.9f, [](acr::Params&) {}},
-    {"Stutter de fin de mesure", "............S...", "1111111111114111", 1.f, [](acr::Params& p) { p.stuDiv = 3; p.stuDecay = 0.25f; }},
+    {"Stutter de fin de mesure", "............S...", "1111111111114111", 1.f, [](acr::Params& p) { p.stuDiv = 3; p.stuDecay = 0.25f; p.tail = 0.3f; }},
     {"Rampe qui monte", "........S.......", "1111111181111111", 1.f, [](acr::Params& p) { p.stuDiv = 3; p.stuPitch = 2.f; p.stuDecay = 0.1f; }},
-    {"Tape-stop de fin de phrase", "............T...", "1111111111114111", 1.f, [](acr::Params& p) { p.stepDiv = 0; p.tapeDepth = 1.f; p.tapeCurve = 0.4f; }},
+    {"Tape-stop de fin de phrase", "............T...", "1111111111114111", 1.f, [](acr::Params& p) { p.stepDiv = 0; p.tapeDepth = 1.f; p.tapeCurve = 0.4f; p.tail = 0.25f; p.tailDiv = 2; }},
     {"Dive de hauteur", "......T.......T.", "1111112111111121", 0.85f, [](acr::Params& p) { p.tapeDepth = 0.5f; p.tapeCurve = 0.3f; }},
     {"Gel de refrain", "F...............", "8111111111111111", 0.8f, [](acr::Params& p) { p.stepDiv = 0; p.frzMs = 120.f; p.frzJitter = 0.4f; }},
     {"Crush lo-fi", "C...............", "g111111111111111", 0.85f, [](acr::Params& p) { p.crBits = 7.f; p.crRate = 8000.f; p.crSmooth = 0.6f; }},
     {"Hoquet rythmique", "G...G...G.G.G...", "1111111111111111", 1.f, [](acr::Params& p) { p.gateDiv = 1; p.gateDens = 0.55f; }},
-    {"Retour arri\xC3\xA8re", "....R.......R...", "1111211111112111", 0.9f, [](acr::Params& p) { p.revDiv = 1; }},
+    {"Retour arri\xC3\xA8re", "....R.......R...", "1111211111112111", 0.9f, [](acr::Params& p) { p.revDiv = 1; p.tail = 0.35f; p.tailDiv = 1; }},
     {"Saut de lecture", "..J...J...J.J...", "1121112111212111", 0.9f, [](acr::Params& p) { p.skipRange = 4; }},
     {"Micro-coupures", "g.g.g.g.g.g.g.g.", "1111111111111111", 1.f, [](acr::Params& p) { p.gateDiv = 2; p.gateDens = 0.35f; }},
     {"Accident contr\xC3\xB4l\xC3\xA9", "................", nullptr, 0.9f, [](acr::Params& p) { p.chaos = 0.35f; p.seed = 7; }},
@@ -62,6 +62,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AccrocProcessor::makeLayout(
     l.add(choice("gate_div", "Trous grille", {"1/16", "1/32", "1/64"}, d.gateDiv));
     l.add(fparam("gate_dens", u8("Trous densit\xC3\xA9"), 0.f, 1.f, 0.001f, d.gateDens, pct));
     l.add(choice("bypass", "Bypass", {"Off", "On"}, 0));   // contournement en « choix » à deux états (aucun booléen)
+    l.add(fparam("tail", u8("Tra\xC3\xAEne"), 0.f, 1.f, 0.001f, d.tail, pct));   // lot E : ajoutés en fin, neutres par défaut
+    l.add(choice("tail_div", u8("Tra\xC3\xAEne division"), {"1/8", "3/16", "1/4"}, d.tailDiv));
     return l;
 }
 
@@ -85,6 +87,7 @@ acr::Params AccrocProcessor::readParams() const {
     p.repDiv = ch("rep_div"); p.repGap = raw("rep_gap");
     p.crBits = raw("cr_bits"); p.crRate = raw("cr_rate"); p.crSmooth = raw("cr_smooth");
     p.skipRange = ch("skip_range"); p.gateDiv = ch("gate_div"); p.gateDens = raw("gate_dens");
+    p.tail = raw("tail"); p.tailDiv = ch("tail_div");
     return p;
 }
 
@@ -98,6 +101,7 @@ void AccrocProcessor::writeParams(const acr::Params& p) {
     put("rep_div", (float)p.repDiv); put("rep_gap", p.repGap);
     put("cr_bits", p.crBits); put("cr_rate", p.crRate); put("cr_smooth", p.crSmooth);
     put("skip_range", (float)p.skipRange); put("gate_div", (float)p.gateDiv); put("gate_dens", p.gateDens);
+    put("tail", p.tail); put("tail_div", (float)p.tailDiv);
 }
 
 void AccrocProcessor::setSeq(const acr::Seq& s) {

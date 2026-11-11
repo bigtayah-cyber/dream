@@ -14,6 +14,7 @@ struct TParams {
     bool rev = false, tape = false, loop = true;
     int chop = 8;              // 0 aucune, 4, 8, 16, -1 aux attaques
     float za = 0, zb = 1;      // zone (0..1 de la source)
+    bool tp = false;           // étirement à transitoires préservés (stretchTP) au lieu du WSOLA d'origine
 };
 
 struct Rendered {
@@ -23,6 +24,7 @@ struct Rendered {
     double bpm = 0;            // tempo de la boucle rendue (0 = inconnu)
     int pc = -1; bool minor = false;
     double T = 1;              // facteur de vitesse appliqué
+    mutable std::uint64_t gen = 0;   // génération attribuée par Swap::publish (durée de vie, voir Swap.h)
 };
 
 inline double rateHz(float v) { return std::round(4000.0 * std::pow(44100.0 / 4000.0, (double)v)); }
@@ -55,13 +57,13 @@ public:
         T = std::max(0.25, std::min(4.0, T));
         (void)dur;
         // étape 1 (mise en cache) : zone, reverse, hauteur / étirement
-        const Key k{src.get(), a, b, P.rev, P.mode, (int)std::lround(P.semi * 1000), P.mode == 0 ? 0 : (int)std::lround(T * 10000)};
+        const Key k{src.get(), a, b, P.rev, P.mode, (int)std::lround(P.semi * 1000), P.mode == 0 ? 0 : (int)std::lround(T * 10000) * 2 + (P.tp ? 1 : 0)};
         if (!(k == key) || stage.empty()) {
             Chs chs(2);
             for (int c = 0; c < 2; ++c) chs[(size_t)c].assign(src->ch[c].begin() + a, src->ch[c].begin() + b);
             if (P.rev) for (auto& c : chs) std::reverse(c.begin(), c.end());
             if (P.mode == 0) chs = resample(chs, pf);
-            else { chs = stretch(chs, pf / T, cancel); if (cancel && cancel->load()) return nullptr; chs = resample(chs, pf); }
+            else { chs = P.tp ? stretchTP(chs, pf / T, sr, cancel) : stretch(chs, pf / T, cancel); if (cancel && cancel->load()) return nullptr; chs = resample(chs, pf); }
             stage = std::move(chs); key = k; keep = src;
         }
         Chs x = stage;

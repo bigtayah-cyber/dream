@@ -196,6 +196,21 @@ AutotuneEditor::AutotuneEditor(AutotuneProcessor& p) : AudioProcessorEditor(&p),
         k->setBipolar(id == "trans" || id == "form");
         addChildComponent(k);
     }
+    {   // comportement (P1/P2) : mêmes attachements apvts, v3 seulement
+        static const PotDef kBeh[] = {
+            {"warb", "Warble", "Bascule de note sur un vibrato \xC3\xA0 cheval entre deux notes. 100 % = libre (effet warble des rappeurs), 0 % = la note ne bascule plus sur le vibrato.", 0},
+            {"human", "Humanize", "Plus la note dure, plus la correction se rel\xC3\xA2" "che (jusqu'\xC3\xA0 +120 ms) : les notes br\xC3\xA8ves restent dures, les tenues respirent.", 0},
+            {"tspd", "Transition", "Vitesse de la correction juste apr\xC3\xA8s un changement de note (ms). 0 = celle de Vitesse.", 0},
+            {"ovs", "Vitesse < 0", "D\xC3\xA9passe la nouvelle note de quelques cents au changement, puis revient : escalier plus claqu\xC3\xA9, au-del\xC3\xA0 de la vitesse 0.", 0},
+            {"track", "Suivi", "D\xC3\xA9tection de la hauteur : serr\xC3\xA9 = voix nette ; souple = voix souffl\xC3\xA9" "e ou chuchot\xC3\xA9" "e mieux suivie (un peu plus de faux positifs).", 0},
+        };
+        for (auto& d : kBeh) { auto* k = kb.add(new v3::Knob3(proc.apvts, d.id, u8(d.label), u8(d.tip), v3::KnobSize::M)); k->setLabelPx(11.5f); addChildComponent(k); }
+        stabSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "stab", juce::StringArray{"Off", "40", "80", "200"},
+            u8("Stabilisateur de notes : une note nouvelle doit tenir 40, 80 ou 200 ms avant d'\xC3\xAAtre adopt\xC3\xA9" "e (Direct : 40 ms au plus). Ignore les notes parasites d'un vibrato ou d'un souffle."), pal);
+        atkSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "attack", juce::StringArray{"Non", "Oui"},
+            u8("Attaque accord\xC3\xA9" "e (Direct, vitesse dure) : la correction est pos\xC3\xA9" "e d\xC3\xA8s les premi\xC3\xA8res ms d'une note, sans rampe."), pal);
+        addChildComponent(*stabSeg); addChildComponent(*atkSeg);
+    }
     addAndMakeVisible(themeBtn);
     themeBtn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
     themeBtn.onScale = [this](float s) { setUiScale(s); };
@@ -218,6 +233,8 @@ void AutotuneEditor::setThemeMode(v3::Mode m, bool persist) {
     roll->setLookAndFeel(n3 ? &look3Screen : nullptr);
     for (auto* p : pots) p->setVisible(!n3);
     for (auto* k : k3) { k->setVisible(n3); k->setup(&T, &art); }
+    for (auto* k : kb) { k->setVisible(n3); k->setup(&T, &art); }
+    for (auto* sg : {stabSeg.get(), atkSeg.get()}) { sg->setVisible(n3); sg->T = n3 ? &T : nullptr; sg->repaint(); }
     const v3::Theme* tp = n3 ? &T : nullptr;
     for (auto* sg : {latSeg.get(), algoSeg.get(), accSeg.get(), renduSeg.get()}) { sg->T = tp; sg->repaint(); }
     editKey.T = resetNotes.T = tp; power.T = tp; help.T = tp; keys.T = tp; roll->setTheme(tp);
@@ -297,6 +314,11 @@ void AutotuneEditor::resized3() {
     renduSeg->setBounds(Si(800, 397, 280, 26)); renduSeg->px = 10.f * u_;
     const float kh = v3::Knob3::boxHeight(v3::KnobSize::M, false);
     for (int i = 0; i < k3.size(); ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(potX(i) - kSlot * 0.5f, 556, kSlot, kh)); }
+    {   // rangée « Comportement » : stabilisateur et attaque à gauche, cinq potards ensuite
+        for (int i = 0; i < kb.size(); ++i) { kb[i]->setScale(u_); kb[i]->setBounds(Si(30.f + 260.f + (float)i * kSlot, 726, kSlot, kh)); }
+        stabSeg->setBounds(Si(42, 754, 200, 28)); stabSeg->px = 11.f * u_;
+        atkSeg->setBounds(Si(42, 812, 120, 28)); atkSeg->px = 11.f * u_;
+    }
     formToggle.setBounds(Si(kSecX[1] + 12, 525, 170, 22));
     harmBox.setBounds(Si(kSecX[3] + 8, 522, 134, 28));
 }
@@ -326,6 +348,11 @@ void AutotuneEditor::paintBackdrop3(juce::Graphics& g, Rectangle<float> b) {
         g.setColour(T.inkMute); v3::caps(g, u8(titles[i]), R(kSecX[i] + 12, 498, kSecX[i + 1] - kSecX[i] - 16, 16), 11.f * u, juce::Justification::centredLeft);
         if (i > 0) { g.setColour(T.dark ? juce::Colours::white.withAlpha(0.07f) : juce::Colour(0x14101828)); g.fillRect(R(kSecX[i], 500, 1, 168)); }
     }
+    v3::card(g, T, R(20, 700, 1060, 150), 18.f * u);
+    g.setColour(T.inkMute);
+    v3::caps(g, "Comportement", R(32, 712, 200, 16), 11.f * u, juce::Justification::centredLeft);
+    v3::caps(g, "Stabilisateur (ms)", R(44, 736, 200, 16), 11.f * u, juce::Justification::centredLeft);
+    v3::caps(g, u8("Attaque accordée"), R(44, 794, 200, 16), 11.f * u, juce::Justification::centredLeft);
     g.setColour(T.scrMute);
     v3::caps(g, "Note", R(818, 218, 100, 16), 11.f * u, juce::Justification::centredLeft);
     v3::caps(g, u8("Écart"), R(960, 218, 102, 16), 11.f * u, juce::Justification::centredRight);

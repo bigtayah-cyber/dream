@@ -1,4 +1,5 @@
 #include "DetectEditor.h"
+#include "../../Kit/KeyClipboard.h"
 
 using namespace ou;
 using kit::u8;
@@ -15,7 +16,10 @@ DetectEditor::DetectEditor(DetectProcessor& p)
     : Base3(p, 1000.f, 640.f, 1180.f, 762.f, u8("Orbe Détect"), kit::w::serial::detect, kit::Display::VFD, kOk, "detect", "Orbe", u8("Détect"), v3::accents::mint), proc(p), cur(p.result()), halfB(u8("×½")) {
     captureB.setButtonText("Capturer"); addAndMakeVisible(captureB);
     capAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "capture", captureB);
-    for (auto* b : {&clearB, &analyzeB, &halfB, &dblB, &tapB, &applyB}) addAndMakeVisible(*b);
+    for (auto* b : {&clearB, &analyzeB, &halfB, &dblB, &tapB, &applyB, &mapB}) addAndMakeVisible(*b);
+    mapB.setClickingTogglesState(true);
+    mapB.setTooltip(u8("Carte des fausses notes : sur une piste de voix captur\xC3\xA9" "e, juge la hauteur chant\xC3\xA9" "e par rapport \xC3\xA0 la tonalit\xC3\xA9 (clic droit sur la tonalit\xC3\xA9 : coller celle du beat)."));
+    mapB.onClick = [this] { showMap = mapB.getToggleState(); if (showMap && !proc.falseMap()) proc.analyzeMap(); repaint(); };
     applyB.setButtonText(u8("Appliquer le tap")); applyB.setVisible(false);
     captureB.setTooltip(u8("Enregistre l'audio entrant (jusqu'à 2 minutes, silence ignoré)"));
     clearB.setTooltip(u8("Efface la capture")); analyzeB.setTooltip(u8("Analyse tempo et tonalité de la capture (5 s minimum)"));
@@ -44,11 +48,12 @@ void DetectEditor::layout() {
     accSeg->setBounds(Ri(588, 88, 56, 20));
     analyzeB.setBounds(Ri(36, 224, 278, 28));
     halfB.setBounds(Ri(36, 424, 134, 28)); dblB.setBounds(Ri(180, 424, 134, 28));
+    mapB.setBounds(Ri(872, 436, 100, 22));
     tapB.setBounds(Ri(36, 462, 134, 44)); applyB.setBounds(Ri(36, 514, 278, 24));
 }
 
 void DetectEditor::themeChanged(const v3::Theme* tp) {
-    for (auto* b : {&captureB, &clearB, &analyzeB, &halfB, &dblB, &tapB, &applyB}) { b->T = tp; b->repaint(); }
+    for (auto* b : {&captureB, &clearB, &analyzeB, &halfB, &dblB, &tapB, &applyB, &mapB}) { b->T = tp; b->repaint(); }
     accSeg->T = tp; accSeg->px = 10.5f; accSeg->repaint();
 }
 
@@ -67,6 +72,7 @@ void DetectEditor::timerCallback() {
     analyzeB.setEnabled(!busy && capSec >= DetectProcessor::kMinSec); clearB.setEnabled(!busy && capSec > 0);
     halfB.setEnabled(cur->valid); dblB.setEnabled(cur->valid);
     applyB.setVisible(cur->valid && tapBpm > 0);
+    { const auto nm = proc.falseMap(); if (nm != fmap) fmap = nm; mapBusy = busy; mapB.setEnabled(!busy && capSec >= 2.0); }
     repaint();
 }
 
@@ -84,7 +90,27 @@ std::string DetectEditor::wheelHit(juce::Point<float> p) const {
     return std::to_string(n) + (d < R1 ? "A" : "B");
 }
 void DetectEditor::mouseMove(const juce::MouseEvent& e) { const auto h = wheelHit(e.position); if (h != hover) { hover = h; repaint(); } }
-void DetectEditor::mouseDown(const juce::MouseEvent& e) { const auto h = wheelHit(e.position); if (h.empty()) return; focus = (focus == h) ? std::string() : h; repaint(); }
+void DetectEditor::mouseDown(const juce::MouseEvent& e) {
+    if (e.mods.isPopupMenu() && keyLcdRect().contains(e.position)) { keyMenu(); return; }
+    const auto h = wheelHit(e.position); if (h.empty()) return; focus = (focus == h) ? std::string() : h; repaint();
+}
+
+void DetectEditor::keyMenu() {
+    juce::PopupMenu m; const auto r = cur;
+    kit::keyparse::Key pk; const bool canPaste = kit::keyparse::parse(juce::SystemClipboard::getTextFromClipboard().toStdString(), pk);
+    const int ref = proc.refKeyCode();
+    m.addItem(1, r->valid ? u8("Copier la tonalit\xC3\xA9 : ") + String(kit::keyparse::format(r->pc, r->minor)) : u8("Copier la tonalit\xC3\xA9"), r->valid);
+    m.addItem(2, canPaste ? u8("Coller la tonalit\xC3\xA9 de r\xC3\xA9" "f\xC3\xA9rence : ") + String(kit::keyparse::format(pk.pc, pk.minor)) : u8("Coller la tonalit\xC3\xA9 de r\xC3\xA9" "f\xC3\xA9rence"), canPaste);
+    m.addItem(3, ref >= 0 ? u8("Revenir \xC3\xA0 la tonalit\xC3\xA9 d\xC3\xA9tect\xC3\xA9" "e (r\xC3\xA9" "f\xC3\xA9rence : ") + String(kit::keyparse::format(ref / 2, (ref & 1) != 0)) + ")" : u8("Revenir \xC3\xA0 la tonalit\xC3\xA9 d\xC3\xA9tect\xC3\xA9" "e"), ref >= 0);
+    juce::Component::SafePointer<DetectEditor> self(this);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(keyLcdRect().toNearestInt())), [self, r, pk](int id) {
+        if (self == nullptr) return;
+        if (id == 1 && r->valid) juce::SystemClipboard::copyTextToClipboard(String(kit::keyparse::format(r->pc, r->minor)));
+        else if (id == 2) { self->proc.setRefKey(pk.pc, pk.minor); if (self->showMap) self->proc.analyzeMap(); }
+        else if (id == 3) { self->proc.clearRefKey(); if (self->showMap) self->proc.analyzeMap(); }
+        self->repaint();
+    });
+}
 
 void DetectEditor::body(juce::Graphics& g) {
     const float u = u_; const auto& r = *cur; const bool ok = r.valid;
@@ -217,8 +243,9 @@ void DetectEditor::body(juce::Graphics& g) {
     }
 
     // ---- compatibles
-    panel(g, pal, R(668, 432, 312, 188), code.empty() ? "Compatibles" : "Compatibles avec " + T(code), u);
-    if (!code.empty()) {
+    panel(g, pal, R(668, 432, 312, 188), showMap ? "Carte des fausses notes" : code.empty() ? "Compatibles" : "Compatibles avec " + T(code), u);
+    if (showMap) drawMap(g, R(680, 462, 288, 150), nullptr, u);
+    else if (!code.empty()) {
         const auto comp = oa::compatCodes(code); const char* why[4] = {"même tonalité", "−1 · plus calme", "+1 · plus d'énergie", "relative · autre couleur"};
         for (int i = 0; i < 4; ++i) {
             int p = 0; bool m = false; oa::fromCamelot(comp[(size_t)i], p, m); const float y = 464.f + (float)i * 36.f;
@@ -236,6 +263,7 @@ void DetectEditor::layout3() {
     accSeg->setBounds(Ri(672, 74, 56, 17));
     analyzeB.setBounds(Ri(36, 254, 308, 32));
     halfB.setBounds(Ri(36, 452, 150, 32)); dblB.setBounds(Ri(194, 452, 150, 32));
+    mapB.setBounds(Ri(1040, 500, 112, 28));
     tapB.setBounds(Ri(36, 496, 150, 48)); applyB.setBounds(Ri(36, 552, 308, 32));
 }
 
@@ -365,8 +393,9 @@ void DetectEditor::body3(juce::Graphics& g) {
         if (!hover.empty() && oa::fromCamelot(hover, hp, hm)) t3(ou::T(hover) + kDot + ou::keyLong(hp, hm, flat_()), R(760, 460, 380, 20), 13.f, T.inkMute, juce::Justification::centred);
     }
     // ---- compatibles
-    v3::rk::label(g, T.inkMute, u, code.empty() ? String("Compatibles") : "Compatibles avec " + ou::T(code), 760, 508, 380, 11.f);
-    if (!code.empty()) {
+    v3::rk::label(g, T.inkMute, u, showMap ? String(u8("Carte des fausses notes")) : code.empty() ? String("Compatibles") : "Compatibles avec " + ou::T(code), 760, 508, 280, 11.f);
+    if (showMap) drawMap(g, R(760, 536, 380, 196), &T, u);
+    else if (!code.empty()) {
         const auto comp = oa::compatCodes(code); const char* why[4] = {"m\xC3\xAAme tonalit\xC3\xA9", "\xE2\x88\x92" "1 \xC2\xB7 plus calme", "+1 \xC2\xB7 plus d'\xC3\xA9nergie", "relative \xC2\xB7 autre couleur"};
         for (int i = 0; i < 4; ++i) {
             int p = 0; bool m = false; oa::fromCamelot(comp[(size_t)i], p, m); const float y = 540.f + (float)i * 50.f;
@@ -375,5 +404,30 @@ void DetectEditor::body3(juce::Graphics& g) {
             t3(ou::keyLong(p, m, flat_()), R(832, y - 1, 310, 20), 15.f, T.ink, juce::Justification::centredLeft, true);
             t3(u8(why[i]), R(832, y + 19, 310, 16), 12.f, T.inkMute);
         }
+    }
+}
+
+// Carte des fausses notes : résumé chiffré, trois notes en cause, ligne de temps (une case = 100 ms : vert juste, orange pas juste, rouge hors gamme).
+void DetectEditor::drawMap(juce::Graphics& g, juce::Rectangle<float> a, const v3::Theme* t, float u) {
+    const juce::Colour ink = t ? t->ink : pal.ink, mute = t ? t->inkMute : pal.mute;
+    auto line = [&](const String& s, float y, float h, juce::Colour c, bool bold = false) { g.setColour(c); g.setFont(kit::fnt(h * u, bold)); g.drawText(s, juce::Rectangle<float>(a.getX(), a.getY() + y * u, a.getWidth(), (h + 5.f) * u), juce::Justification::centredLeft, true); };
+    if (mapBusy) { line(u8("Analyse de la voix\xE2\x80\xA6"), 4, 13, mute); return; }
+    if (!fmap || !fmap->valid) { line(u8("Capture une voix (2 s au moins) puis appuie sur Carte voix."), 4, 12, mute); line(u8("Clic droit sur la tonalit\xC3\xA9 : coller celle du beat."), 24, 11, mute); return; }
+    const auto& M = *fmap; const bool fl = flat_();
+    line(u8("Tonalit\xC3\xA9 jug\xC3\xA9" "e : ") + ou::keyLong(M.key, M.minor, fl) + (proc.refKeyCode() >= 0 ? u8("  (coll\xC3\xA9" "e)") : String()), 0, 12, mute);
+    line(String(juce::roundToInt((float)M.offPct())) + u8(" % du temps chant\xC3\xA9 hors gamme \xC2\xB7 ") + String(juce::roundToInt((float)M.badPct())) + u8(" % pas juste"), 18, 13, ink, true);
+    float y = 40.f;
+    for (int p : fn::worstNotes(M, 3)) {
+        const auto& s = M.pc[p]; String d = ou::note(p, fl);
+        if (s.offSec >= s.badSec) d += u8(" : ") + String(juce::roundToInt((float)(100.0 * s.offSec / s.sec))) + u8(" % hors gamme");
+        else d += u8(" : ") + String(juce::roundToInt((float)(100.0 * s.badSec / s.sec))) + u8(" % \xC3\xA0 ") + String(juce::roundToInt((float)s.badMean)) + u8(" cents");
+        line(d, y, 11.5f, ink); y += 16.f;
+    }
+    const auto tl = juce::Rectangle<float>(a.getX(), a.getBottom() - 30.f * u, a.getWidth(), 24.f * u); g.setColour(juce::Colours::black.withAlpha(0.18f)); g.fillRoundedRectangle(tl, 3.f * u);
+    const size_t n = M.cells.size(); const float cw = tl.getWidth() / (float)std::max<size_t>(n, 1);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& c = M.cells[i]; if (c.pc < 0) continue;
+        g.setColour(c.off ? juce::Colour(0xFFE5484D) : c.bad ? juce::Colour(0xFFFFB02E) : juce::Colour(0xFF4CC38A));
+        g.fillRect(tl.getX() + (float)i * cw, tl.getY() + 2.f * u, std::max(1.f, cw), tl.getHeight() - 4.f * u);
     }
 }

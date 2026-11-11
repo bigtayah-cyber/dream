@@ -10,6 +10,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "../../Dsp/TruePeak.h"
 
 namespace oa {
 
@@ -78,7 +79,7 @@ private:
     Bq kA[2], kB[2];
     bool mono = false;
     Hist hi, hs;
-    double hx[2][4] = {};
+    dsp::TruePeak tp4;
     double peakLin = 0, tpLin = 0, sL = 0, sR = 0, LL = 0, RR = 0, LR = 0, cl = 0, cr = 0, clr = 0;
     int run = 0, clips = 0;
     long long total = 0;

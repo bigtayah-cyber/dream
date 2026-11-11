@@ -186,6 +186,23 @@ DeEsserEditor::DeEsserEditor(DeEsserProcessor& p)
     listen3.setTooltip(listenKey.getTooltip());
     addChildComponent(listen3);
     listen3Att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "listen", listen3);
+    {
+        const char* ids[3] = {"link", "chamt", "look"};
+        const char* labs[3] = {"Liaison st\xC3\xA9r\xC3\xA9o", "CH (2,5-5 kHz)", "Lookahead (latence)"};
+        const char* tips[3] = {"100 % : le niveau le plus fort des deux voies commande les deux (comme avant). 0 % : chaque voie est trait\xC3\xA9" "e seule.",
+                               "D\xC3\xA9tecteur s\xC3\xA9par\xC3\xA9 pour les \xC2\xAB ch \xC2\xBB, \xC2\xAB j \xC2\xBB et \xC2\xAB ge \xC2\xBB (consonnes non voisées entre 2,5 et 5 kHz), avec la m\xC3\xAAme plage et le m\xC3\xAAme seuil. 0 : coup\xC3\xA9.",
+                               "Anticipation de 0 \xC3\xA0 10 ms : plus elle est longue, plus l'attaque est propre, mais la latence suit (l'h\xC3\xB4te est pr\xC3\xA9venu)."};
+        for (int i = 0; i < 3; ++i) {
+            extraS[i].setSliderStyle(juce::Slider::LinearHorizontal); extraS[i].setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
+            extraS[i].setTooltip(u8(tips[i])); extraL[i].setText(u8(labs[i]), juce::dontSendNotification); extraL[i].setJustificationType(juce::Justification::centredLeft);
+            addChildComponent(extraS[i]); addChildComponent(extraL[i]);
+            extraAtt[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, ids[i], extraS[i]);
+        }
+        autoBtn.setButtonText(u8("Auto-seuil (5 s)"));
+        autoBtn.setTooltip(u8("\xC3\x89" "coute 5 secondes de voix, puis place le seuil 4 dB au-dessus de la m\xC3\xA9" "diane des sifflantes."));
+        autoBtn.onClick = [this] { proc.startAuto(); };
+        addChildComponent(autoBtn);
+    }
     addAndMakeVisible(themeBtn);
     themeBtn.onTheme = [this](v3::Mode m) { setThemeMode(m, true); };
     themeBtn.onScale = [this](float s) { setUiScale(s); };
@@ -216,6 +233,9 @@ void DeEsserEditor::setThemeMode(v3::Mode m, bool persist) {
     for (auto* p : pots) p->setVisible(!n3);
     for (auto* k : k3) { k->setVisible(n3); k->setup(&T, &art); }
     listenKey.setVisible(!n3); listen3.setVisible(n3); listen3.T = &T;
+    for (auto& c : extraS) c.setVisible(n3);
+    for (auto& c : extraL) c.setVisible(n3);
+    autoBtn.setVisible(n3);
     scope->T = &T; grPanel->T = &T; scope->setOpaque(!n3); grPanel->setOpaque(!n3);
     modeSeg->T = styleSeg->T = &T; modeSeg->px = styleSeg->px = 12.f;
     power.T = &T; help.T = &T; themeBtn.T = &T; themeBtn.current = m;
@@ -247,6 +267,8 @@ void DeEsserEditor::resized() {
         const float kh = v3::Knob3::boxHeight(v3::KnobSize::M, false);
         const float kx[6] = {98, 246, 394, 542, 742, 890};
         for (int i = 0; i < 6; ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(kx[i] - 64, 382, 128, kh)); }
+        autoBtn.setBounds(Si(34, 498, 140, 30));
+        for (int i = 0; i < 3; ++i) { extraL[i].setBounds(Si(196.f + 262.f * (float)i, 484, 250, 16)); extraS[i].setBounds(Si(196.f + 262.f * (float)i, 502, 250, 24)); }
         modeSeg->setBounds(Si(170, 538, 230, 40)); styleSeg->setBounds(Si(416, 538, 170, 40)); listen3.setBounds(Si(640, 538, 324, 40));
         return;
     }
@@ -266,6 +288,11 @@ void DeEsserEditor::resized() {
 void DeEsserEditor::timerCallback() {
     proc.inAn.compute(); proc.outAn.compute();
     grPanel->push(proc.gr.load());
+    if (const float pr = proc.autoProgress(); pr > 0.f && pr < 1.f) autoBtn.setButtonText(u8("\xC3\x89" "coute\xE2\x80\xA6 ") + juce::String(juce::roundToInt(pr * 100.f)) + " %");
+    else if (const float thr = proc.pollAutoThreshold(); thr <= 0.f) {
+        if (auto* q = proc.apvts.getParameter("thr")) q->setValueNotifyingHost(q->convertTo0to1(thr));
+        autoBtn.setButtonText(u8("Auto-seuil (5 s)"));
+    } else autoBtn.setButtonText(u8("Auto-seuil (5 s)"));
     scope->repaint();
     if (isV3()) for (auto* k : k3) k->tickMod(1.f / 30.f);
 }

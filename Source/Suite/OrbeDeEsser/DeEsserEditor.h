@@ -42,6 +42,9 @@ private:
     kit::v3::ThemeMenu themeBtn;
     juce::OwnedArray<kit::v3::Knob3> k3;
     kit::v3::bridge::PushKey listen3;
+    // v3 : réglages ajoutés (liaison stéréo, CH, lookahead) et auto-seuil
+    juce::Slider extraS[3]; juce::Label extraL[3]; juce::TextButton autoBtn;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> extraAtt[3];
     float scale_ = 1.f;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DeEsserEditor)
 };

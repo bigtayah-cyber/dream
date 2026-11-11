@@ -50,16 +50,19 @@ inline int scaleMask(int key, int scale) {
     return m;
 }
 // Valeurs de autotune.html (PRE).
-struct Preset { const char* name; float speed, tol, amt, trans, form, vd, vr; int harm; float hv, dbl; int render = -1; float glide = 40.f; };   // render -1 : le preset ne touche pas au rendu
+// render : 0 Satin, 1 Précis, 2 Robot ; chaque preset fixe son rendu (plus de -1 : « Robot » sur une instance en Satin ne donnait pas le hard-tune).
+// Comportement (P1) : stab (0/40/80/200 ms), warb (1 = libre), human, tspd (ms, 0 = vitesse), ovs (dépassement).
+struct Preset { const char* name; float speed, tol, amt, trans, form, vd, vr; int harm; float hv, dbl; int render = 1; float glide = 40.f;
+                int stab = 0; float warb = 1.f, human = 0.f, tspd = 0.f, ovs = 0.f, track = 0.f; };
 inline const Preset* presets() {
     static const Preset p[kPresets] = {
-        {"Naturel", 120, 25, 1, 0, 0, 0, 5.5f, 0, .5f, 0},
-        {"Pop", 45, 10, 1, 0, 0, 0, 5.5f, 0, .5f, .2f},
-        {"Trap moderne", 12, 0, 1, 0, 0, 0, 5.5f, 0, .5f, .3f},
-        {"Robot", 0, 0, 1, 0, 0, 0, 5.5f, 0, .5f, 0},
-        {"Hyperpop", 0, 0, 1, 0, 3, 0, 5.5f, 4, .3f, .45f},
-        {"Grosse voix", 25, 5, 1, 0, -3, 0, 5.5f, 0, .5f, .2f},
-        {"Harmonie", 20, 5, 1, 0, 0, 12, 5.2f, 1, .55f, .25f},
+        {"Naturel", 120, 25, 1, 0, 0, 0, 5.5f, 0, .5f, 0, 1, 40.f, 0, .4f, .4f},
+        {"Pop", 45, 10, 1, 0, 0, 0, 5.5f, 0, .5f, .2f, 1, 40.f, 0, .6f},
+        {"Trap moderne", 12, 0, 1, 0, 0, 0, 5.5f, 0, .5f, .3f, 1, 40.f, 40},
+        {"Robot", 0, 0, 1, 0, 0, 0, 5.5f, 0, .5f, 0, 2},
+        {"Hyperpop", 0, 0, 1, 0, 3, 0, 5.5f, 4, .3f, .45f, 2, 40.f, 0, 1.f, 0.f, 0.f, .3f},
+        {"Grosse voix", 25, 5, 1, 0, -3, 0, 5.5f, 0, .5f, .2f, 1, 40.f, 0, .6f},
+        {"Harmonie", 20, 5, 1, 0, 0, 12, 5.2f, 1, .55f, .25f, 1, 40.f, 0, .6f, .3f},
         // rendu Satin : correction du centre de note, vibrato chanté gardé, glissement doux, aucune voix ajoutée
         {"Satin voix rap", 25, 0, 1, 0, 0, 0, 5.5f, 0, .5f, 0, 0, 25.f},
         {"Satin voix chant\xC3\xA9" "e", 40, 5, 1, 0, 0, 0, 5.5f, 0, .5f, 0, 0, 45.f},
@@ -79,6 +82,14 @@ struct Params {
     float expr = 1.f;      // Orbe : expression (vibrato) conservée quand la vitesse est naturelle
     int render = 1;        // rendu : 0 Satin, 1 Précis (comportement historique), 2 Robot (vitesse 0, tolérance 0)
     float glide = 40.f;    // Satin : glissement entre notes (ms)
+    // ---- P1/P2 (ajoutés en fin). Défauts = nouvelle instance ; un projet ancien est rechargé avec les valeurs neutres (voir le processeur).
+    int stab = 0;          // stabilisateur de notes : 0, 40, 80 ou 200 ms
+    float warb = 1.f;      // warble : 1 = libre, 0 = jamais de bascule sur vibrato
+    float human = 0.f;     // humanize / sustain 0..1
+    float tspd = 0.f;      // vitesse de transition entre notes (ms) ; 0 = celle de Vitesse
+    float ovs = 0.f;       // dépassement au changement de note 0..1 (vitesse « négative »)
+    float track = 0.f;     // suivi 0 serré .. 1 souple (voix soufflées)
+    bool attack = true;    // attaque accordée en Direct
 };
 
 // ---------------------------------------------------------------- FFT et décaleur de formants
@@ -525,6 +536,7 @@ private:
         q.speedMs = P.speed; q.tolCents = P.tol; q.amount = P.amt; q.expr = P.expr; q.formants = P.formPres;
         q.mask = orbeMask; q.offsetCents = orbeOff;
         q.satin = P.render == 0; q.glideMs = P.glide;
+        q.stabMs = P.stab; q.warble = P.warb; q.human = P.human; q.transMs = P.tspd; q.overshoot = P.ovs; q.track = P.track; q.attack = P.attack && P.render != 0;   // Satin : inchangé
         const float dose = q.satin ? cl(P.mix, 0.f, 1.f) : 1.f;
         q.amount *= dose;
         if (tlPlay && edits) {

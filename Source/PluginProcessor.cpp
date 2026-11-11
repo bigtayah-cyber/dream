@@ -2,17 +2,19 @@
 #include "PluginEditor.h"
 
 namespace {
-struct Preset { const char* name; float tension, mordant, brume, halo, mix, out; int key, scale; };
+// Un preset ne règle jamais la tonalité ni la gamme (elles dépendent du morceau, pas du son) : l'artiste garde les siennes.
+// Sortie à 0 dB partout : Mordant est maintenant compensé en niveau, plus besoin de baisser la sortie pour comparer à niveau égal.
+struct Preset { const char* name; float tension, mordant, brume, halo, mix, out; };
 
 const Preset kPresets[] = {
-    {"Verre froid",  0.95f, 0.20f, 0.30f, 0.30f, 1.00f,  0.0f, 0, 0},
-    {"Machoire",     0.85f, 0.65f, 0.15f, 0.20f, 1.00f, -1.0f, 0, 0},
-    {"Salle vide",   0.60f, 0.10f, 0.70f, 0.25f, 0.90f,  0.0f, 0, 1},
-    {"Halo rose",    0.75f, 0.15f, 0.45f, 0.80f, 1.00f, -1.5f, 0, 1},
-    {"Tension pure", 1.00f, 0.00f, 0.10f, 0.00f, 1.00f,  0.0f, 0, 0},
-    {"Vapeur",       0.40f, 0.30f, 0.85f, 0.45f, 0.85f,  0.0f, 0, 2},
-    {"Casse",        0.90f, 0.95f, 0.25f, 0.30f, 1.00f, -3.0f, 0, 0},
-    {"Cabine",       0.25f, 0.20f, 0.12f, 0.10f, 0.80f,  0.0f, 0, 1},
+    {"Verre froid",  0.95f, 0.20f, 0.30f, 0.30f, 1.00f,  0.0f},
+    {"Machoire",     0.85f, 0.65f, 0.15f, 0.20f, 1.00f,  0.0f},
+    {"Salle vide",   0.60f, 0.10f, 0.70f, 0.25f, 0.90f,  0.0f},
+    {"Halo rose",    0.75f, 0.15f, 0.45f, 0.80f, 1.00f,  0.0f},
+    {"Tension pure", 1.00f, 0.00f, 0.10f, 0.00f, 1.00f,  0.0f},
+    {"Vapeur",       0.40f, 0.30f, 0.85f, 0.45f, 0.85f,  0.0f},
+    {"Casse",        0.90f, 0.95f, 0.25f, 0.30f, 1.00f,  0.0f},
+    {"Cabine",       0.25f, 0.20f, 0.12f, 0.10f, 0.80f,  0.0f},
 };
 constexpr int kNumPresets = (int)(sizeof(kPresets) / sizeof(kPresets[0]));
 }  // namespace
@@ -48,6 +50,7 @@ VoileProcessor::VoileProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "VOILE", makeLayout()) {
     bypass = apvts.getParameter("bypass");
+    apvts.state.setProperty("dspv", kDspVersion, nullptr);   // nouvelle instance : son v2 (Mordant compensé, Halo stéréo)
 }
 
 bool VoileProcessor::isBusesLayoutSupported(const BusesLayout& l) const {
@@ -87,6 +90,7 @@ void VoileProcessor::run(juce::AudioBuffer<float>& buffer, bool bypassed) {
     p.outDb = get("out");
     p.key = (int)get("key");
     p.scale = (int)get("scale");
+    p.mordComp = p.haloStereo = dspVersion.load() >= 2;   // v1 (projet d'avant) : ancien son à l'identique
     engine.set(p);
 
     if (auto* ph = getPlayHead())
@@ -136,8 +140,6 @@ void VoileProcessor::setCurrentProgram(int i) {
     setParam("halo", p.halo);
     setParam("mix", p.mix);
     setParam("out", p.out);
-    setParam("key", (float)p.key);
-    setParam("scale", (float)p.scale);
 }
 
 void VoileProcessor::getStateInformation(juce::MemoryBlock& dest) {
@@ -146,7 +148,12 @@ void VoileProcessor::getStateInformation(juce::MemoryBlock& dest) {
 
 void VoileProcessor::setStateInformation(const void* data, int size) {
     if (auto xml = getXmlFromBinary(data, size))
-        if (xml->hasTagName(apvts.state.getType())) apvts.replaceState(juce::ValueTree::fromXml(*xml));
+        if (xml->hasTagName(apvts.state.getType())) {
+            apvts.replaceState(juce::ValueTree::fromXml(*xml));
+            // état sans version = projet enregistré avant la v2 : on garde son ancien rendu
+            if (!apvts.state.hasProperty("dspv")) apvts.state.setProperty("dspv", 1, nullptr);
+            dspVersion.store((int)apvts.state.getProperty("dspv", 1));
+        }
 }
 
 juce::AudioProcessorEditor* VoileProcessor::createEditor() { return new VoileEditor(*this); }

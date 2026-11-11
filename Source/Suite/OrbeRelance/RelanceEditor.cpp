@@ -43,6 +43,17 @@ RelanceEditor::RelanceEditor(RelanceProcessor& p) : AudioProcessorEditor(&p), pr
     caracAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, "carac", caracBox);
     caracBox.setTooltip(u8("Caract\xC3\xA8re des relances. M\xC3\xA9lange : tir\xC3\xA9 au hasard \xC3\xA0 chaque phrase (\xC3\xA9" "cho de mot, octave basse, t\xC3\xA9l\xC3\xA9phone, invers\xC3\xA9, b\xC3\xA9gaiement, harmonie)."));
     addAndMakeVisible(presetBox); addAndMakeVisible(caracBox);
+    for (auto [id, box] : {std::pair<const char*, juce::ComboBox*>{"hkey", &hkeyBox}, {"hscale", &hscaleBox}}) {
+        if (auto* cp = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(id))) for (int i = 0; i < cp->choices.size(); ++i) box->addItem(cp->choices[i], i + 1);
+        box->setTooltip(u8("Harmonie : tonalit\xC3\xA9 et mode de la gamme. Auto : d\xC3\xA9duits des notes chant\xC3\xA9es (quinte juste tant que la tonalit\xC3\xA9 n'est pas s\xC3\xBBre). Jamais modifi\xC3\xA9s par un pr\xC3\xA9r\xC3\xA9glage."));
+        addAndMakeVisible(*box);
+    }
+    keyPaster.apply = [this](const kit::keyparse::Key& k) {
+        auto setP = [this](const char* id, int idx) { if (auto* q = proc.apvts.getParameter(id)) q->setValueNotifyingHost(q->convertTo0to1((float)idx)); };
+        setP("hkey", k.pc + 1); setP("hscale", k.minor ? 1 : 0); };
+    keyPaster.attach(hkeyBox);
+    hkeyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, "hkey", hkeyBox);
+    hscaleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(proc.apvts, "hscale", hscaleBox);
     delaySeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "delay", juce::StringArray{"1/8", "1/4", "Hasard"},
         u8("Retard de la r\xC3\xA9ponse apr\xC3\xA8s la fin de phrase : une croche, deux croches, ou l'un ou l'autre au hasard. Cal\xC3\xA9 sur la grille du morceau pendant la lecture."), pal);
     lockSeg = std::make_unique<v3::bridge::Seg>(proc.apvts, "lock", juce::StringArray{"Libre", "Verrou"},
@@ -111,6 +122,7 @@ void RelanceEditor::resized() {
     themeBtn.setBounds(Si(942, 35, 28, 28));
     inSw->setBounds(Si(1012, 36, 70, 26));
     presetBox.setBounds(Si(560, 34, 300, 32));
+    hkeyBox.setBounds(Si(560, 70, 148, 26)); hscaleBox.setBounds(Si(712, 70, 148, 26));
     const float kh = v3::Knob3::boxHeight(v3::KnobSize::M, false);
     for (int i = 0; i < k3.size(); ++i) { k3[i]->setScale(u_); k3[i]->setBounds(Si(kKnobs[i].cx - kSlot * 0.5f, kKnobY, kSlot, kh)); }
     caracBox.setBounds(Si(kSecX[0] + 10, 614, kSecX[1] - kSecX[0] - 24, 32));

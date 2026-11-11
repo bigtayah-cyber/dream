@@ -241,6 +241,66 @@ int main(int argc, char** argv) {
         std::printf("  erreur par rapport au sec retardé : %.1f dB\n", db);
         CHECK(moved && db < -100.0, "décalage nul : peigne résiduel %.1f dB", db);
     }
+    // Voix synthetique : 6 notes avec vibrato, harmoniques decroissants, pauses courtes.
+    auto voice = [&](float peakDb, double dur) {
+        std::vector<float> x((size_t)(sr * dur));
+        const float notes[6] = {196.f, 220.f, 247.f, 262.f, 220.f, 196.f};
+        float ph = 0.f;
+        for (size_t i = 0; i < x.size(); ++i) {
+            const double t = (double)i / sr; const int k = std::min(5, (int)(t / (dur / 6.0))); const double tk = std::fmod(t, dur / 6.0) / (dur / 6.0);
+            const float env = tk < 0.9 ? std::min(1.f, (float)(tk * 12.0)) : 0.f;
+            const float f = notes[k] * (1.f + 0.012f * std::sin(2 * kPi * 5.5f * (float)t));
+            ph += 2 * kPi * f / (float)sr; float v = 0; for (int h = 1; h <= 8; ++h) v += std::sin(h * ph) / (float)h;
+            x[i] = v * env;
+        }
+        float pk = 0; for (float v : x) pk = std::max(pk, std::fabs(v));
+        const float g = std::pow(10.f, peakDb / 20.f) / pk; for (auto& v : x) v *= g;
+        return x;
+    };
+    auto rmsDb = [](const std::vector<float>& a, const std::vector<float>& b, size_t from) {
+        double s = 0; size_t n = 0; for (size_t i = from; i < a.size(); ++i) { s += 0.5 * ((double)a[i] * a[i] + (double)b[i] * b[i]); ++n; }
+        return 10.0 * std::log10(s / (double)n + 1e-20);
+    };
+    std::printf("[8] Mordant compense en niveau : traite - sec, voix seule (mordComp = false puis true)\n");
+    {
+        double worstOld = 0, worstNew = 0;
+        for (float dbPk : {-6.f, -18.f}) for (float m : {0.3f, 0.6f, 1.f}) {
+            const auto in = voice(dbPk, 6.0);
+            double dd[2];
+            for (int c = 0; c < 2; ++c) {
+                Engine e; Params p; p.tension = 0.f; p.mordant = m; p.brume = 0; p.halo = 0; p.mix = 1; p.mordComp = c == 1; e.set(p); e.prepare(sr); e.set(p);
+                std::vector<float> R; auto L = run(e, in, &R);
+                std::vector<float> ds(in.size()); for (size_t i = 0; i < in.size(); ++i) ds[i] = i >= (size_t)e.latency() ? in[i - (size_t)e.latency()] : 0.f;
+                dd[c] = rmsDb(L, R, (size_t)(sr * 1.5)) - rmsDb(ds, ds, (size_t)(sr * 1.5));
+            }
+            std::printf("  pic %+.0f dBFS, mordant %.1f : ancien %+.1f dB, compense %+.1f dB\n", dbPk, m, dd[0], dd[1]);
+            worstOld = std::max(worstOld, std::fabs(dd[0])); worstNew = std::max(worstNew, std::fabs(dd[1]));
+        }
+        CHECK(worstOld > 4.0, "l'ancien rendu aurait du etre nettement plus fort (%.1f dB)", worstOld);
+        CHECK(worstNew < 2.0, "ecart de niveau traite/sec trop grand avec la compensation (%.1f dB)", worstNew);
+    }
+    std::printf("[9] Halo stereo : correlation G/D de la part ajoutee, et sortie finie\n");
+    {
+        const auto in = voice(-6.f, 6.0);
+        double corr[2], full[2];
+        for (int c = 0; c < 2; ++c) {
+            Engine e; Params p; p.tension = 0.f; p.mordant = 0; p.brume = 0; p.halo = 1; p.mix = 1; p.haloStereo = c == 1; e.set(p); e.prepare(sr); e.set(p);
+            std::vector<float> R; auto L = run(e, in, &R);
+            double lr = 0, ll = 0, rr = 0, flr = 0, fll = 0, frr = 0;
+            for (size_t i = (size_t)(sr * 1.5); i < L.size(); ++i) {
+                const double m = 0.5 * ((double)L[i] + R[i]);   // centre ~ voix principale : on retire la part commune
+                const double a = L[i] - m, b = R[i] - m; lr += a * b; ll += a * a; rr += b * b;
+                flr += (double)L[i] * R[i]; fll += (double)L[i] * L[i]; frr += (double)R[i] * R[i];
+                CHECK(std::isfinite(L[i]) && std::isfinite(R[i]), "NaN halo");
+            }
+            // part ajoutee : (L - R) / 2 contre la somme : cos entre L-m et R-m vaut -1 par construction, on mesure plutot L/R totaux
+            corr[c] = flr / std::sqrt(fll * frr + 1e-30); full[c] = 10.0 * std::log10((fll + frr) / 2.0 + 1e-20); (void)lr; (void)ll; (void)rr;
+        }
+        std::printf("  correlation G/D : ancien %.3f, stereo %.3f ; niveau %.1f -> %.1f dB\n", corr[0], corr[1], full[0], full[1]);
+        CHECK(corr[1] < corr[0] - 0.02, "le Halo stereo n'est pas plus large que l'ancien");
+        CHECK(corr[1] < 0.985, "le Halo stereo reste presque mono (%.3f)", corr[1]);
+        CHECK(std::fabs(full[1] - full[0]) < 3.0, "le niveau change trop avec le Halo stereo (%.1f dB)", full[1] - full[0]);
+    }
     if (argc >= 3) {
         Wav w;
         if (!readWav(argv[1], w)) { std::printf("Lecture impossible : %s\n", argv[1]); return 2; }

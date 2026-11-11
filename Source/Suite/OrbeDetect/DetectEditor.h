@@ -20,6 +20,9 @@ private:
     std::string wheelHit(juce::Point<float> p) const;
     juce::Rectangle<float> wheelRect() const { return isV3() ? R(780, 118, 340, 340) : R(680, 112, 288, 288); }
     std::string activeCode() const;
+    juce::Rectangle<float> keyLcdRect() const { return isV3() ? R(396, 114, 308, 74) : R(362, 112, 274, 64); }
+    void keyMenu();                                           // clic droit sur l'afficheur de tonalité : copier / coller / revenir à la détection
+    void drawMap(juce::Graphics&, juce::Rectangle<float> area, const kit::v3::Theme* t, float u);   // carte des fausses notes (panneau du bas, à droite)
     void tap();
 
     DetectProcessor& proc;
@@ -32,7 +35,8 @@ private:
     kit::v3::UiAccidental acc{"detect"};            // dièses / bémols : réglage d'interface (Prefs)
     std::unique_ptr<kit::v3::UiSeg> accSeg;
     bool flat_() const { return acc.flat(); }
-    kit::v3::bridge::PushKey captureB;
+    kit::v3::bridge::PushKey captureB, mapB{"Carte voix"};
+    bool showMap = false; std::shared_ptr<const fn::Map> fmap; bool mapBusy = false;
     kit::v3::bridge::PushKey clearB{"Vider"}, analyzeB{"Analyser"}, halfB, dblB{juce::String::fromUTF8("×2")}, tapB{"Tap"}, applyB;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> capAtt;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DetectEditor)

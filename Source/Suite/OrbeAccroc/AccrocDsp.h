@@ -31,6 +31,7 @@ inline constexpr double kStuQ[5] = {1.0, 0.5, 0.25, 0.125, 0.0625};        // st
 inline constexpr double kRevQ[4] = {1.0, 0.5, 0.25, 0.125};                // retour : 1/4 … 1/32
 inline constexpr double kRepQ[3] = {1.0, 0.5, 0.25};                       // bégaiement : 1/4, 1/8, 1/16
 inline constexpr double kGateQ[3] = {0.25, 0.125, 0.0625};                 // trous : 1/16, 1/32, 1/64
+inline constexpr double kTailQ[3] = {0.5, 0.75, 1.0};                      // traîne : 1/8, 3/16, 1/4
 
 struct Params {
     float mix = 1.f, outDb = 0.f, chaos = 0.f, prob = 1.f;
@@ -43,6 +44,7 @@ struct Params {
     float crBits = 6.f, crRate = 6000.f, crSmooth = 0.5f;
     int skipRange = 4;
     int gateDiv = 1; float gateDens = 0.5f;
+    float tail = 0.f; int tailDiv = 1;                     // lot E : traîne d'écho après l'accident (0 = coupée : sortie d'avant, identique)
 };
 
 // ------------------------------------------------------------------ séquence
@@ -119,6 +121,7 @@ public:
         size_t n = 1; while ((double)n < sr * 10.0) n <<= 1;    // ~10 s d'historique
         ringLen = (int64_t)n; mask = n - 1;
         hl.assign(n, 0.f); hr.assign(n, 0.f);
+        { size_t m = 1; while ((double)m < sr * 4.0) m <<= 1; tailMask = m - 1; tl.assign(m, 0.f); tr.assign(m, 0.f); }
         envStep = 1.f / (float)lat; gateStep = 1.f / (float)(0.002 * sr);
         cs = (float)(1.0 - std::exp(-1.0 / (0.02 * sr)));
         reset();
@@ -129,6 +132,7 @@ public:
         anchored = false; anchorQ = 0; anchorAbs = 0; lastStep = kNoStep; running = false;
         sMix = p.mix; sOut = gain(p.outDb); sBits = p.crBits; sRate = p.crRate; sSmooth = p.crSmooth; sDens = p.gateDens;
         uiStep = -1; for (auto& a : uiAct) a = 0.f;
+        std::fill(tl.begin(), tl.end(), 0.f); std::fill(tr.begin(), tr.end(), 0.f); tw = 0; sTail = 0.f; dT = 0.f; tlp[0] = tlp[1] = 0.f; tailDirty = false;
     }
     int latency() const { return lat; }
     void set(const Params& np) { p = np; p.seed = std::max(1, p.seed); }
@@ -190,7 +194,27 @@ public:
                 const float k = eSum > 1.f ? 1.f / eSum : 1.f; const float rest = 1.f - std::min(1.f, eSum);
                 yl = dL * rest + wl * k; yr = dR * rest + wr * k;
             }
+            const float gl = yl, gr = yr;
             yl = (dL + sMix * (yl - dL)) * sOut; yr = (dR + sMix * (yr - dR)) * sOut;
+            if (p.tail > 0.001f || sTail > 1e-4f || tailDirty) {   // traîne : écho synchro en ping-pong, alimenté par l'accident seul (jamais par le signal sec)
+                smooth(sTail, p.tail);
+                const float tq = (float)(kTailQ[std::clamp(p.tailDiv, 0, 2)] * spq), tgt = std::clamp(tq, 32.f, (float)tailMask - 4.f);
+                if (dT <= 0.f) dT = tgt;
+                dT += (tgt - dT) * 0.0005f;
+                const float rp = (float)(tw & (int64_t)tailMask) - dT; const double fl = std::floor((double)rp); const float fr = rp - (float)fl;
+                const size_t i0 = (size_t)((int64_t)fl & (int64_t)tailMask), i1 = (i0 + 1) & tailMask;
+                const float d0 = tl[i0] + fr * (tl[i1] - tl[i0]), d1 = tr[i0] + fr * (tr[i1] - tr[i0]);
+                const float lpC = 0.55f, fb = 0.25f + 0.5f * std::clamp(sTail, 0.f, 1.f);
+                tlp[0] += lpC * (d0 - tlp[0]); tlp[1] += lpC * (d1 - tlp[1]);
+                const float send = std::min(1.f, eSum) * sMix, mono = 0.5f * (gl + gr) * send;
+                tl[(size_t)tw & tailMask] = std::clamp(mono + fb * tlp[1], -8.f, 8.f);
+                tr[(size_t)tw & tailMask] = std::clamp(fb * tlp[0], -8.f, 8.f);
+                ++tw;
+                const float g = 0.9f * std::min(1.f, sTail * 2.f) * sOut;
+                yl += g * d0; yr += g * d1;
+                tailDirty = std::fabs(d0) + std::fabs(d1) > 1e-6f || send > 0.f;
+                if (!tailDirty && p.tail <= 0.001f) { std::fill(tl.begin(), tl.end(), 0.f); std::fill(tr.begin(), tr.end(), 0.f); tlp[0] = tlp[1] = 0.f; sTail = 0.f; dT = 0.f; }
+            }
             outL[i] = safeOut(yl); outR[i] = safeOut(yr);
             ++w;
         }
@@ -388,6 +412,7 @@ private:
     bool anchored = false, wasPlaying = false, running = false; double anchorQ = 0; int64_t anchorAbs = 0, lastStep = kNoStep;
     float envStep = 0.005f, gateStep = 0.01f, cs = 0.001f;
     float sMix = 1.f, sOut = 1.f, sBits = 6.f, sRate = 6000.f, sSmooth = 0.5f, sDens = 0.5f;
+    std::vector<float> tl, tr; size_t tailMask = 0; int64_t tw = 0; float sTail = 0.f, dT = 0.f, tlp[2] = {0, 0}; bool tailDirty = false;
     Seq seq, box; std::atomic<bool> busy{false}; std::atomic<int> ver{0}; int seenVer = -1;
     int uiStep = -1; std::array<float, kNumTypes> uiAct{};
 };

@@ -1,5 +1,6 @@
 #pragma once
 #include "../OrbeSampler/SamplerCommon.h"
+#include "../../Kit/AuxOuts.h"
 
 // Orbe Pads : sampler 16 pads (C1 à D#2 = MIDI 36 à 51) sur un échantillon découpé.
 class PadsProcessor : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener, private juce::Timer {
@@ -64,6 +65,7 @@ private:
     std::atomic<bool> chopDirty{false}, bankDirty{false};
     mutable std::mutex markLock;
     std::vector<int> marks{0};
+    std::vector<float> stemL[16], stemR[16];   // un pad seul, rendus seulement si une sortie auxiliaire est active
     std::vector<float> monoCache;
     const osamp::Sample* monoFor = nullptr;
     std::shared_ptr<const osamp::Sample> monoKeep;

@@ -1,4 +1,5 @@
 #include "Orbe808Processor.h"
+#include "../../Kit/StateVersion.h"
 #include "Orbe808Editor.h"
 #include "SuiteUi.h"
 
@@ -26,7 +27,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Orbe808Processor::makeLayout
     fl("punch", "Punch", 0.f, 24.f, d.punch, 1.f, [](float v, int) { return "+" + String(juce::roundToInt(v)) + " dt"; });
     fl("pt", "Vitesse du punch", 0.01f, 0.2f, d.pt, 0.005f, [](float v, int) { return String(juce::roundToInt(v * 1000.f)) + " ms"; });
     fl("drive", "Saturation", 0.f, 1.f, d.drive, 0.02f, [](float v, int) { return String(juce::roundToInt(v * 100.f)) + " %"; });
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"sat", 1}, "Type de saturation", juce::StringArray{kit::u8("Douce"), kit::u8("Écrêtée"), kit::u8("Repliée")}, d.sat));
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"sat", 1}, "Type de saturation", juce::StringArray{kit::u8("Douce"), kit::u8("Écrêtée"), kit::u8("Pliée")}, d.sat));
     fl("tone", "Harmoniques", 0.f, 1.f, d.tone, 0.02f, [](float v, int) { return String(juce::roundToInt(v * 100.f)) + " %"; });
     fl("cut", "Filtre", 0.f, 1.f, d.cut, 0.01f, [](float v, int) { return String(juce::roundToInt(120.f * std::pow(100.f, v))) + " Hz"; });
     fl("click", kit::u8("Attaque (clic)"), 0.f, 1.f, d.click, 0.02f, [](float v, int) { return String(juce::roundToInt(v * 100.f)) + " %"; });
@@ -60,12 +61,13 @@ void Orbe808Processor::prepareToPlay(double sr, int maxBlock) {
     mono.assign((size_t)juce::jmax(512, maxBlock), 0.f);
 }
 
-o808::Params Orbe808Processor::paramsFrom(const juce::AudioProcessorValueTreeState& a) {
+o808::Params Orbe808Processor::paramsFrom(const juce::AudioProcessorValueTreeState& a, int stateVersion) {
     auto g = [&](const char* id) { return a.getRawParameterValue(id)->load(); };
     o808::Params p;
     p.len = g("len"); p.punch = g("punch"); p.pt = g("pt"); p.drive = g("drive"); p.sat = (int)g("sat"); p.tone = g("tone");
     p.cut = g("cut"); p.click = g("click"); p.glide = g("glide"); p.level = g("level");
     p.bendRange = kBendValues[juce::jlimit(0, 3, (int)g("bend"))];
+    p.foldScale = stateVersion >= 3 ? 0.5f : 1.f;   // « Pliée » : k réduit (repliement ÷100) ; un projet d'avant garde la « Repliée » d'origine
     return p;
 }
 
@@ -76,7 +78,7 @@ void Orbe808Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Midi
     if (buffer.getNumChannels() < 2) return;
     if ((int)mono.size() < n) mono.resize((size_t)n);  // hôte qui dépasse la taille annoncée
     keys.processNextMidiBuffer(midi, 0, n, true);
-    engine.setParams(paramsFrom(apvts));
+    engine.setParams(paramsFrom(apvts, loadedVersion.load()));
 
     int pos = 0;
     auto renderTo = [&](int end) { if (end > pos) { engine.render(mono.data() + pos, end - pos); pos = end; } };
@@ -135,13 +137,17 @@ void Orbe808Processor::setCurrentProgram(int i) {
 const String Orbe808Processor::getProgramName(int i) { return presetLabel(i); }
 
 void Orbe808Processor::getStateInformation(juce::MemoryBlock& dest) {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, dest);
+    auto st = apvts.copyState();
+    kit::stampState(st, loadedVersion.load());
+    if (auto xml = st.createXml()) copyXmlToBinary(*xml, dest);
 }
 void Orbe808Processor::setStateInformation(const void* data, int size) {
     auto xml = getXmlFromBinary(data, size);
     if (!xml || !xml->hasTagName(apvts.state.getType())) return;
     applying = true;  // les valeurs restaurées font foi : le preset ne doit pas les écraser
-    apvts.replaceState(juce::ValueTree::fromXml(*xml));
+    auto tree = juce::ValueTree::fromXml(*xml);
+    loadedVersion = kit::stateVersionOf(tree);   // avant replaceState : un projet d'avant garde son ancien son de saturation « Repliée »
+    apvts.replaceState(tree);
     applying = false;
     presetDirty = false; knobTouched = false;
 }

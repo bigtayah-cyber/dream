@@ -137,6 +137,44 @@ int main() {
         const double r = db(rms(xb, (size_t)(sr * 4), (size_t)(sr * 7.9))) - db(rms(yb, (size_t)(sr * 4) + dn::kLatency, (size_t)(sr * 7.9) + dn::kLatency));
         std::printf("bruit de pièce grave (adaptatif, 80 Hz-16 kHz) : %.1f dB de réduction\n", r); CHECK(r >= 12.0, "bruit grave mal estimé : %.1f dB", r);
     }
+    { // mode Prise : latence 512 mesurée = déclarée, réduction >= 8 dB sur un bruit blanc, voix conservée
+        dn::Engine e; dn::Params lp = prm; lp.live = true; e.prepare(sr, true); e.set(lp);
+        CHECK(e.latency() == dn::kLatencyLive && e.liveActive(), "latence du mode Prise : %d", e.latency());
+        std::vector<float> x(48000, 0.f); x[5000] = 1.f; std::vector<float> y; dn::Params p0 = lp; p0.reduction = 0.f; e.set(p0); run(e, x, y);
+        size_t best = 0; for (size_t i = 0; i < y.size(); ++i) if (std::fabs(y[i]) > std::fabs(y[best])) best = i;
+        std::printf("mode Prise : latence mesurée %d (déclarée %d)\n", (int)best - 5000, e.latency()); CHECK((int)best - 5000 == e.latency(), "latence Prise mesurée %d", (int)best - 5000);
+        dn::Engine g; g.prepare(sr, true); g.set(lp);
+        const auto nz = noise((size_t)(sr * 6)); std::vector<float> yn; run(g, nz, yn);
+        const double r = db(rms(nz, (size_t)(sr * 3), (size_t)(sr * 5.9))) - db(rms(yn, (size_t)(sr * 3) + 512, (size_t)(sr * 5.9) + 512));
+        std::printf("mode Prise : bruit blanc adaptatif, réduction %.1f dB (plafond 12 dB)\n", r); CHECK(r >= 6.0 && r <= 14.5, "réduction du mode Prise : %.1f dB", r);
+        // profil appris en mode Prise, puis lu en mode normal : même ordre de grandeur de puissance par bin
+        dn::Engine a; a.prepare(sr, true); a.set(lp); a.startLearn(); std::vector<float> ya; run(a, noise((size_t)(sr * 3)), ya);
+        std::vector<float> pa; a.getProfile(pa); dn::Engine b; b.prepare(sr); b.set(prm); b.startLearn(); std::vector<float> yb; run(b, noise((size_t)(sr * 3)), yb);
+        std::vector<float> pb; b.getProfile(pb); double sa = 0, sb = 0; for (int k = 50; k < 900; ++k) { sa += pa[(size_t)k]; sb += pb[(size_t)k]; }
+        std::printf("profil Prise / normal : %.2f dB d'écart\n", 10 * std::log10(sa / sb)); CHECK(std::fabs(10 * std::log10(sa / sb)) < 1.5, "profil du mode Prise hors échelle (%.1f dB)", 10 * std::log10(sa / sb));
+    }
+    { // « entre les phrases » : le silence baisse de gapDb de plus, la voix (note tenue + bruit) reste intacte
+        const size_t n = (size_t)(sr * 10); std::vector<float> x(n);
+        for (size_t i = 0; i < n; ++i) { const bool voice = i > (size_t)(sr * 4) && i < (size_t)(sr * 6); x[i] = (voice ? 0.2f * std::sin(2 * (float)odsp::kPi * 220.f * (float)i / sr) : 0.f) + 0.1f * nAmp * nd(rng) * 3.f; }
+        double sil[2], vo[2];
+        for (int c = 0; c < 2; ++c) { dn::Engine e; dn::Params q = prm; q.gapDb = c ? 15.f : 0.f; e.prepare(sr); e.set(q); std::vector<float> y; run(e, x, y);
+            sil[c] = db(rms(y, (size_t)(sr * 8) + 2048, (size_t)(sr * 9.8) + 2048)); vo[c] = db(tone(y, (size_t)(sr * 4.5) + 2048, (size_t)(sr * 5.5) + 2048, 220)); }
+        std::printf("entre les phrases 15 dB : silence %.1f -> %.1f dB, voix %.1f -> %.1f dB\n", sil[0], sil[1], vo[0], vo[1]);
+        CHECK(sil[0] - sil[1] > 8.0, "gap : silence baisse de %.1f dB seulement", sil[0] - sil[1]); CHECK(std::fabs(vo[0] - vo[1]) < 0.5, "gap : la voix change de %.1f dB", vo[1] - vo[0]);
+    }
+    { // 3 bandes : bandHi = +12 dB retire davantage d'aigus (bruit blanc) et ne touche pas le grave ; 0 = identique à l'ancien
+        dn::Engine e0, e1; dn::Params q = prm; e0.prepare(sr); e0.set(q); q.bandHi = 12.f; e1.prepare(sr); e1.set(q);
+        const auto nz = noise((size_t)(sr * 6)); std::vector<float> y0, y1; run(e0, nz, y0); run(e1, nz, y1);
+        auto band = [&](const std::vector<float>& v, double f0, double f1) { odsp::Bq a, b; a.c = odsp::design(odsp::Kind::LowCut, sr, f0, 0, 0.7071); b.c = odsp::design(odsp::Kind::HighCut, sr, f1, 0, 0.7071); std::vector<float> o(v); for (auto& s : o) s = b.process(a.process(s)); return db(rms(o, (size_t)(sr * 3), (size_t)(sr * 5.9))); };
+        const double hi = band(y0, 7000, 12000) - band(y1, 7000, 12000), lo = band(y0, 300, 3000) - band(y1, 300, 3000);
+        std::printf("bandHi +12 dB : aigus -%.1f dB de plus, médium %.1f dB\n", hi, lo); CHECK(hi > 4.0 && std::fabs(lo) < 1.0, "bandes : aigus %.1f, médium %.1f", hi, lo);
+    }
+    { // profil enregistré à 44,1 kHz relu à 48 kHz : les bins sont recalés en Hz
+        dn::Engine a; a.prepare(44100.f); a.set(prm); std::vector<float> pr((size_t)dn::kBins, 0.f); for (int k = 0; k < dn::kBins; ++k) pr[(size_t)k] = k < 500 ? 1e-3f : 1e-6f;
+        dn::Engine b; b.prepare(sr); b.set(prm); b.setProfile(pr, 44100.f); std::vector<float> z(4096, 0.f), zy; run(b, z, zy); std::vector<float> got; b.getProfile(got);
+        const int edge = (int)std::lround(500.0 * 48000.0 / 44100.0); std::printf("profil 44,1 -> 48 kHz : arête du profil au bin %d (attendu %d)\n", [&] { int k = 0; while (k < dn::kBins && got[(size_t)k] > 1e-4f) ++k; return k; }(), edge);
+        int k = 0; while (k < dn::kBins && got[(size_t)k] > 1e-4f) ++k; CHECK(std::abs(k - edge) <= 2, "profil non recalé : arête %d (attendu %d)", k, edge); (void)a;
+    }
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;
 }

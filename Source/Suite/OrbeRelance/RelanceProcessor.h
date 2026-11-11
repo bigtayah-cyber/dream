@@ -27,6 +27,6 @@ private:
     void afterLoad() override;
     rel::Engine engine;
     juce::RangedAudioParameter* bypassChoice = nullptr;
-    int program = 0, maxBlock = 0;
+    int program = 0, maxBlock = 0, stateVer = 2;   // stateVer < 2 : projet d'avant l'harmonie diatonique
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RelanceProcessor)
 };

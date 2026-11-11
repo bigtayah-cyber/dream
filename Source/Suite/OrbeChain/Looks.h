@@ -43,7 +43,7 @@ inline const std::vector<Look>& looks() {
              qTune(s, 0.3f + 0.3f * i, lerp(80, 25, i)); qEq(s, 110, 150, 0, 250, -2, 1, 3000, 1, 1, 11000, 7 * c);
              qComp(s, -22, 2.5f, 25, 160, 2, 0.8f + 0.2f * i); qSat(s, 0.08f + 0.2f * m, 0.1f, 0); qDs(s, 7500, 0.5f);
              qDbl(s, 0.3f + 0.4f * i, 0.2f, -0.2f, 1); qDly(s, 250, 3, 0.3f + 0.2f * e, 0.1f + 0.3f * e, 0.7f); qRev(s, 1.4f + 2.4f * e, 30, 0.35f, 0.15f + 0.35f * e); }},
-        {"Verre Pilé", "Hauteur nette, couches hautes, grain", "ECSTD2YR", {0.6f, 0.35f, 0.5f, 0.6f}, -6.5f, 2.9f,
+        {"Verre Pilé", "Hauteur nette, couches hautes, grain", "ECSTD2YR", {0.6f, 0.35f, 0.5f, 0.6f}, -6.5f, 2.0f,
          [](float i, float e, float m, float c, S& s) {
              qTune(s, 1, lerp(4, 1, i)); qEq(s, 120, 200, -2, 800, -1, 1, 5000, 2, 1, 10000, 3 + 6 * c); qComp(s, -26, 6, 3, 60, 4, 1);
              qSat(s, 0.3f + 0.5f * m, 0.2f, 0.1f + 0.5f * m); qDs(s, 8000, 0.5f); qDbl(s, 0.2f + 0.4f * i, 12, 7, 0.9f);

@@ -38,9 +38,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutotuneProcessor::makeLayou
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"algo", 1}, u8("Moteur"), StringArray{"Classique", "Orbe"}, 1));
     flt("expr", "Expression", 0.f, 1.f, 0.01f, d.expr, pct);
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"accid", 1}, u8("Altérations"), StringArray{u8("Dièses (#)"), u8("Bémols (b)")}, 0));
-    // ---- rendu (ajouté en fin) : Satin par défaut pour une nouvelle instance ; un état sans « rendu » est rechargé en Précis (son d'origine)
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"rendu", 1}, u8("Rendu"), StringArray{"Satin", u8("Précis"), "Robot"}, 0));
+    // ---- rendu (ajouté en fin) : Précis par défaut pour une nouvelle instance (le hard-tune s'entend d'emblée) ; un état sans « rendu » est rechargé en Précis (son d'origine)
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"rendu", 1}, u8("Rendu"), StringArray{"Satin", u8("Précis"), "Robot"}, 1));
     flt("glide", "Glissement", 20.f, 60.f, 1.f, d.glide, [](float v) { return String(roundToInt(v)) + " ms"; });
+    // ---- comportement (P1/P2), ajouté en fin ; un état sans « atV » est rechargé avec les valeurs neutres (son d'origine)
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"stab", 1}, u8("Stabilisateur"), StringArray{"Off", "40 ms", "80 ms", "200 ms"}, 0));
+    flt("warb", "Warble", 0.f, 1.f, 0.01f, d.warb, pct);
+    flt("human", "Humanize", 0.f, 1.f, 0.01f, d.human, [](float v) { return v < 0.005f ? String("off") : String(roundToInt(v * 100.f)) + " %"; });
+    flt("tspd", "Transition", 0.f, 400.f, 1.f, d.tspd, [](float v) { return v < 0.5f ? String("= vitesse") : String(roundToInt(v)) + " ms"; }, 60.f);
+    flt("ovs", "Vitesse < 0", 0.f, 1.f, 0.01f, d.ovs, [](float v) { return v < 0.005f ? String("off") : String(roundToInt(v * 100.f)) + " %"; });
+    flt("track", "Suivi", 0.f, 1.f, 0.01f, d.track, [](float v) { return v < 0.34f ? u8("serré") : v < 0.67f ? String("moyen") : u8("souple"); });
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID{"attack", 1}, u8("Attaque accordée"), StringArray{"Non", "Oui"}, d.attack ? 1 : 0));
     return l;
 }
 
@@ -54,7 +62,7 @@ AutotuneProcessor::AutotuneProcessor()
 
 // G4 : pointeurs de paramètres préchargés (aucune chaîne construite dans le fil audio).
 void AutotuneProcessor::initRaw() {
-    static const char* ids[rNum] = {"speed", "tol", "amt", "trans", "form", "formPres", "vd", "vr", "harm", "hv", "dbl", "mix", "latmode", "key", "scale", "algo", "expr", "rendu", "glide"};
+    static const char* ids[rNum] = {"speed", "tol", "amt", "trans", "form", "formPres", "vd", "vr", "harm", "hv", "dbl", "mix", "latmode", "key", "scale", "algo", "expr", "rendu", "glide", "stab", "warb", "human", "tspd", "ovs", "track", "attack"};
     for (int i = 0; i < rNum; ++i) rp[i] = apvts.getRawParameterValue(ids[i]);
     for (int i = 0; i < 12; ++i) rx[i] = apvts.getRawParameterValue("x" + String(i));
 }
@@ -74,6 +82,9 @@ atn::Params AutotuneProcessor::readParams() const {
     p.key = juce::roundToInt(v(rKey)) - 1; p.scale = juce::roundToInt(v(rScale));
     p.orbe = v(rAlgo) > 0.5f; p.expr = v(rExpr);
     p.render = juce::jlimit(0, 2, juce::roundToInt(v(rRender))); p.glide = v(rGlide);
+    static const int stabMs[4] = {0, 40, 80, 200};
+    p.stab = stabMs[juce::jlimit(0, 3, juce::roundToInt(v(rStab)))]; p.warb = v(rWarb); p.human = v(rHuman); p.tspd = v(rTspd); p.ovs = v(rOvs); p.track = v(rTrack);
+    p.attack = v(rAttack) > 0.5f;
     for (int i = 0; i < 12; ++i) if (rx[i]->load(std::memory_order_relaxed) > 0.5f) p.flips |= 1 << i;
     return p;
 }
@@ -86,14 +97,17 @@ void AutotuneProcessor::setCurrentProgram(int i) {
     const auto& q = atn::presets()[prog];
     setPlain("speed", q.speed); setPlain("tol", q.tol); setPlain("amt", q.amt); setPlain("trans", q.trans); setPlain("form", q.form);
     setPlain("vd", q.vd); setPlain("vr", q.vr); setPlain("harm", (float)q.harm); setPlain("hv", q.hv); setPlain("dbl", q.dbl);
-    if (q.render >= 0) { setPlain("rendu", (float)q.render); setPlain("glide", q.glide); }
+    setPlain("rendu", (float)q.render); setPlain("glide", q.glide);   // chaque preset fixe son rendu et son comportement
+    setPlain("stab", (float)stabIndex(q.stab)); setPlain("warb", q.warb); setPlain("human", q.human); setPlain("tspd", q.tspd); setPlain("ovs", q.ovs);
+    setPlain("track", q.track); setPlain("attack", q.render == 0 ? 0.f : 1.f);
 }
 bool AutotuneProcessor::presetMatches(int i) const {
     const auto& q = atn::presets()[juce::jlimit(0, atn::kPresets - 1, i)];
     auto eq = [](float a, float b) { return std::fabs(a - b) < 0.011f * juce::jmax(1.f, std::fabs(b)); };
     return eq(raw("speed"), q.speed) && eq(raw("tol"), q.tol) && eq(raw("amt"), q.amt) && eq(raw("trans"), q.trans) && eq(raw("form"), q.form) && eq(raw("vd"), q.vd) &&
            eq(raw("vr"), q.vr) && juce::roundToInt(raw("harm")) == q.harm && eq(raw("hv"), q.hv) && eq(raw("dbl"), q.dbl) &&
-           (q.render < 0 || (juce::roundToInt(raw("rendu")) == q.render && eq(raw("glide"), q.glide)));
+           juce::roundToInt(raw("rendu")) == q.render && eq(raw("glide"), q.glide) &&
+           juce::roundToInt(raw("stab")) == stabIndex(q.stab) && eq(raw("warb"), q.warb) && eq(raw("human"), q.human) && eq(raw("tspd"), q.tspd) && eq(raw("ovs"), q.ovs);
 }
 void AutotuneProcessor::toggleNote(int pc) {
     if (auto* p = apvts.getParameter("x" + String(pc))) { p->beginChangeGesture(); p->setValueNotifyingHost(p->getValue() > 0.5f ? 0.f : 1.f); p->endChangeGesture(); }
@@ -156,7 +170,7 @@ void AutotuneProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 }
 
 void AutotuneProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto st = apvts.copyState(); st.setProperty("prog", prog, nullptr);
+    auto st = apvts.copyState(); st.setProperty("prog", prog, nullptr); st.setProperty("atV", 1, nullptr);
     if (!notesUi.empty() || !curveUi.empty()) {   // notes éditées et courbe capturée, sauvegardées avec le projet
         juce::ValueTree ed("NOTEEDIT");
         const auto n = ned::packNotes(notesUi), c = ned::packCurve(curveUi, capture.hop);
@@ -179,11 +193,15 @@ void AutotuneProcessor::setStateInformation(const void* data, int size) {
                 if (mc.fromBase64Encoding(ed.getProperty("curve").toString())) ned::unpackCurve((const uint8_t*)mc.getData(), mc.getSize(), curveUi);
                 st.removeChild(ed, nullptr);
             }
+            const bool legacy = !st.hasProperty("atV");   // projet d'avant le comportement P1/P2 : valeurs neutres
             bool hasAlgo = false, hasRender = false;
             for (const auto& c : st) { const auto id = c.getProperty("id").toString(); if (id == "algo") hasAlgo = true; if (id == "rendu") hasRender = true; }
             apvts.replaceState(st);
             if (!hasAlgo) setPlain("algo", 0.f);   // projet d'avant le moteur Orbe : son identique (Classique)
             if (!hasRender) setPlain("rendu", 1.f);   // projet d'avant le rendu Satin : Précis (son identique)
+            if (legacy) {   // son d'origine : aucun des nouveaux réglages ne joue
+                setPlain("stab", 0.f); setPlain("warb", 1.f); setPlain("human", 0.f); setPlain("tspd", 0.f); setPlain("ovs", 0.f); setPlain("track", 0.f); setPlain("attack", 0.f);
+            }
             hist.clear(); hist.push_back({}); histPos = 0;
             setNotes(std::move(nv), false);
         }

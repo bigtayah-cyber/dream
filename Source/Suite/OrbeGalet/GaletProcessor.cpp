@@ -1,4 +1,5 @@
 #include "GaletProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "GaletEditor.h"
 #include "../../Kit/Sanitize.h"
 
@@ -66,13 +67,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout GaletProcessor::makeLayout()
     l.add(fparam("mix", "Mix", 0.f, 1.f, 0.001f, d.mix, pct));
     l.add(fparam("out", "Sortie", -12.f, 12.f, 0.1f, d.outDb, fmtDb));
     addBypass(l);
+    l.add(choice("shape_link", "Formes", {u8("Li\xC3\xA9" "es"), u8("S\xC3\xA9par\xC3\xA9" "es")}, 0));   // lot E : ajouté en fin des modules, défaut = comportement d'avant
     return l;
 }
 
 GaletProcessor::GaletProcessor() : FxProcessor("Orbe Galet", "ORBEGALET", makeLayout()) {
     for (auto& e : uiEnv) e.store(0.f);
-    shape_ = gal::startShape(2);
-    engine.pushShape(shape_);
+    for (auto& sh : shapes_) sh = gal::startShape(2);
+    for (int k = 0; k < 4; ++k) engine.pushShape(shapes_[(size_t)k], k);
     setLatencySamples(gal::Engine::kLatency);
 }
 
@@ -85,6 +87,7 @@ gal::Params GaletProcessor::readParams() const {
     p.fltOn = ch("flt_on") == 1; p.fltMode = ch("flt_mode"); p.fltFreq = raw("flt_freq"); p.fltRes = raw("flt_res"); p.fltDepth = raw("flt_depth");
     p.drvOn = ch("drv_on") == 1; p.drvType = ch("drv_type"); p.drive = raw("drv_drive"); p.color = raw("drv_color"); p.drvDepth = raw("drv_depth");
     p.panOn = ch("pan_on") == 1; p.pan = raw("pan_pan"); p.width = raw("pan_width");
+    p.linked = raw("shape_link") < 0.5f;
     p.mix = raw("mix"); p.outDb = raw("out");
     return p;
 }
@@ -97,13 +100,15 @@ void GaletProcessor::writeParams(const gal::Params& p) {
     put("flt_on", p.fltOn ? 1.f : 0.f); put("flt_mode", (float)p.fltMode); put("flt_freq", p.fltFreq); put("flt_res", p.fltRes); put("flt_depth", p.fltDepth);
     put("drv_on", p.drvOn ? 1.f : 0.f); put("drv_type", (float)p.drvType); put("drv_drive", p.drive); put("drv_color", p.color); put("drv_depth", p.drvDepth);
     put("pan_on", p.panOn ? 1.f : 0.f); put("pan_pan", p.pan); put("pan_width", p.width);
+    put("shape_link", p.linked ? 0.f : 1.f);
     put("mix", p.mix); put("out", p.outDb);
 }
 
 void GaletProcessor::setShape(const gal::Shape& s) {
     gal::Shape t = s; gal::sanitize(t);
-    shape_ = t; ++shapeVer;
-    engine.pushShape(t);
+    ++shapeVer;
+    if (linked()) { for (int k = 0; k < 4; ++k) { shapes_[(size_t)k] = t; engine.pushShape(t, k); } }   // liés : les quatre restent égaux (déliage sans saut)
+    else { const int k = editSlot(); shapes_[(size_t)k] = t; engine.pushShape(t, k); }
 }
 
 int GaletProcessor::getNumPrograms() { return kNumPresets; }
@@ -121,13 +126,19 @@ void GaletProcessor::setCurrentProgram(int i) {
 }
 
 void GaletProcessor::beforeSave() {
-    apvts.state.setProperty("shape", juce::String(gal::toString(shape_)), nullptr);
+    kit::stampState(apvts.state);
+    apvts.state.setProperty("shape", juce::String(gal::toString(shapes_[0])), nullptr);
+    for (int k = 1; k < 4; ++k) apvts.state.setProperty("shape" + juce::String(k), juce::String(gal::toString(shapes_[(size_t)k])), nullptr);
     apvts.state.setProperty("snap", snap ? 1 : 0, nullptr);
     apvts.state.setProperty("program", program, nullptr);
 }
 void GaletProcessor::afterLoad() {
     gal::Shape s;
-    if (gal::fromString(apvts.state.getProperty("shape").toString().toStdString(), s)) setShape(s);
+    if (gal::fromString(apvts.state.getProperty("shape").toString().toStdString(), s)) {
+        for (int k = 0; k < 4; ++k) { shapes_[(size_t)k] = s; engine.pushShape(s, k); }   // ancien état : la forme unique sert aux quatre
+        for (int k = 1; k < 4; ++k) if (gal::fromString(apvts.state.getProperty("shape" + juce::String(k)).toString().toStdString(), s)) { shapes_[(size_t)k] = s; engine.pushShape(s, k); }
+        ++shapeVer;
+    }
     snap = (int)apvts.state.getProperty("snap", 1) != 0;
     program = juce::jlimit(0, kNumPresets - 1, (int)apvts.state.getProperty("program", 0));
 }
@@ -135,7 +146,7 @@ void GaletProcessor::afterLoad() {
 void GaletProcessor::prepareToPlay(double sr, int block) {
     maxBlock = juce::jlimit(64, 8192, juce::jmax(512, block));
     engine.prepare(sr, maxBlock);
-    engine.pushShape(shape_);
+    for (int k = 0; k < 4; ++k) engine.pushShape(shapes_[(size_t)k], k);
     prepareBypass(sr, engine.latency(), maxBlock);
     setLatencySamples(engine.latency());
 }

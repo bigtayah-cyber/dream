@@ -216,6 +216,30 @@ int main() {
         std::printf("NaN/inf en entree : derniere sortie non finie a +%.1f ms apres le debut du bloc fautif, energie finale %.3f\n", msBad, eAfter);
         CHECK(lastBad < 0 || msBad < 100.0, "sortie non finie plus de 100 ms"); CHECK(finiteEnd && eAfter > 0.0, "NaN permanent ou silence");
     }
+    { // lot E : une forme par module
+        std::vector<float> x((size_t)(sr * 1.0)), yl, yr; for (size_t i = 0; i < x.size(); ++i) x[i] = 0.5f * std::sin(2 * kPi * 5000.0 * (double)i / sr);
+        Params p; p.volOn = true; p.volDepth = 1.f; p.fltOn = true; p.fltDepth = 1.f; p.fltFreq = 300.f; p.fltRes = 0.3f; p.drvOn = true; p.drive = 12.f; p.panOn = true; p.pan = .6f; p.width = .5f;
+        // 1) séparées mais quatre formes égales = liées (même calcul)
+        Engine a, b; a.prepare(sr, 512); b.prepare(sr, 512); Params pl = p, pu = p; pu.linked = false; a.set(pl); b.set(pu);
+        for (int k = 0; k < 4; ++k) b.pushShape(startShape(7), k); a.pushShape(startShape(7));
+        std::vector<float> l1, r1, l2, r2; run(a, x, l1, r1, 256); run(b, x, l2, r2, 256);
+        double d = 0; for (size_t i = 0; i < l1.size(); ++i) d = std::max(d, (double)std::fabs(l1[i] - l2[i]));
+        std::printf("formes séparées égales vs liées : écart max %.2e\n", d); CHECK(d < 1e-6, "séparées égales != liées (%.2e)", d);
+        // 2) formes distinctes : volume neutre (0), filtre plein (1) -> la sinusoïde de 5 kHz est coupée ; lié avec 0 : intacte
+        Params q; q.volOn = true; q.volDepth = 1.f; q.fltOn = true; q.fltDepth = 1.f; q.fltFreq = 300.f; q.fltRes = 0.3f;
+        Engine c, e; c.prepare(sr, 512); e.prepare(sr, 512); Params ql = q, qu = q; qu.linked = false; c.set(ql); e.set(qu);
+        c.pushShape(flat(0.f)); e.pushShape(flat(0.f), 0); e.pushShape(flat(1.f), 1); e.pushShape(flat(0.f), 2); e.pushShape(flat(0.f), 3);
+        run(c, x, l1, r1, 256); run(e, x, l2, r2, 256);
+        auto rms = [&](const std::vector<float>& v) { double t = 0; for (size_t i = 24000; i < v.size(); ++i) t += (double)v[i] * v[i]; return std::sqrt(t / (double)(v.size() - 24000)); };
+        std::printf("5 kHz : liées(0) %.1f dB, séparées (filtre=1) %.1f dB\n", db(rms(l1)), db(rms(l2)));
+        CHECK(db(rms(l2)) < db(rms(l1)) - 20.0, "forme du filtre sans effet en séparé");
+        // 3) bascule lié -> séparé en marche : pas de saut
+        Engine f; f.prepare(sr, 512); Params fl = q; f.set(fl); f.pushShape(flat(0.f), 0); f.pushShape(flat(0.f), 1);
+        std::vector<float> y1(x.size()), y2(x.size()); double step = 0;
+        for (size_t pos = 0; pos < x.size(); pos += 128) { if (pos == 12032) { fl.linked = false; f.set(fl); } f.beginBlock({}, nullptr, 0); f.process(x.data() + pos, x.data() + pos, y1.data() + pos, y2.data() + pos, 128); }
+        for (size_t i = 1; i < y1.size(); ++i) step = std::max(step, (double)std::fabs(y1[i] - y1[i - 1]));
+        std::printf("bascule lié -> séparé : plus grand saut %.4f\n", step); CHECK(step < 0.9, "saut à la bascule");
+    }
     (void)binPow;
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;

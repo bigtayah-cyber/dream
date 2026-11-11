@@ -24,6 +24,7 @@ private:
     void paintMeters3(juce::Graphics&, juce::Rectangle<float>);
     void paintLufs3(juce::Graphics&, juce::Rectangle<float>);
     void timerCallback() override;
+    void mouseDoubleClick(const juce::MouseEvent&) override;   // double-clic sur les LUFS : remise à zéro de l'intégré
     void paintCurve(juce::Graphics&, juce::Rectangle<float>);
     void paintMeters(juce::Graphics&, juce::Rectangle<float>);
     void paintLufs(juce::Graphics&, juce::Rectangle<float>);
@@ -36,7 +37,7 @@ private:
     kit::Look look;
     juce::TooltipWindow tooltip{this, 600};
     float u_ = 1.f;
-    float dIn = -60.f, dOut = -60.f, dGc = 0.f, dGl = 0.f, lufsO = -70.f, lufsI = -70.f, holdOut = -60.f;
+    float dIn = -60.f, dOut = -60.f, dGc = 0.f, dGl = 0.f, lufsO = -70.f, lufsI = -70.f, lufsS = -70.f, lufsInt = -70.f, holdOut = -60.f;
     float eqCache[mas::kBands] = {};
     kit::v3::rk::Skin skin{"master", kit::v3::accents::ice};
     float scale_ = 1.f;
@@ -47,6 +48,9 @@ private:
     kit::VuBallistics vu;
     juce::OwnedArray<juce::ToggleButton> toggles;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> toggleAtts;
+    std::unique_ptr<kit::v3::bridge::Seg> targetSeg;                       // lot E : cible LUFS
+    std::unique_ptr<kit::v3::rk::Key> matchKey, deltaKey;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> matchAtt, deltaAtt;
     kit::v3::bridge::PushKey resetBtn;
     kit::v3::bridge::Power power;
     kit::v3::bridge::HelpKey help;

@@ -1,4 +1,5 @@
 #include "EqProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "EqEditor.h"
 
 using kit::u8;
@@ -21,13 +22,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout EqProcessor::makeLayout() {
     l.add(fparam("out", "Gain de sortie", -18.f, 18.f, 0.1f, 0.f, fmtDb));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"range", 1}, u8("\xC3\x89" "chelle"), StringArray{u8("\xC2\xB1" "12 dB"), u8("\xC2\xB1" "24 dB")}, 0));
     addBypass(l);
+    // lot E (ajoutés en fin) : pente des coupe-bas / coupe-haut par bande, 12 dB/oct par défaut = comportement d'avant
+    for (int i = 0; i < eq::kBands; ++i)
+        l.add(std::make_unique<AudioParameterChoice>(ParameterID{("b" + String(i + 1) + "s").toRawUTF8(), 1}, "Bande " + String(i + 1) + " Pente", StringArray{"12 dB/oct", "24 dB/oct", "48 dB/oct"}, 0));
     return l;
 }
 
 EqProcessor::EqProcessor() : FxProcessor("Orbe EQ", "ORBEEQ", makeLayout()) {
-    static const char* const kSuffix[5] = {"f", "g", "q", "t", "on"};
+    static const char* const kSuffix[6] = {"f", "g", "q", "t", "on", "s"};
     for (int i = 0; i < eq::kBands; ++i)
-        for (int k = 0; k < 5; ++k) rawPtr[(size_t)i][(size_t)k] = apvts.getRawParameterValue(("b" + juce::String(i + 1) + kSuffix[k]).toRawUTF8());
+        for (int k = 0; k < 6; ++k) rawPtr[(size_t)i][(size_t)k] = apvts.getRawParameterValue(("b" + juce::String(i + 1) + kSuffix[k]).toRawUTF8());
     outPtr = apvts.getRawParameterValue("out");
     for (auto* p : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*>(p)) if (r->getParameterID() != "bypass" && r->getParameterID() != "range") abParams.push_back(r);
@@ -38,7 +42,7 @@ eq::Params EqProcessor::readParams() const {   // appelé dans processBlock : po
     for (int i = 0; i < eq::kBands; ++i) {
         auto& b = p.b[i]; const auto& q = rawPtr[(size_t)i];
         b.freq = q[0]->load(); b.gain = q[1]->load(); b.q = q[2]->load();
-        b.type = juce::roundToInt(q[3]->load()); b.on = q[4]->load() > 0.5f;
+        b.type = juce::roundToInt(q[3]->load()); b.on = q[4]->load() > 0.5f; b.slope = juce::roundToInt(q[5]->load());
     }
     p.out = outPtr->load();
     return p;
@@ -49,7 +53,7 @@ void EqProcessor::applyPreset(int k) {
     const auto p = eq::presetParams(preset);
     for (int i = 0; i < eq::kBands; ++i) {
         setReal(par(i, "f"), p.b[i].freq); setReal(par(i, "g"), p.b[i].gain); setReal(par(i, "q"), p.b[i].q);
-        setReal(par(i, "t"), (float)p.b[i].type); setReal(par(i, "on"), p.b[i].on ? 1.f : 0.f);
+        setReal(par(i, "t"), (float)p.b[i].type); setReal(par(i, "on"), p.b[i].on ? 1.f : 0.f); setReal(par(i, "s"), (float)p.b[i].slope);
     }
     setReal(apvts.getParameter("out"), p.out);
 }
@@ -58,7 +62,7 @@ bool EqProcessor::matchesPreset() const {
     const auto a = readParams(), b = eq::presetParams(preset);
     for (int i = 0; i < eq::kBands; ++i) {
         const auto &x = a.b[i], &y = b.b[i];
-        if (x.on != y.on || x.type != y.type) return false;
+        if (x.on != y.on || x.type != y.type || x.slope != y.slope) return false;
         if (std::fabs(std::log(x.freq / y.freq)) > 0.01f || std::fabs(x.q / y.q - 1.f) > 0.02f) return false;
         if (eq::hasGain(x.type) && std::fabs(x.gain - y.gain) > 0.06f) return false;
     }
@@ -67,7 +71,7 @@ bool EqProcessor::matchesPreset() const {
 
 void EqProcessor::resetBand(int i) {
     const auto d = eq::factory().b[i];
-    setReal(par(i, "f"), d.freq); setReal(par(i, "g"), 0.f); setReal(par(i, "q"), d.q); setReal(par(i, "t"), (float)d.type); setReal(par(i, "on"), d.on ? 1.f : 0.f);
+    setReal(par(i, "f"), d.freq); setReal(par(i, "g"), 0.f); setReal(par(i, "q"), d.q); setReal(par(i, "t"), (float)d.type); setReal(par(i, "on"), d.on ? 1.f : 0.f); setReal(par(i, "s"), 0.f);
 }
 
 // Comparaison A/B : deux jeux complets de réglages ; la bascule échange le jeu courant et celui mis de côté.
@@ -85,6 +89,7 @@ void EqProcessor::beforeSave() {
         juce::StringArray a; for (float v : stash[s]) a.add(juce::String(v, 5));
         apvts.state.setProperty("slot" + juce::String(s), a.joinIntoString(","), nullptr);
     }
+    kit::stampState(apvts.state);
     apvts.state.setProperty("ab", ab, nullptr); apvts.state.setProperty("preset", preset, nullptr);
 }
 void EqProcessor::afterLoad() {

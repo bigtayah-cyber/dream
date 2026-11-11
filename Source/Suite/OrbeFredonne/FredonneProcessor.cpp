@@ -109,7 +109,8 @@ void FredonneProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBu
             const double on = t0 + x.t, off = on + x.d;
             auto at = [&](double b) { return juce::jlimit(0, n - 1, (int)((b - p0) / (p1 - p0) * (double)n)); };
             const int note = juce::jlimit(0, 127, x.n);
-            if (on >= p0 && on < p1) { midi.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8)106), at(on)); active[note] = true; }
+            // vélocité : la même que dans le fichier .MID (tirée du niveau de la note)
+            if (on >= p0 && on < p1) { midi.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8)juce::jlimit(1, 127, (int)std::floor(x.v * 115.0 + 0.5) + 8)), at(on)); active[note] = true; }
             if (off >= p0 && off < p1 && active[note]) { midi.addEvent(juce::MidiMessage::noteOff(1, note), at(off)); active[note] = false; }
         }
         lastP1 = p1;

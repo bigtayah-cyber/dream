@@ -16,11 +16,11 @@ inline odsp::Kind kind(int t) {
 }
 inline bool hasGain(int t) { return t <= HighShelf; }
 
-struct Band { float freq = 1000.f, gain = 0.f, q = 0.707f; int type = Bell; bool on = true; };
+struct Band { float freq = 1000.f, gain = 0.f, q = 0.707f; int type = Bell; bool on = true; int slope = 0; };   // slope (coupe-bas/haut) : 0 = 12, 1 = 24, 2 = 48 dB/oct
 struct Params {
     Band b[kBands]; float out = 0.f;
     bool operator==(const Params& o) const {
-        for (int i = 0; i < kBands; ++i) if (b[i].freq != o.b[i].freq || b[i].gain != o.b[i].gain || b[i].q != o.b[i].q || b[i].type != o.b[i].type || b[i].on != o.b[i].on) return false;
+        for (int i = 0; i < kBands; ++i) if (b[i].freq != o.b[i].freq || b[i].gain != o.b[i].gain || b[i].q != o.b[i].q || b[i].type != o.b[i].type || b[i].on != o.b[i].on || b[i].slope != o.b[i].slope) return false;
         return out == o.out;
     }
 };
@@ -95,6 +95,10 @@ inline odsp::Coef designMatched(odsp::Kind k, double sr, double f0, double gDb, 
     return e2m < e1m ? rb : c;
 }
 inline odsp::Coef coefOf(const Band& b, double sr) { return designMatched(kind(b.type), sr, b.freq, hasGain(b.type) ? b.gain : 0.0, b.q); }
+// Pentes de 24 et 48 dB/oct : la 1re section garde le Q de la bande, les sections ajoutées sont de Q 0,7071 (Linkwitz-Riley à Q = 0,7071).
+inline bool isCut(int t) { return t == LowCut || t == HighCut; }
+inline int extraSections(const Band& b) { return isCut(b.type) ? (b.slope >= 2 ? 3 : b.slope == 1 ? 1 : 0) : 0; }
+inline odsp::Coef extraCoef(int type, double sr, double f0) { return designMatched(kind(type), sr, f0, 0.0, 0.70710678); }
 inline double analogDb(const Band& b, double f) {
     const double f0 = std::clamp((double)b.freq, 5.0, 1e9);
     return 10 * std::log10(analogMag2(analogProto(kind(b.type), hasGain(b.type) ? b.gain : 0.0, b.q), f / f0) + 1e-24);
@@ -102,10 +106,10 @@ inline double analogDb(const Band& b, double f) {
 // Réponse théorique (dB) de la chaîne à la fréquence f
 inline double responseDb(const Params& p, double f, double sr) {
     double m = 1;
-    for (auto& b : p.b) if (b.on) m *= coefOf(b, sr).mag(f, sr);
+    for (auto& b : p.b) if (b.on) { m *= coefOf(b, sr).mag(f, sr); if (const int ex = extraSections(b)) m *= std::pow(extraCoef(b.type, sr, b.freq).mag(f, sr), (double)ex); }
     return 20 * std::log10(m + 1e-12) + p.out;
 }
-inline double bandDb(const Band& b, double f, double sr) { return 20 * std::log10(coefOf(b, sr).mag(f, sr) + 1e-12); }
+inline double bandDb(const Band& b, double f, double sr) { return 20 * std::log10(coefOf(b, sr).mag(f, sr) * std::pow(extraSections(b) ? extraCoef(b.type, sr, b.freq).mag(f, sr) : 1.0, (double)extraSections(b)) + 1e-12); }
 
 // Valeurs d'usine des 8 bandes
 inline Band defaultBand(int i) {
@@ -158,9 +162,11 @@ public:
             auto& b = st[(size_t)i]; const Band& t = p.b[i];
             b.tf = std::log(std::clamp((double)t.freq, 5.0, 0.49 * sr)); b.tg = hasGain(t.type) ? (double)t.gain : 0.0; b.tq = std::log(std::max((double)t.q, 0.05));
             b.tact = t.on ? 1.0 : 0.0;
+            if (t.slope != b.slope) { b.slope = t.slope; b.dirty = true; for (auto& e : b.ex) for (auto& f : e) f.reset(); }   // changement de pente : sections ajoutées remises à zéro
             if (snap) { b.lf = b.tf; b.lg = b.tg; b.lq = b.tq; b.act = b.tact; b.type = t.type; b.dirty = true; }
             else if (t.type != b.type) {   // changement de type : l'ancien filtre (coefficients figés, état conservé) s'efface en fondu
                 for (int c = 0; c < 2; ++c) b.prev[c] = b.f[c];
+                for (auto& e : b.ex) for (auto& f : e) f.reset();
                 b.xf = 0.0; b.type = t.type; b.lf = b.tf; b.lg = b.tg; b.lq = b.tq; b.dirty = true;
             }
         }
@@ -179,10 +185,12 @@ public:
                     if (b.rampLeft > 0) stepCoef(b);
                     const float xl = l;
                     float yl = b.f[0].process(xl);
+                    for (int s = 0; s < b.nx; ++s) yl = b.ex[s][0].process(yl);
                     if (b.xf < 1.0) yl = mixXf(b, b.prev[0].process(xl), yl);
                     l = shape(b, xl, yl);
                     if (inR) {
                         const float xr = r; float yr = b.f[1].process(xr);
+                        for (int s = 0; s < b.nx; ++s) yr = b.ex[s][1].process(yr);
                         if (b.xf < 1.0) yr = mixXf(b, b.prev[1].process(xr), yr);
                         r = shape(b, xr, yr);
                     }
@@ -197,7 +205,7 @@ public:
     const Params& params() const { return p; }
 private:
     struct BandState {
-        odsp::Bq f[2], prev[2];
+        odsp::Bq f[2], prev[2], ex[3][2]; int slope = 0, nx = 0;
         double tf = 0, tg = 0, tq = 0, lf = 0, lg = 0, lq = 0, act = 0, tact = 0, xf = 1.0;
         odsp::Coef goal, dc; int rampLeft = 0;
         int type = Bell; bool dirty = true;
@@ -205,6 +213,11 @@ private:
     void refresh(BandState& b) {
         const auto cf = designMatched(kind(b.type), sr, std::exp(b.lf), hasGain(b.type) ? b.lg : 0.0, std::exp(b.lq));
         b.f[0].c = cf; b.f[1].c = cf; b.goal = cf; b.rampLeft = 0; b.dirty = false;
+        setExtra(b);
+    }
+    void setExtra(BandState& b) {
+        Band t; t.type = b.type; t.slope = b.slope; b.nx = extraSections(t);
+        if (b.nx > 0) { const auto ec = extraCoef(b.type, sr, std::exp(b.lf)); for (int s = 0; s < b.nx; ++s) { b.ex[s][0].c = ec; b.ex[s][1].c = ec; } }
     }
     // Glissement : les coefficients sont recalculés toutes les kCtl échantillons, puis interpolés linéairement échantillon par échantillon
     // (des marches de coefficients toutes les 16 échantillons seraient audibles comme un souffle dans les aigus).
@@ -214,6 +227,7 @@ private:
         const auto& c0 = b.f[0].c; const double k = 1.0 / kCtl;
         b.dc = {(cf.b0 - c0.b0) * k, (cf.b1 - c0.b1) * k, (cf.b2 - c0.b2) * k, (cf.a1 - c0.a1) * k, (cf.a2 - c0.a2) * k};
         b.goal = cf; b.rampLeft = kCtl;
+        if (b.nx > 0) setExtra(b);
     }
     void stepCoef(BandState& b) {
         if (--b.rampLeft == 0) { b.f[0].c = b.goal; b.f[1].c = b.goal; return; }

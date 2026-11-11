@@ -44,7 +44,34 @@ struct Params {
     int seed = 1;            // 1..999
     int lock = 1;            // 0 = Libre, 1 = Verrouillée
     int outMode = 0;         // 0 = voix + relances, 1 = relances seules (bus parallèle)
+    int key = 0;             // tonalité de l'harmonie : 0 = Auto (histogramme des notes chantées), 1..12 = Do..Si
+    int scale = 0;           // 0 = majeur, 1 = mineur
+    bool diatonic = true;    // harmonie dans la gamme (v2) ; faux : quinte juste fixe d'origine (projets enregistrés avant)
 };
+
+// Gammes (majeur / mineur naturel) pour l'harmonie. scale : 0 majeur, 1 mineur ; key : 0..11 (Do..Si).
+inline bool inScale(int midi, int key, int scale) {
+    static const bool maj[12] = {1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1}, mnr[12] = {1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0};
+    return (scale ? mnr : maj)[((midi - key) % 12 + 12) % 12];
+}
+// Intervalle (demi-tons, 6 à 8) de la quinte diatonique au-dessus de la note `midi` : on cale la note sur la gamme, puis on monte de 4 degrés.
+inline int harmonyInterval(float midi, int key, int scale) {
+    const int b0 = (int)std::lround(midi); int base = b0;
+    for (int o = 0; o <= 2; ++o) { if (inScale(b0 + o, key, scale)) { base = b0 + o; break; } if (inScale(b0 - o, key, scale)) { base = b0 - o; break; } }
+    int n = base, steps = 0; while (steps < 4) { ++n; if (inScale(n, key, scale)) ++steps; }
+    return n - base;
+}
+// Tonalité déduite d'un histogramme de classes de hauteur : -1 si les notes ne tiennent pas dans une gamme (sinon 0..11 et scale).
+inline int keyFromHistogram(const float* h, int& scaleOut) {
+    float tot = 0.f; for (int i = 0; i < 12; ++i) tot += h[i];
+    if (tot < 20.f) return -1;
+    float best = -1.f; int bk = -1;
+    for (int k = 0; k < 12; ++k) { float m = 0.f; for (int i = 0; i < 12; ++i) if (inScale(i, k, 0)) m += h[i]; if (m > best) { best = m; bk = k; } }   // k : tonique majeure du jeu de notes
+    if (best < 0.85f * tot) return -1;
+    const int rel = (bk + 9) % 12;   // même jeu de notes, mineur relatif
+    if (h[rel] > h[bk] * 1.15f) { scaleOut = 1; return rel; }
+    scaleOut = 0; return bk;
+}
 inline void sanitize(Params& p) {
     auto cl = [](float v, float lo, float hi, float d) { return std::isfinite(v) ? std::min(hi, std::max(lo, v)) : d; };
     const Params d;
@@ -53,6 +80,7 @@ inline void sanitize(Params& p) {
     p.lenMs = cl(p.lenMs, 200.f, 600.f, d.lenMs); p.threshDb = cl(p.threshDb, -60.f, -20.f, d.threshDb);
     p.width = cl(p.width, 0.f, 1.f, d.width); p.tone = cl(p.tone, 0.f, 1.f, d.tone); p.levelDb = cl(p.levelDb, -24.f, 6.f, d.levelDb);
     p.seed = std::min(999, std::max(1, p.seed)); p.lock = p.lock ? 1 : 0; p.outMode = p.outMode ? 1 : 0;
+    p.key = std::min(12, std::max(0, p.key)); p.scale = p.scale ? 1 : 0;
 }
 
 struct Host { bool playing = false, hasBpm = false, hasPos = false; double bpm = 120.0, ppq = 0.0; };
@@ -124,7 +152,7 @@ public:
         phraseIdx = 0; nowAbs = 0; wasPlaying = false;
         for (auto* f : {&tLp1L, &tLp2L, &tLp1R, &tLp2R, &tHpL, &tHpR, &pHp1, &pHp2, &pLp1, &pLp2}) *f = 0.f;
         gLvl = std::pow(10.f, P.levelDb / 20.f); gDry = P.outMode ? 0.f : 1.f;
-        hopC = 0; fIn = fWet = -120.f; fVoiced = false;
+        hopC = 0; fIn = fWet = -120.f; fVoiced = false; lastMidi = 0.f; for (auto& v : keyHist) v = 0.f;
         sat.reset();
     }
 
@@ -232,6 +260,11 @@ private:
         const float a = yD[(size_t)best - 1], b = yD[(size_t)best], c = yD[(size_t)best + 1], den = a - 2.f * b + c;
         if (den > 1e-6f) frac = std::max(-0.5f, std::min(0.5f, 0.5f * (a - c) / den));
         voicedNow = true; periodNow = ((float)best + frac) * (float)D;
+        if (db > P.threshDb) {   // notes chantées : dernière note (harmonie) et histogramme (tonalité Auto, mémoire ~10 s)
+            lastMidi = 69.f + 12.f * std::log2((float)(srd / periodNow * (double)D) / 440.f);
+            for (auto& v : keyHist) v *= 0.999f;
+            keyHist[((int)std::lround(lastMidi) % 12 + 12) % 12] += 1.f;
+        }
     }
 
     double ppqAt(int64_t absSample) const { return ppq0 + (double)(absSample - (nowAbs - blockPos)) * bpm / 60.0 / sr; }
@@ -284,7 +317,7 @@ private:
             case Phone: v->g = 1.1f; break;
             case Reverse: v->g = 0.85f; break;
             case Stutter: v->slice = std::max((int)(0.045 * sr), std::min(len / 3, eighthI / 2)); v->stN = 2 + (int)std::lround(a * 3.f * rnd() + a); v->stN = std::min(5, v->stN); break;
-            case Harmony: v->ratio = (a > 0.6f && rnd() < a - 0.3f) ? 2.f : std::exp2(7.f / 12.f); v->g = 0.8f; break;
+            case Harmony: v->ratio = (a > 0.6f && rnd() < a - 0.3f) ? 2.f : std::exp2((float)harmonyShift() / 12.f); v->g = 0.8f; break;
             default: break;
         }
         const int repLen = v->stN * v->slice + len;
@@ -302,6 +335,14 @@ private:
         T.relances.fetch_add(1); T.lastType.store(type);
         const int startFrame = T.frameAbs.load() + v->wait / hop;
         pushEvent(frame, type, startFrame, std::max(1, ((v->reps - 1) * v->gap + repLen) / hop));
+    }
+
+    // Intervalle de l'harmonie : quinte dans la gamme (tonalité imposée ou déduite des notes chantées) ; sans tonalité sûre, quinte juste.
+    int harmonyShift() const {
+        if (!P.diatonic || lastMidi < 20.f) return 7;
+        int key = P.key - 1, sc = P.scale;
+        if (P.key == 0) { key = keyFromHistogram(keyHist, sc); if (key < 0) return 7; }
+        return harmonyInterval(lastMidi, key, sc);
     }
 
     void pushEvent(int frame, int type, int startFrame, int dur) {
@@ -374,6 +415,7 @@ private:
     float gLvl = 1.f, gDry = 1.f;
     int hop = 960, hopC = 0;
     float fIn = 0.f, fWet = 0.f; bool fVoiced = false;
+    float lastMidi = 0.f, keyHist[12] = {};
 };
 
 }  // namespace rel

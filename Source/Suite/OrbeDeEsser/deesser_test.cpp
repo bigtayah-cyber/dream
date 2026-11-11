@@ -83,6 +83,51 @@ int main() {
         int bad = 0; for (size_t i = 2000; i < y.size(); ++i) bad += !std::isfinite(y[i]) || !std::isfinite(z[i]);
         std::printf("NaN isolé en entrée : %d échantillon(s) non fini(s)\n", bad); CHECK(bad == 0, "sortie NaN après un NaN d'entrée (%d)", bad);
     }
+    { // lookahead réglable : latence = 0, 5 ms, 10 ms mesurée = déclarée (impulsion) ; 0 ms = sans retard
+        for (float ms : {0.f, 5.f, 10.f}) {
+            des::Engine f; des::Params q; q.thr = 0.f; f.prepare(sr, ms); f.set(q);
+            std::vector<float> imp(8000, 0.f), o; imp[1000] = 1.f; run(f, imp, o);
+            size_t best = 0; for (size_t i = 0; i < o.size(); ++i) if (std::fabs(o[i]) > std::fabs(o[best])) best = i;
+            std::printf("lookahead %.0f ms : latence déclarée %d, mesurée %d\n", ms, f.latency(), (int)best - 1000);
+            CHECK(f.latency() == (int)std::lround(ms * 0.001 * sr) && (int)best - 1000 == f.latency(), "latence du lookahead %.0f ms", ms);
+        }
+    }
+    { // liaison stéréo : sibilance à gauche seulement ; 100 % : la droite baisse aussi, 0 % : la droite est intacte
+        std::vector<float> xl(N), xr(N), yl(N), yr(N); for (size_t i = 0; i < N; ++i) { xl[i] = voice[i] + sib[i]; xr[i] = voice[i]; }
+        double rr[2];
+        for (int c = 0; c < 2; ++c) {
+            des::Params q; q.freq = 7000.f; q.width = 2.f; q.thr = -30.f; q.range = 12.f; q.link = c ? 0.f : 1.f; q.split = false;   // large bande : visible sur tout le signal
+            des::Engine f; f.prepare(sr); f.set(q);
+            for (size_t o = 0; o < N; o += 480) { const int k = (int)std::min<size_t>(480, N - o); f.process(xl.data() + o, xr.data() + o, yl.data() + o, yr.data() + o, k); }
+            const int L2 = f.latency(); const size_t a2 = (size_t)(sr * 1.7), b2 = (size_t)(sr * 2.1);
+            rr[c] = db(bandRms(xr, a2, b2, 100, 4000)) - db(bandRms(yr, a2 + (size_t)L2, b2 + (size_t)L2, 100, 4000));
+        }
+        std::printf("liaison stéréo : voie droite (sans sibilance) baisse de %.1f dB à 100 %%, %.1f dB à 0 %%\n", rr[0], rr[1]);
+        CHECK(rr[0] > 3.0 && std::fabs(rr[1]) < 1.0, "liaison stéréo : %.1f / %.1f", rr[0], rr[1]);
+    }
+    { // « CH » : consonne non voisée à 3,6 kHz réduite, voyelle brillante (harmoniques 2-4 kHz AVEC bas du spectre) intacte ; coupé : sans effet
+        std::vector<float> xc(N, 0.f), yc;
+        odsp::Bq h2, l2; h2.c = odsp::design(odsp::Kind::LowCut, sr, 2800, 0, 0.9); l2.c = odsp::design(odsp::Kind::HighCut, sr, 4600, 0, 0.9);
+        for (size_t i = 0; i < N; ++i) { const float n = l2.process(h2.process(nd(rng))); xc[i] = voice[i] * 0.05f + ((i > (size_t)(sr * 1.5) && i < (size_t)(sr * 2.2)) ? 0.5f * n : 0.f); }
+        std::vector<float> xv(N); for (size_t i = 0; i < N; ++i) { double v = 0; for (int h = 1; h <= 40; ++h) v += std::sin(2 * odsp::kPi * 150.0 * h * (double)i / sr) / (double)h; xv[i] = 0.3f * (float)v; }   // voyelle brillante : 40 harmoniques, -6 dB/octave
+        double red[3];
+        for (int t = 0; t < 3; ++t) {
+            des::Params q; q.freq = 7000.f; q.thr = -30.f; q.range = 12.f; q.chAmt = t == 0 ? 0.f : 1.f; des::Engine f; f.prepare(sr); f.set(q);
+            const auto& in = t == 2 ? xv : xc; run(f, in, yc);
+            const size_t a2 = t == 2 ? (size_t)(sr * 1.0) : (size_t)(sr * 1.7), b2 = t == 2 ? (size_t)(sr * 2.0) : (size_t)(sr * 2.1); const int L2 = f.latency();
+            red[t] = db(bandRms(in, a2, b2, 2800, 4600)) - db(bandRms(yc, a2 + (size_t)L2, b2 + (size_t)L2, 2800, 4600));
+        }
+        std::printf("CH : consonne -%.1f dB (CH coupé : -%.1f dB), voyelle riche -%.1f dB\n", red[1], red[0], red[2]);
+        CHECK(red[1] - red[0] > 3.0 && red[2] < 1.5, "CH : consonne %.1f, coupé %.1f, voyelle %.1f", red[1], red[0], red[2]);
+    }
+    { // auto-seuil : 5 s de voix avec sifflantes de 70 ms toutes les 600 ms ; le seuil proposé tombe près du niveau des sifflantes
+        std::vector<float> xa((size_t)(sr * 6), 0.f); odsp::Bq h2, l2; h2.c = odsp::design(odsp::Kind::LowCut, sr, 6000, 0, 0.9); l2.c = odsp::design(odsp::Kind::HighCut, sr, 8000, 0, 0.9);
+        for (size_t i = 0; i < xa.size(); ++i) { const float n = l2.process(h2.process(nd(rng))); const double ph = std::fmod((double)i / sr, 0.6); xa[i] = (ph < 0.07 ? 0.3f * n : 0.f) + 0.1f * voice[i % N]; }
+        des::Engine f; des::Params q; q.freq = 7000.f; q.thr = 0.f; f.prepare(sr); f.set(q); f.startAuto(); std::vector<float> yo; run(f, xa, yo);
+        CHECK(f.autoStatus() == 2, "auto-seuil non terminé"); const float thr = f.takeAutoThreshold();
+        const double sibDb = db(bandRms(xa, (size_t)(sr * 0.01), (size_t)(sr * 0.06), 6000, 8000)); std::printf("auto-seuil : %.1f dBFS (sifflante ~%.1f dB en bande)\n", thr, sibDb);
+        CHECK(thr < -5.f && thr > -50.f && f.autoStatus() == 0, "auto-seuil aberrant : %.1f", thr);
+    }
     std::printf(fails ? "%d ECHEC(S)\n" : "TOUT EST BON\n", fails);
     return fails ? 1 : 0;
 }

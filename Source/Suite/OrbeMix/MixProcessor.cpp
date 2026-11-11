@@ -1,4 +1,5 @@
 #include "MixProcessor.h"
+#include "../../Kit/StateVersion.h"
 #include "MixEditor.h"
 
 juce::AudioProcessorValueTreeState::ParameterLayout MixProcessor::makeLayout() {
@@ -43,7 +44,11 @@ void MixProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBuffer&
     if (sincePub >= juce::jmax(1, (int)(sr / 15.0))) { oa::MixSnap s; meter.fill(s); pub.write(s); sincePub = 0; }
 }
 
-void MixProcessor::getStateInformation(juce::MemoryBlock& dest) { if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, dest); }
+void MixProcessor::getStateInformation(juce::MemoryBlock& dest) {
+    auto st = apvts.copyState();
+    kit::stampState(st);
+    if (auto xml = st.createXml()) copyXmlToBinary(*xml, dest);
+}
 void MixProcessor::setStateInformation(const void* data, int size) {
     if (auto xml = getXmlFromBinary(data, size)) if (xml->hasTagName(apvts.state.getType())) apvts.replaceState(juce::ValueTree::fromXml(*xml));
 }

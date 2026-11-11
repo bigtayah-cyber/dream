@@ -29,7 +29,7 @@ jobs:
           mkdir -p dist dist-studio dist-instruments
           find build -type d -name "*.vst3" -prune | while read -r V; do cp -R "$V" dist/; done
           ls dist
-          for N in "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne"; do
+          for N in "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" "Orbe Rythme"; do
             [ -d "dist/$N.vst3" ] && mv "dist/$N.vst3" dist-instruments/ || true
           done
           for N in "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix" "Orbe Galet" "Orbe Accroc"; do
@@ -41,13 +41,13 @@ jobs:
           powershell -NoProfile -Command "Compress-Archive -Path dist-instruments/* -DestinationPath dreamaws-instruments-Windows.zip"
           ls -l *.zip
 
-      - name: Vérifier les 26 plugins
+      - name: Vérifier les 27 plugins
         run: |
           # -k 0 laisse la compilation continuer : un plugin absent doit quand même faire échouer le job.
           MISSING=0
           for N in "Voile" "Grain Nord" "Gorge" "Poupee" "Patine" \
                    "Orbe Looks" "Orbe Atelier" "Orbe Autotune" "Orbe Denoiser" "Orbe DeEsser" "Orbe Relance" \
-                   "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" \
+                   "Orbe" "Orbe Synth" "Orbe 808" "Orbe Beat" "Orbe Pads" "Orbe Sample" "Orbe Fredonne" "Orbe Rythme" \
                    "Orbe FX" "Orbe Cabine" "Orbe Master" "Orbe EQ" "Orbe Detect" "Orbe Mix" "Orbe Galet" "Orbe Accroc"; do
             F=$(ls -d dist/"$N.vst3" dist-studio/"$N.vst3" dist-instruments/"$N.vst3" 2>/dev/null | head -1 || true)
             if [ -z "$F" ] || [ ! -f "$F/Contents/x86_64-win/$N.vst3" ]; then

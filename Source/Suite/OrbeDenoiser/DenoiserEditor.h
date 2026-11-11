@@ -29,6 +29,10 @@ private:
     juce::OwnedArray<of::Pot> pots;
     kit::v3::bridge::Power power;
     of::Key learnKey, adaptKey, listenKey;
+    // v3 : réglages ajoutés (entre les phrases, réduction graves / aigus, mode Prise)
+    juce::Slider extraS[3]; juce::Label extraL[3]; juce::ToggleButton liveBtn;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> extraAtt[3];
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> liveAtt;
     std::unique_ptr<kit::v3::bridge::Seg> humSeg;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAtt, adaptAtt, listenAtt, adapt3Att, listen3Att;
     kit::v3::bridge::HelpKey help;

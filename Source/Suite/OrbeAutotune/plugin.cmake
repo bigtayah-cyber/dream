@@ -33,3 +33,6 @@ target_link_libraries(orbeautotune_snapshot PRIVATE juce::juce_audio_utils juce:
 # Rendu « Satin » : modulation parasite, justesse, peigne Mix < 100 % : cmake --build . --target satin_test
 add_executable(satin_test EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/tests/satin_test.cpp)
 target_compile_options(satin_test PRIVATE -O2)
+# Comportement (presets, peigne, attaque, warble, stabilisateur, formants en descente) : cmake --build . --target orbeautotune_behavior_test
+add_executable(orbeautotune_behavior_test EXCLUDE_FROM_ALL ${_atudir}/behavior_test.cpp)
+target_compile_options(orbeautotune_behavior_test PRIVATE -O2)
