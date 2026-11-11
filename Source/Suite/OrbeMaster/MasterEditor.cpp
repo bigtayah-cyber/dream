@@ -66,7 +66,7 @@ MasterEditor::MasterEditor(MasterProcessor& p) : AudioProcessorEditor(&p), proc(
         u8("Cible de volume (LUFS court terme) : le gain d'entr\xC3\xA9" "e du limiteur suit lentement (au plus 1 dB/s) pour atteindre -14 (streaming), -11 ou -9 LUFS. Off : le r\xC3\xA9glage Gain reste seul."), pal);
     matchKey = std::make_unique<v3::rk::Key>(u8("Niveau \xC3\xA9gal"), pal, kIce); deltaKey = std::make_unique<v3::rk::Key>("Delta", pal, kIce);
     addChildComponent(*targetSeg); addChildComponent(*matchKey); addChildComponent(*deltaKey);
-    matchKey->setTooltip(u8("\xC3\x89" "coute \xC3\xA0 niveau \xC3\xA9gal : la sortie est att\xC3\xA9nu\xC3\xA9" "e pour avoir le m\xC3\xAAme LUFS court terme que l'entr\xC3\xA9" "e (jamais amplifi\xC3\xA9e). On compare le son, pas le volume."));
+    matchKey->setTooltip(u8("\xC3\x89" "coute \xC3\xA0 niveau \xC3\xA9gal : la sortie est att\xC3\xA9nu\xC3\xA9" "e pour avoir le m\xC3\xAAme LUFS court terme que l'entr\xC3\xA9" "e (jamais amplifi\xC3\xA9" "e). On compare le son, pas le volume."));
     deltaKey->setTooltip(u8("Delta : n'\xC3\xA9" "coute que ce que la cha\xC3\xAEne a chang\xC3\xA9 (sortie moins entr\xC3\xA9" "e retard\xC3\xA9" "e)."));
     matchAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "match", *matchKey);
     deltaAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "delta", *deltaKey);

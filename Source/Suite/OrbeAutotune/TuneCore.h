@@ -561,7 +561,10 @@ private:
         // attaque accordée (Direct, vitesse dure) : pendant les 30 premières ms d'une voix, la correction est posée sans rampe
         if (atkT > 0.f) { atkT -= dt; if (Pm.attack && !quality && !Pm.satin && voiced && speed <= 10.f) { sCur = sG; sStep = 0.f; } }
         offStep = (Pm.offsetCents - offCur) / (float)hop;
-        const bool active = voiced && (noteCur >= 0.f || std::fabs(Pm.offsetCents) > 0.4f);
+        // correction nulle (quantité 0, pas de décalage, rapport revenu à 1) : chemin sec exact, retardé de L. Passer par le décaleur à
+        // rapport 1 laissait un résidu de -88 dB (relecture LPC), non neutre à k = 0 des plugins un-potard.
+        const bool corrects = amount > 0.f || std::fabs(sTgt) > 0.005f || std::fabs(sCur) > 0.005f;
+        const bool active = voiced && ((noteCur >= 0.f && corrects) || std::fabs(Pm.offsetCents) > 0.4f);
         wetTgt = active ? 1.f : 0.f;
         st.voiced = voiced; st.pitch = voiced ? p : 0.f; st.center = voiced ? c2b : 0.f; st.note = voiced ? noteCur : -1.f; st.shift = sTgt; st.conf = conf;
     }

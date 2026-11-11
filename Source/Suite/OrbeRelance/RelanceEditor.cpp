@@ -45,7 +45,7 @@ RelanceEditor::RelanceEditor(RelanceProcessor& p) : AudioProcessorEditor(&p), pr
     addAndMakeVisible(presetBox); addAndMakeVisible(caracBox);
     for (auto [id, box] : {std::pair<const char*, juce::ComboBox*>{"hkey", &hkeyBox}, {"hscale", &hscaleBox}}) {
         if (auto* cp = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(id))) for (int i = 0; i < cp->choices.size(); ++i) box->addItem(cp->choices[i], i + 1);
-        box->setTooltip(u8("Harmonie : tonalit\xC3\xA9 et mode de la gamme. Auto : d\xC3\xA9duits des notes chant\xC3\xA9es (quinte juste tant que la tonalit\xC3\xA9 n'est pas s\xC3\xBBre). Jamais modifi\xC3\xA9s par un pr\xC3\xA9r\xC3\xA9glage."));
+        box->setTooltip(u8("Harmonie : tonalit\xC3\xA9 et mode de la gamme. Auto : d\xC3\xA9" "duits des notes chant\xC3\xA9" "es (quinte juste tant que la tonalit\xC3\xA9 n'est pas s\xC3\xBBre). Jamais modifi\xC3\xA9s par un pr\xC3\xA9r\xC3\xA9glage."));
         addAndMakeVisible(*box);
     }
     keyPaster.apply = [this](const kit::keyparse::Key& k) {
