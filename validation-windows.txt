@@ -1,0 +1,135 @@
+--- pluginval Gorge.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Grain Nord.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Atelier.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Autotune.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe DeEsser.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Denoiser.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Looks.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Relance.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Patine.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Poupee.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Voile.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Accroc.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Cabine.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Detect.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe EQ.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe FX.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Galet.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Master.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Mix.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe 808.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Beat.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Fredonne.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Pads.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Rythme.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Sample.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe Synth.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
+--- pluginval Orbe.vst3 ---
+-----------------------------------------------------------------
+Starting tests in: pluginval / Fuzz parameters...
+Completed tests in pluginval / Fuzz parameters
+SUCCESS
